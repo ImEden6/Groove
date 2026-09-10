@@ -259,7 +259,10 @@ public final class EditorState {
     }
 
     // === value scrubbing ===
-    /** Left click drag on a dial. Vertical delta maps to value; Ctrl gives 0.01 fine steps. */
+    /** Left click drag on a dial. Vertical delta maps to value via a per-param sensitivity
+     *  (see {@link #sensitivity}), since a flat multiplier is either far too slow for a
+     *  0..16000 range or far too twitchy for a 0..1 one. Ctrl applies an extra 0.1x for
+     *  fine adjustment on top of that base sensitivity. */
     public void beginValueDrag(String nodeId, String param, double startPointerY, boolean fine) {
         Graph.Node node = nodes.get(nodeId);
         if (node == null) return;
@@ -269,17 +272,38 @@ public final class EditorState {
     }
     public void dragValueTo(double pointerY) {
         if (valueDrag == null) return;
-        double delta = (valueDrag.startPointerY() - pointerY) * (valueDrag.fine() ? 0.01 : 1.0);
+        double scale = sensitivity(valueDrag.param()) * (valueDrag.fine() ? 0.1 : 1.0);
+        double delta = (valueDrag.startPointerY() - pointerY) * scale;
         Graph.Node node = nodes.get(valueDrag.nodeId());
         if (node == null) return;
         Map<String, Double> params = new LinkedHashMap<>(node.params());
         double raw = valueDrag.startValue() + delta;
         params.put(valueDrag.param(), clampParam(node.type(), valueDrag.param(), raw, params));
+        if (node.type().equals("euclid") && valueDrag.param().equals("steps")) {
+            params.put("pulses", Math.min(params.get("steps"),
+                    params.getOrDefault("pulses", defaultParams("euclid").get("pulses"))));
+        }
         nodes.put(node.id(), new Graph.Node(node.id(), node.type(), params, node.sample()));
         markDirty();
     }
     public void endValueDrag() { valueDrag = null; }
     public boolean isValueDragging() { return valueDrag != null; }
+
+    /** Units per pixel of vertical drag, scaled so each param's full range takes a
+     *  comparable, reasonable drag distance to sweep (roughly 150-400px). */
+    private static double sensitivity(String param) {
+        return switch (param) {
+            case "frequency", "cutoffHz" -> 40.0;
+            case "gain" -> 0.005;
+            case "pan" -> 0.01;
+            case "pitchRatio" -> 0.02;
+            case "wave" -> 0.05;
+            case "factor" -> 0.1;
+            case "steps", "pulses" -> 0.3;
+            case "rotation" -> 0.5;
+            default -> 1.0;
+        };
+    }
 
     public static double clampParam(String type, String param, double value, Map<String, Double> existingParams) {
         return switch (param) {
@@ -287,7 +311,7 @@ public final class EditorState {
             case "cutoffHz" -> Math.max(20.0, Math.min(20000.0, value));
             case "gain" -> Math.max(0.0, Math.min(1.0, value));
             case "pan" -> Math.max(-1.0, Math.min(1.0, value));
-            case "pitchRatio" -> Math.max(0.1, Math.min(8.0, value));
+            case "pitchRatio" -> Math.max(0.25, Math.min(4.0, value));
             case "wave" -> Math.max(0.0, Math.min(1.0, Math.round(value)));
             case "factor" -> Math.max(1.0, Math.min(16.0, Math.round(value)));
             case "steps" -> Math.max(1.0, Math.min(64.0, Math.round(value)));

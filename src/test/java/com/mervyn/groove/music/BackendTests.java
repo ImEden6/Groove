@@ -94,6 +94,27 @@ public final class BackendTests {
         editor.dragValueTo(-20000); // clamped to 16000
         check(editor.node("tone_test").params().get("frequency") == 16000.0, "Value drag clamps to maximum frequency");
         editor.endValueDrag();
+
+        // A small, non-fine drag on a wide-range param must move it by more than a
+        // couple of Hz, or sweeping the full 20..16000 range is impractically slow.
+        // Uses a fresh node (default frequency 220, well clear of the range clamps
+        // just exercised above) so the drag isn't already pinned at a boundary.
+        editor.openQuickSpawn(new com.mervyn.groove.client.ui.Vec2(320, 220));
+        editor.spawnNode("sensitivity_test", "tone");
+        editor.beginValueDrag("sensitivity_test", "frequency", 100, false);
+        editor.dragValueTo(0); // 100px, no Ctrl (coarse)
+        double coarseMoved = editor.node("sensitivity_test").params().get("frequency") - 220.0;
+        check(Math.abs(coarseMoved) > 1000, "Coarse frequency drag covers a meaningful fraction of the range");
+        editor.endValueDrag();
+        editor.beginValueDrag("sensitivity_test", "frequency", 100, true);
+        editor.dragValueTo(0); // same 100px, Ctrl held (fine)
+        double fineMoved = editor.node("sensitivity_test").params().get("frequency") - coarseMoved - 220.0;
+        check(Math.abs(fineMoved) < Math.abs(coarseMoved), "Ctrl (fine) drag moves less than an unmodified drag");
+        editor.endValueDrag();
+        check(com.mervyn.groove.client.ui.EditorState.clampParam("generator/sample", "pitchRatio", 8.0, java.util.Map.of()) == 4.0,
+                "pitchRatio clamp matches the engine's actual 0.25..4 range");
+        check(com.mervyn.groove.client.ui.EditorState.clampParam("generator/sample", "pitchRatio", 0.1, java.util.Map.of()) == 0.25,
+                "pitchRatio clamp matches the engine's actual 0.25..4 range (lower bound)");
         check(editor.node("tone_test").params().get("cutoffHz") == 20000.0, "Tone spawned with default cutoffHz");
 
         // A tone node from before cutoffHz existed (like a pre-existing patch's node) has no
@@ -128,11 +149,52 @@ public final class BackendTests {
         editor.dragValueTo(0); // pulses clamped to steps
         check(editor.node("euclid_test").params().get("pulses") == 16.0, "Euclid pulses clamped to steps count");
         editor.endValueDrag();
+        editor.beginValueDrag("euclid_test", "steps", 100, false);
+        editor.dragValueTo(140);
+        editor.endValueDrag();
+        check(editor.node("euclid_test").params().get("steps") == 4.0, "Steps shrink with parameter sensitivity");
+        check(editor.node("euclid_test").params().get("pulses") == 4.0, "Shrinking steps also clamps pulses");
+        editor.undo();
+        check(editor.node("euclid_test").params().get("steps") == 16.0
+                && editor.node("euclid_test").params().get("pulses") == 16.0,
+                "Undo restores both steps and pulses together");
 
         var controller = new com.mervyn.groove.client.ui.InputController(editor);
         editor.openQuickSpawn(new com.mervyn.groove.client.ui.Vec2(500, 200));
         check(controller.handleEscape(false, false) == com.mervyn.groove.client.ui.InputController.EscapeConsumer.QUICK_SPAWN, "Escape consumes quick spawn");
         check(!editor.isQuickSpawnOpen(), "Escape closed quick spawn");
+        var wireEditor = new com.mervyn.groove.client.ui.EditorState(new Graph(1,
+                java.util.List.of(new Graph.Node("source", "tone", java.util.Map.of()),
+                        new Graph.Node("sink", "output", java.util.Map.of())), java.util.List.of()));
+        wireEditor.layout().place("sink", new com.mervyn.groove.client.ui.Vec2(300, 100));
+        var wireInput = new com.mervyn.groove.client.ui.InputController(wireEditor);
+        java.util.function.BiPredicate<Double, Double> visible = (x, y) -> x < 310;
+        wireEditor.startWireDrag("source", new com.mervyn.groove.client.ui.Vec2(0, 0));
+        wireInput.mouseDrag(300, 131, 0, 0, visible);
+        wireInput.mouseDrag(315, 131, 15, 0, visible);
+        wireInput.mouseUp();
+        check(wireEditor.edges().isEmpty(), "Crossing an overlay clears the previous wire target");
+        wireEditor.startWireDrag("source", new com.mervyn.groove.client.ui.Vec2(0, 0));
+        wireInput.mouseDrag(300, 131, 0, 0, visible);
+        wireInput.mouseUp(315, 131, visible);
+        check(wireEditor.edges().isEmpty(), "Release over overlay cancels without a final drag event");
+        wireEditor.startWireDrag("source", new com.mervyn.groove.client.ui.Vec2(0, 0));
+        wireInput.mouseUp(295, 131, (x, y) -> x < 300);
+        check(wireEditor.edges().isEmpty(), "Magnet radius cannot reach a hidden port");
+        wireEditor.startWireDrag("source", new com.mervyn.groove.client.ui.Vec2(0, 0));
+        wireInput.mouseDrag(315, 131, 0, 0, visible);
+        wireInput.mouseUp(300, 131, visible);
+        check(wireEditor.edges().size() == 1, "Returning to visible canvas allows connection");
+        wireInput.startValueDrag("source", "frequency", 100, false);
+        wireInput.mouseDrag(315, 90, 0, -10, visible);
+        wireInput.mouseUp(315, 90, visible);
+        check(wireEditor.node("source").params().get("frequency") == 620.0,
+                "Parameter drags continue over overlays");
+        wireEditor.layout().place("source", new com.mervyn.groove.client.ui.Vec2(100, 100));
+        wireInput.mouseDown(com.mervyn.groove.client.ui.InputController.Button.PRIMARY, 120, 120, false);
+        wireInput.mouseDrag(320, 120, 200, 0, visible);
+        wireInput.mouseUp(320, 120, visible);
+        check(wireEditor.layout().get("source").x() == 300, "Node drags continue over overlays");
         var timeline = new SessionTimeline(graph, 128, 0);
         timeline.schedule(graph, 128, true, 0, 0);
         invalid(() -> timeline.schedule(graph, 128, true, 0, 1));

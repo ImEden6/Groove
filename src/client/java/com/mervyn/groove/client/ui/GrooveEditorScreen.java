@@ -149,9 +149,10 @@ public final class GrooveEditorScreen extends Screen {
             int inspectorBottom = Math.min(height - 20, 220);
             renderer.drawPanel(graphics, PanelKind.DRAWER, x - 4, 26, width - (x - 4), inspectorBottom - 26);
             // Text sits 4px further right / 8px lower than the panel's own origin, past its
-            // 6px drawn border -- same reasoning as the node card and drawer text below.
+            // 6px drawn border. Same reasoning as the node card and drawer text below.
             int textX = x + 4;
-            graphics.drawString(font, "Inspector: " + node.id(), textX, 34, textColor, false);
+            graphics.drawString(font, font.plainSubstrByWidth("Inspector: " + node.id(), Math.max(0, inspectorCloseX() - textX - 6)), textX, 34, textColor, false);
+            graphics.drawString(font, "x", inspectorCloseX(), 34, textColor, false);
             if (node.sample() != null) {
                 graphics.drawString(font, font.plainSubstrByWidth(node.sample().assetId(), width - textX), textX, 46, textColor, false);
                 String status = MusicClient.sampleStatus().getOrDefault(node.sample(), SampleLibrary.catalog().status(node.sample()).name());
@@ -243,19 +244,22 @@ public final class GrooveEditorScreen extends Screen {
             }
             return true;
         }
-        if (!state.selection().isEmpty() && mouseX >= Math.max(DRAWER_WIDTH + 6, width - 154) && mouseY < 220) {
+        if (!state.selection().isEmpty() && insideInspector(mouseX, mouseY)) {
             var node = state.node(state.selection().iterator().next());
+            if (button == 0 && mouseX >= inspectorCloseX() - 2 && mouseX < inspectorCloseX() + 8 && mouseY >= 32 && mouseY < 42) {
+                state.clearSelection();
+                return true;
+            }
             int row = (int) ((mouseY - 124) / 14);
             var displayParams = EditorState.displayParams(node);
             if (button == 0 && mouseY >= 124 && row < displayParams.size()) {
                 String param = displayParams.keySet().stream().skip(row).findFirst().orElseThrow();
-                input.startValueDrag(node.id(), param, mouseY, true);
-                return true;
+                input.startValueDrag(node.id(), param, mouseY, hasControlDown());
             }
-            // Inside the inspector panel's bounds but not on an actual param row (e.g. the
-            // euclid ring, waveform, or empty space below the params) -- fall through instead
-            // of silently swallowing the click, otherwise nothing under the panel is ever
-            // clickable again once any node is selected.
+            // Any other click inside the inspector (euclid ring, waveform, empty space) is
+            // swallowed here rather than falling through to the canvas underneath. The
+            // panel is opaque and clicking it must never select/drag a node behind it.
+            return true;
         }
         browsing = false;
         input.mouseDown(mouseButton(button), mouseX, mouseY, hasControlDown());
@@ -265,15 +269,15 @@ public final class GrooveEditorScreen extends Screen {
     @Override
     public boolean mouseDragged(double mouseX, double mouseY, int button, double dragX, double dragY) {
         if (draggedSample != null) { sampleDragging |= Math.hypot(mouseX - sampleDownX, mouseY - sampleDownY) > 4; return true; }
-        if (mouseY < 24 || drawer && mouseX < DRAWER_WIDTH) return true;
-        input.mouseDrag(mouseX, mouseY, dragX, dragY);
+        input.mouseDrag(mouseX, mouseY, dragX, dragY, this::canvasVisible);
         return true;
     }
 
     @Override
     public boolean mouseReleased(double mouseX, double mouseY, int button) {
         if (draggedSample != null) {
-            if (sampleDragging && (!drawer || mouseX >= DRAWER_WIDTH) && mouseY >= 24 && mouseY < height - 20) {
+            if (sampleDragging && (!drawer || mouseX >= DRAWER_WIDTH) && mouseY >= 24 && mouseY < height - 20
+                    && (state.selection().isEmpty() || !insideInspector(mouseX, mouseY))) {
                 Vec2 world = state.toWorld(mouseX, mouseY);
                 String target = state.nodes().stream().filter(n -> state.layout().get(n.id()) != null && NodeGeometry.containsBody(state.layout().get(n.id()), world)).map(Graph.Node::id).findFirst().orElse(null);
                 try { state.dropSample(draggedSample, world, target); message = "Draft changed. Connect new nodes, then Apply."; }
@@ -281,12 +285,13 @@ public final class GrooveEditorScreen extends Screen {
             }
             draggedSample = null; sampleDragging = false; return true;
         }
-        input.mouseUp();
+        input.mouseUp(mouseX, mouseY, this::canvasVisible);
         return true;
     }
 
     @Override
     public boolean mouseScrolled(double mouseX, double mouseY, double scrollX, double scrollY) {
+        if (!state.selection().isEmpty() && insideInspector(mouseX, mouseY)) return true;
         if (drawer && mouseX < DRAWER_WIDTH) { scroll -= (int) Math.signum(scrollY); clampScroll(samples().size()); return true; }
         input.mouseScroll(scrollY, mouseX, mouseY);
         return true;
@@ -339,6 +344,20 @@ public final class GrooveEditorScreen extends Screen {
     public boolean isPauseScreen() { return false; }
 
     public Graph currentGraph() { return state.toGraph(); }
+    private boolean canvasVisible(double x, double y) {
+        return x >= 0 && x < width && y >= 24 && y < height - 20
+                && (!drawer || x >= DRAWER_WIDTH)
+                && (state.selection().isEmpty() || !insideInspector(x, y))
+                && !state.isQuickSpawnOpen();
+    }
+    /** Shared with render()'s inspector panel drawing so the click-blocking bounds in
+     *  mouseClicked never drift from what's actually drawn on screen. */
+    private boolean insideInspector(double mouseX, double mouseY) {
+        int x = Math.max(DRAWER_WIDTH + 10, width - 150);
+        int inspectorBottom = Math.min(height - 20, 220);
+        return mouseX >= x - 4 && mouseX < width && mouseY >= 26 && mouseY < inspectorBottom;
+    }
+    private int inspectorCloseX() { return width - 14; }
     /** Same live-session check render() uses for the "Cycle .. Playing/Stopped" readout,
      *  so the Play/Stop button's icon actually reflects transport state rather than always
      *  showing the same glyph. */

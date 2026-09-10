@@ -111,13 +111,22 @@ public final class InputController {
      *  (its dragX/dragY parameters), not recomputed from the last known pointer position here:
      *  Minecraft's MouseHandler calls mouseMoved immediately before mouseDragged on every drag
      *  tick, and mouseMoved already advances lastScreenX/lastScreenY to the current position, so
-     *  a self-computed delta against those fields is always ~0. */
-    public void mouseDrag(double screenX, double screenY, double dx, double dy) {
+     *  a self-computed delta against those fields is always ~0. {@code canvasVisible} has no
+     *  default: a caller must say what "visible" means for its own overlays, since silently
+     *  treating everything as visible would let a wire connect through a hidden panel. */
+    public void mouseDrag(double screenX, double screenY, double dx, double dy,
+                          java.util.function.BiPredicate<Double, Double> canvasVisible) {
         lastScreenX = screenX; lastScreenY = screenY;
         if (panning) { state.panByScreen(dx, dy); return; }
-        if (state.isWireDragging()) { state.updateWireDrag(state.toWorld(screenX, screenY)); trackHoveredPort(screenX, screenY); return; }
+        if (state.isWireDragging()) { state.updateWireDrag(state.toWorld(screenX, screenY)); trackHoveredPort(screenX, screenY, canvasVisible); return; }
         if (state.isValueDragging()) { state.dragValueTo(screenY); return; }
         if (draggingNodes) state.moveSelectedBy(dx / state.zoom(), dy / state.zoom());
+    }
+
+    /** Re-hit-test at release: the final pointer position may have no preceding drag event. */
+    public void mouseUp(double screenX, double screenY, java.util.function.BiPredicate<Double, Double> canvasVisible) {
+        if (state.isWireDragging()) trackHoveredPort(screenX, screenY, canvasVisible);
+        mouseUp();
     }
 
     public void mouseUp() {
@@ -138,9 +147,14 @@ public final class InputController {
         state.beginValueDrag(nodeId, param, screenY, fine);
     }
 
-    private void trackHoveredPort(double screenX, double screenY) {
+    private void trackHoveredPort(double screenX, double screenY, java.util.function.BiPredicate<Double, Double> canvasVisible) {
+        hoveredInputPort = null;
+        if (!canvasVisible.test(screenX, screenY)) return;
         Vec2 world = state.toWorld(screenX, screenY);
-        hoveredInputPort = hitPort(world).filter(hit -> !hit.output()).map(PortHit::nodeId).orElse(null);
+        hoveredInputPort = hitPort(world).filter(hit -> !hit.output()).filter(hit -> {
+            Vec2 port = state.toScreen(NodeGeometry.inputPort(state.layout().get(hit.nodeId())));
+            return canvasVisible.test(port.x(), port.y());
+        }).map(PortHit::nodeId).orElse(null);
     }
 
     // === hit testing, shares NodeGeometry with the eventual ThemeRenderer ===
