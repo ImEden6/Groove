@@ -1,0 +1,8 @@
+{
+    "parent": "block/orientable",
+    "textures": {
+        "top": "modid:block/speaker/speaker_body_side",
+        "front": "modid:block/speaker/speaker_base_front",
+        "side": "modid:block/speaker/speaker_body_side"
+    }
+}

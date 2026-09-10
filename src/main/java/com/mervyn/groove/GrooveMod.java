@@ -14,6 +14,8 @@ public class GrooveMod implements ModInitializer {
 
 	@Override
 	public void onInitialize() {
+		com.mervyn.groove.block.GrooveBlocks.register();
+		com.mervyn.groove.block.GrooveItems.register();
 		com.mervyn.groove.music.MusicServer.register();
 		LOGGER.info("Groove music backend initialized");
 	}
