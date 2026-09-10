@@ -1,6 +1,8 @@
 package groove.engine.samples;
 
 import groove.engine.Graph;
+import groove.engine.NodeType;
+import groove.engine.NodeParam;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 import java.util.List;
@@ -35,11 +37,11 @@ public final class FactorySamples {
         return b.array();
     }
     public static Graph demo() {
-        return new Graph(2, List.of(new Graph.Node("kick", "generator/sample", Map.of(), ref("factory:basic/kick.wav")),
-                new Graph.Node("beat", "euclid", Map.of("steps", 8.0, "pulses", 4.0)),
-                new Graph.Node("hat", "generator/sample", Map.of("gain", .4), ref("factory:basic/hat.wav")),
-                new Graph.Node("hats", "euclid", Map.of("steps", 16.0, "pulses", 7.0)),
-                new Graph.Node("mix", "stack", Map.of()), new Graph.Node("out", "output", Map.of())),
+        return new Graph(2, List.of(new Graph.Node("kick", NodeType.GENERATOR_SAMPLE, Map.of(), ref("factory:basic/kick.wav")),
+                new Graph.Node("beat", NodeType.EUCLID, Map.of(NodeParam.STEPS, 8.0, NodeParam.PULSES, 4.0)),
+                new Graph.Node("hat", NodeType.GENERATOR_SAMPLE, Map.of(NodeParam.GAIN, .4), ref("factory:basic/hat.wav")),
+                new Graph.Node("hats", NodeType.EUCLID, Map.of(NodeParam.STEPS, 16.0, NodeParam.PULSES, 7.0)),
+                new Graph.Node("mix", NodeType.STACK, Map.of()), new Graph.Node("out", NodeType.OUTPUT, Map.of())),
                 List.of(Graph.edge("kick", "beat"), Graph.edge("hat", "hats"), Graph.edge("beat", "mix"), Graph.edge("hats", "mix"), Graph.edge("mix", "out")));
     }
 }

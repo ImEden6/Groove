@@ -15,23 +15,23 @@ public final class LiveTests {
         invalid(() -> GraphCompiler.compile(new Graph(1, demo.nodes(), extraEdges)));
         invalid(() -> GraphCompiler.compile(new Graph(1, demo.nodes(), List.of())));
         invalid(() -> GraphCompiler.compile(new Graph(1,
-                List.of(node("a", "fast", Map.of()), node("b", "fast", Map.of()), node("out", "output", Map.of())),
+                List.of(node("a", NodeType.FAST, Map.of()), node("b", NodeType.FAST, Map.of()), node("out", NodeType.OUTPUT, Map.of())),
                 List.of(Graph.edge("a", "b"), Graph.edge("b", "a"), Graph.edge("a", "out")))));
-        invalid(() -> GraphCompiler.compile(simple(Map.of("frequency", Double.NaN))));
+        invalid(() -> GraphCompiler.compile(simple(Map.of(NodeParam.FREQUENCY, Double.NaN))));
         invalid(() -> GraphCompiler.compile(simple(Map.of("garbage", 1.0))));
-        invalid(() -> GraphCompiler.compile(simple(Map.of("gain", 3.0))));
-        invalid(() -> GraphCompiler.compile(simple(Map.of("cutoffHz", 30000.0))));
-        check(GraphCompiler.compile(simple(Map.of("cutoffHz", 200.0))).size() == 1, "cutoffHz is a valid tone parameter");
-        check(GraphCompiler.compile(simple(Map.of("cutoffHz", 20.0))).size() == 1, "cutoffHz accepts lower bound (20 Hz)");
-        check(GraphCompiler.compile(simple(Map.of("cutoffHz", 20000.0))).size() == 1, "cutoffHz accepts upper bound (20000 Hz)");
-        invalid(() -> GraphCompiler.compile(simple(Map.of("cutoffHz", 19.999))));
-        invalid(() -> GraphCompiler.compile(simple(Map.of("cutoffHz", 20000.001))));
+        invalid(() -> GraphCompiler.compile(simple(Map.of(NodeParam.GAIN, 3.0))));
+        invalid(() -> GraphCompiler.compile(simple(Map.of(NodeParam.CUTOFF_HZ, 30000.0))));
+        check(GraphCompiler.compile(simple(Map.of(NodeParam.CUTOFF_HZ, 200.0))).size() == 1, "cutoffHz is a valid tone parameter");
+        check(GraphCompiler.compile(simple(Map.of(NodeParam.CUTOFF_HZ, 20.0))).size() == 1, "cutoffHz accepts lower bound (20 Hz)");
+        check(GraphCompiler.compile(simple(Map.of(NodeParam.CUTOFF_HZ, 20000.0))).size() == 1, "cutoffHz accepts upper bound (20000 Hz)");
+        invalid(() -> GraphCompiler.compile(simple(Map.of(NodeParam.CUTOFF_HZ, 19.999))));
+        invalid(() -> GraphCompiler.compile(simple(Map.of(NodeParam.CUTOFF_HZ, 20000.001))));
         invalid(() -> GraphCompiler.compile(new Graph(1,
-                List.of(node("tone", "tone", Map.of()), node("a", "fast", Map.of("factor", 16.0)),
-                        node("b", "fast", Map.of("factor", 16.0)), node("out", "output", Map.of())),
+                List.of(node("tone", NodeType.TONE, Map.of()), node("a", NodeType.FAST, Map.of(NodeParam.FACTOR, 16.0)),
+                        node("b", NodeType.FAST, Map.of(NodeParam.FACTOR, 16.0)), node("out", NodeType.OUTPUT, Map.of())),
                 List.of(Graph.edge("tone", "a"), Graph.edge("a", "b"), Graph.edge("b", "out")))));
-        Graph stacked = new Graph(1, List.of(node("tone", "tone", Map.of()), node("other", "tone", Map.of()),
-                node("mix", "stack", Map.of()), node("out", "output", Map.of())),
+        Graph stacked = new Graph(1, List.of(node("tone", NodeType.TONE, Map.of()), node("other", NodeType.TONE, Map.of()),
+                node("mix", NodeType.STACK, Map.of()), node("out", NodeType.OUTPUT, Map.of())),
                 List.of(Graph.edge("tone", "mix"), Graph.edge("other", "mix"), Graph.edge("mix", "out")));
         check(GraphCompiler.compile(stacked).size() == 2, "Identical simultaneous notes remain distinct");
 
@@ -106,9 +106,9 @@ public final class LiveTests {
         check(Arrays.equals(aAudio, bAudio), "Late join and stall recovery use the same phase");
         System.out.println("Passed " + checks + " live/backend checks.");
     }
-    private static Graph.Node node(String id, String type, Map<String, Double> params) { return new Graph.Node(id, type, params); }
+    private static Graph.Node node(String id, NodeType type, Map<String, Double> params) { return new Graph.Node(id, type, params); }
     private static Graph simple(Map<String, Double> params) {
-        return new Graph(1, List.of(node("tone", "tone", params), node("out", "output", Map.of())), List.of(Graph.edge("tone", "out")));
+        return new Graph(1, List.of(node("tone", NodeType.TONE, params), node("out", NodeType.OUTPUT, Map.of())), List.of(Graph.edge("tone", "out")));
     }
     private static void check(boolean value, String message) { checks++; if (!value) throw new AssertionError(message); }
     private static void invalid(Runnable action) {

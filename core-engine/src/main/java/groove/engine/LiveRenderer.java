@@ -17,25 +17,40 @@ public final class LiveRenderer {
                     snapshot.pending() == null ? null : new Program(snapshot.pending(), GraphCompiler.compile(snapshot.pending().graph())));
         }
     }
-    private volatile Timeline timeline;
+    private record Playback(VoiceProgram current, VoiceProgram pending) {}
+    private static final class VoiceProgram {
+        final SessionState state;
+        final LoopPlan plan;
+        final java.util.Map<groove.engine.samples.AssetRef, groove.engine.samples.SampleData> samples;
+        final Biquad[] filters;
+        VoiceProgram(Program program) {
+            state = program.state(); plan = program.plan(); samples = program.samples();
+            filters = new Biquad[plan.size()];
+            for (int i = 0; i < filters.length; i++) {
+                filters[i] = new Biquad();
+                if (plan.event(i).tone() != null) filters[i].setLowPass(plan.event(i).tone().cutoffHz(), SAMPLE_RATE);
+            }
+        }
+    }
+    private volatile Playback timeline;
     private boolean initialized;
     private long origin;
     private double elapsed;
     private long resyncs;
     private double fade;
-    private Timeline observed, previous;
+    private Playback observed, previous;
     private double programBlend = 1;
     private final double[] currentStereo = new double[2];
     private final double[] prevStereo = new double[2];
     private final double[] tempStereo = new double[2];
-    /** Per-instance tone filter state, keyed by Program: a Program is shared, immutable
-     *  compiled data that multiple independent LiveRenderer instances (e.g. two clients)
-     *  can publish() at once, so persistent Biquad state must live here, not on Program,
-     *  or two renderers sharing a Program would audibly contaminate each other's filters.
-     *  Weakly keyed so superseded Programs (recompiled every Apply/catalog rescan) don't
-     *  accumulate forever. */
-    private final java.util.Map<Program, Biquad[]> filterState = new java.util.WeakHashMap<>();
-    public void publish(Timeline value) { timeline = java.util.Objects.requireNonNull(value); }
+    /** Control-thread only: prepare renderer-private filters before the volatile handoff.
+     *  Programs remain shareable; only the audio owner mutates the prepared filters.
+     *  Superseded playback state is released after its crossfade, without a map lookup. */
+    public void publish(Timeline value) {
+        java.util.Objects.requireNonNull(value);
+        timeline = new Playback(new VoiceProgram(value.current()),
+                value.pending() == null ? null : new VoiceProgram(value.pending()));
+    }
     public long resyncs() { return resyncs; }
     /** Audio-owner call after an underrun; the next block rejoins the supplied playback time. */
     public void resynchronize() { initialized = false; elapsed = 0; fade = 0; resyncs++; }
@@ -50,7 +65,7 @@ public final class LiveRenderer {
         }
         double step = 1e9 / SAMPLE_RATE;
         if (frames != 0) step += Math.max(-step * .001, Math.min(step * .001, error / frames));
-        Timeline currentTimeline = timeline;
+        Playback currentTimeline = timeline;
         if (currentTimeline != observed) {
             previous = observed; observed = currentTimeline;
             programBlend = previous == null ? 1 : 0;
@@ -73,7 +88,7 @@ public final class LiveRenderer {
         }
     }
 
-    private void sampleTimeline(Timeline timeline, long now, double[] out) {
+    private void sampleTimeline(Playback timeline, long now, double[] out) {
         if (timeline == null) { out[0] = 0; out[1] = 0; return; }
         if (timeline.pending == null || now < timeline.pending.state.effectiveNanos()) {
             sample(timeline.current, now, out);
@@ -92,20 +107,7 @@ public final class LiveRenderer {
         }
     }
 
-    private Biquad[] filtersFor(Program program) {
-        return filterState.computeIfAbsent(program, p -> {
-            Biquad[] filters = new Biquad[p.plan().size()];
-            for (int i = 0; i < filters.length; i++) {
-                Biquad filter = new Biquad();
-                Event event = p.plan().event(i);
-                if (event.tone() != null) filter.setLowPass(event.tone().cutoffHz(), SAMPLE_RATE);
-                filters[i] = filter;
-            }
-            return filters;
-        });
-    }
-
-    private void sample(Program program, long now, double[] out) {
+    private void sample(VoiceProgram program, long now, double[] out) {
         if (program == null || !program.state.playing() || now < program.state.effectiveNanos()) {
             out[0] = 0; out[1] = 0; return;
         }
@@ -114,7 +116,7 @@ public final class LiveRenderer {
         double secondsPerCycle = 240 / program.state.bpm();
         double sumL = 0, sumR = 0;
         int active = 0;
-        Biquad[] toneFilters = filtersFor(program);
+        Biquad[] toneFilters = program.filters;
         for (int i = 0; i < program.plan.size(); i++) {
             Event event = program.plan.event(i);
             if (event.sample() != null) {

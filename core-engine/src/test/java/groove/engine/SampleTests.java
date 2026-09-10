@@ -62,8 +62,8 @@ public final class SampleTests {
         SampleTransfer corrupt = new SampleTransfer(ref, encoded.length); byte[] damaged = encoded.clone(); damaged[50] ^= 1;
         corrupt.append(0, damaged); invalid(corrupt::finish);
 
-        Graph graph = new Graph(2, List.of(new Graph.Node("sample", "generator/sample", Map.of(), ref),
-                new Graph.Node("step", "euclid", Map.of("steps", 16.0, "pulses", 1.0)), new Graph.Node("out", "output", Map.of())),
+        Graph graph = new Graph(2, List.of(new Graph.Node("sample", NodeType.GENERATOR_SAMPLE, Map.of(), ref),
+                new Graph.Node("step", NodeType.EUCLID, Map.of(NodeParam.STEPS, 16.0, NodeParam.PULSES, 1.0)), new Graph.Node("out", NodeType.OUTPUT, Map.of())),
                 List.of(Graph.edge("sample", "step"), Graph.edge("step", "out")));
         LoopPlan plan = GraphCompiler.compile(graph);
         check(plan.size() == 1 && plan.event(0).sample().asset().equals(ref), "Graph transforms preserve asset identity");

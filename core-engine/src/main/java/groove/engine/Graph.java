@@ -6,19 +6,19 @@ import java.util.Map;
 /** Versioned musical graph; editor layout deliberately lives outside this model. */
 public record Graph(int version, List<Node> nodes, List<Edge> edges) {
     public Graph { nodes = List.copyOf(nodes); edges = List.copyOf(edges); }
-    public record Node(String id, String type, Map<String, Double> params, groove.engine.samples.AssetRef sample) {
-        public Node(String id, String type, Map<String, Double> params) { this(id, type, params, null); }
+    public record Node(String id, NodeType type, Map<String, Double> params, groove.engine.samples.AssetRef sample) {
+        public Node(String id, NodeType type, Map<String, Double> params) { this(id, type, params, null); }
         public Node { params = Map.copyOf(params); }
     }
     public record Edge(String fromNode, String fromPort, String toNode, String toPort) {}
 
     public static Graph demo() {
         return new Graph(1, List.of(
-                new Node("bass", "tone", Map.of("frequency", 65.406, "gain", .5)),
-                new Node("bassRhythm", "euclid", Map.of("steps", 8.0, "pulses", 4.0)),
-                new Node("lead", "tone", Map.of("frequency", 261.626, "gain", .12, "wave", 1.0, "pan", -.5, "cutoffHz", 900.0)),
-                new Node("leadRhythm", "euclid", Map.of("steps", 16.0, "pulses", 5.0)),
-                new Node("mix", "stack", Map.of()), new Node("out", "output", Map.of())),
+                new Node("bass", NodeType.TONE, Map.of(NodeParam.FREQUENCY, 65.406, NodeParam.GAIN, .5)),
+                new Node("bassRhythm", NodeType.EUCLID, Map.of(NodeParam.STEPS, 8.0, NodeParam.PULSES, 4.0)),
+                new Node("lead", NodeType.TONE, Map.of(NodeParam.FREQUENCY, 261.626, NodeParam.GAIN, .12, NodeParam.WAVE, 1.0, NodeParam.PAN, -.5, NodeParam.CUTOFF_HZ, 900.0)),
+                new Node("leadRhythm", NodeType.EUCLID, Map.of(NodeParam.STEPS, 16.0, NodeParam.PULSES, 5.0)),
+                new Node("mix", NodeType.STACK, Map.of()), new Node("out", NodeType.OUTPUT, Map.of())),
                 List.of(edge("bass", "bassRhythm"), edge("lead", "leadRhythm"),
                         edge("bassRhythm", "mix"), edge("leadRhythm", "mix"), edge("mix", "out")));
     }
