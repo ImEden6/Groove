@@ -18,7 +18,7 @@ Enable cheats in a test single-player world, or use an operator account on a ser
 | `/groove demo` | Replace the patch with the built-in demo |
 | `/groove sample-demo` | Load the factory sample-based drum demo |
 | `/groove save` | Save the accepted patch and tempo in the world folder |
-| `/groove load` | Validate and load `groove-patch.json` from the world folder |
+| `/groove load` | Validate and load graph and BPM from `groove-session.json` (legacy two-file saves remain readable) |
 
 Mutations require operator permission level 2. One change can be pending at a time;
 another command is rejected until it applies. Edits have at least one second of

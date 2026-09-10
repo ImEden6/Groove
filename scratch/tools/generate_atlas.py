@@ -186,7 +186,10 @@ def build_theme(theme, out_dir):
         "knob_indicator.png": knob_indicator(theme),
         "ring_step_off.png": ring_step(theme, on=False),
         "ring_step_on.png": ring_step(theme, on=True),
-        "hazard_missing_asset.png": hazard_missing_asset(theme),
+        # hazard_missing_asset.png is deliberately not generated per theme. ThemeAssets.HAZARD
+        # (client Java) reads a single shared "sequencer/hazard_missing_asset.png", never a
+        # per-theme copy, so a copy in any theme's own folder is dead weight. Regenerate the
+        # shared one manually with hazard_missing_asset(theme) if it ever needs updating.
         "button_default.png": panel(theme, theme.panel_bg_2),
         "button_hover.png": panel(theme, theme.panel_bg_2),
         "button_disabled.png": panel(theme, theme.panel_bg),

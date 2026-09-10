@@ -131,10 +131,11 @@ node_body.png             9-patch, node body
 port_free.png / port_compatible.png / port_incompatible.png / port_magnet.png
 knob_base.png + knob_indicator.png   (rotated in code, not baked per-angle)
 ring_step_off.png / ring_step_on.png
-hazard_missing_asset.png
 button_default.png / button_hover.png / button_disabled.png   9-patch
 icon_play.png / icon_stop.png
 ```
+
+One exception to "the Java side never special-cases filenames per theme": `hazard_missing_asset.png` is a single file at `sequencer/hazard_missing_asset.png`, outside every theme's own folder, not part of this per-theme manifest. See §4a.
 
 9-patch slicing convention: every `panel_*`/`node_*`/`button_*` texture is
 20x20px with a fixed 6px border on all sides (Minecraft's `NineSlice` component,
@@ -171,9 +172,9 @@ mcmeta and just stretch.
 
 `drawPanel`, `drawNodeCard`, `drawPort`, `drawEuclidRing` are wired to real
 sprites, and `button_*`/`icon_play`/`icon_stop` are now wired too via
-`ThemedButton` (Apply/Play-Stop/Reload). `knob_*` is still generated and
-packaged but unused — there's no knob control in `EditorState`/`InputController`
-to draw yet; see [FUTURE-WORK.md](FUTURE-WORK.md). Cable geometry, backgrounds,
+`ThemedButton` (Apply/Play-Stop/Reload). `RotaryKnob` draws `knob_base` and rotates
+`knob_indicator` through a 270-degree sweep in the Inspector; gestures use
+`EditorState`/`InputController`. Cable geometry, backgrounds,
 and idle decoration (bezier sag, scanlines, the escapement gear) stay
 hand-drawn per theme; the manifest never included textures for those.
 
@@ -202,7 +203,7 @@ Two different things share the word "theme" in the spec, worth keeping distinct:
    `NoOpThemeRenderer` proved the interaction model against the real
    `Graph`/`GraphJson` types.
 4. ~~Implement the 4 `ThemeRenderer`s against the generated textures.~~ Done for
-   panels/nodes/ports/rings/buttons/icons (§4a); only knobs have no call site yet.
+   panels/nodes/ports/rings/buttons/icons and Inspector knobs (§4a).
 5. ~~Wire graph submission to the server.~~ Done via `MusicPackets.Submit`
    (see the note at the top of §1). Remaining gaps are tracked in
    [FUTURE-WORK.md](FUTURE-WORK.md), not this build order.

@@ -8,10 +8,13 @@ Open `/groove-editor` (or specify tactical, clockwork, crt, vanilla). The defaul
 - The displayed cycle and cable phase use the synchronized server clock.
 - The sample drawer reads the hot-reloaded client catalog. Search supports text, `@factory`, and `@custom`. Click to audition; arrows browse/preview, Enter toggles preview, and Space previews while browsing. Ctrl+B toggles the overlay without changing canvas coordinates.
 - Drag a sample onto the canvas to create a version-2 sample generator; connect its output before Apply. Drop onto a sample generator to preserve parameters and outgoing wires. Tone generators can also be converted. Undo restores the previous reference and cables.
-- The Inspector shows sample availability, an asynchronously decoded waveform, and draggable parameter values. Invalid parameter values are rejected on Apply. Delete removes selected nodes.
+- The Inspector shows sample availability, an asynchronously decoded waveform, and themed rotary parameter controls. Drag a knob or its label/value vertically; hold Ctrl when starting for fine adjustment. Each gesture is one undo step. Scroll over the Inspector to reach clipped controls. Indicators reflect the current draft, including undo/redo; Apply is still required for playback changes. Delete removes selected nodes.
 - Preview audio is local and separate from the session. Escape stops it first; closing the screen stops it as well.
 
 ## Custom packs and limitations
+
+World persistence now saves patch and tempo together in `groove-session.json`.
+See [session saves](SESSION-SAVES.md) for legacy compatibility and atomic-save guarantees.
 
 Client packs live in `<game directory>/groove/samples`. For shared playback, install the exact same custom file at the matching relative path in `<world>/sequencer_samples` on the server. Submission checks the full hash against the server catalog. It does not upload files or browse unreferenced server-only packs. Existing bounded asset transfers serve accepted patch references to listeners.
 
