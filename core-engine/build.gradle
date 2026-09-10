@@ -1,0 +1,43 @@
+plugins {
+    id 'java-library'
+}
+
+java {
+    sourceCompatibility = JavaVersion.VERSION_21
+    targetCompatibility = JavaVersion.VERSION_21
+    withSourcesJar()
+}
+
+tasks.withType(JavaCompile).configureEach { options.release = 21 }
+
+tasks.register('engineTest', JavaExec) {
+    dependsOn testClasses
+    classpath = sourceSets.test.runtimeClasspath
+    mainClass = 'groove.engine.EngineTests'
+}
+check.dependsOn engineTest
+tasks.register('liveTest', JavaExec) {
+    dependsOn testClasses
+    classpath = sourceSets.test.runtimeClasspath
+    mainClass = 'groove.engine.LiveTests'
+}
+check.dependsOn liveTest
+tasks.register('sampleTest', JavaExec) {
+    dependsOn testClasses
+    classpath = sourceSets.test.runtimeClasspath
+    mainClass = 'groove.engine.SampleTests'
+}
+check.dependsOn sampleTest
+
+// This module uses an executable regression suite instead of a JUnit dependency.
+tasks.named('test') {
+    dependsOn engineTest, liveTest, sampleTest
+    enabled = false
+}
+
+tasks.register('renderDemo', JavaExec) {
+    dependsOn classes
+    classpath = sourceSets.main.runtimeClasspath
+    mainClass = 'groove.engine.Demo'
+    args layout.buildDirectory.file('demo.wav').get().asFile.absolutePath
+}

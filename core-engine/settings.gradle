@@ -1,0 +1,2 @@
+// Allows headless development without loading Minecraft or Loom.
+rootProject.name = 'groove-core-engine'

@@ -1,0 +1,14 @@
+{
+	"required": true,
+	"package": "com.mervyn.groove.client.mixin",
+	"compatibilityLevel": "JAVA_21",
+	"client": [
+		"GrooveChannelMixin"
+	],
+	"injectors": {
+		"defaultRequire": 1
+	},
+	"overwrites": {
+		"requireAnnotations": true
+	}
+}

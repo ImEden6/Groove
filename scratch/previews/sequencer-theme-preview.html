@@ -1,0 +1,651 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Groove Sequencer — Theme Preview</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&family=Inter:wght@400;500;600;700&display=swap');
+
+  :root {
+    --bg-app: #14151a;
+    --bg-canvas: #1a1c20;
+    --bg-canvas-dot: #2a2e35;
+    --bg-panel: #202329;
+    --bg-panel-2: #23262d;
+    --border: #33373f;
+    --border-soft: #2a2d33;
+    --text: #e7e9ee;
+    --text-dim: #8b8f99;
+    --text-faint: #5a5e68;
+    --accent-a: #ffaa00; /* trigger / euclid */
+    --accent-b: #00e5ff; /* audio */
+    --accent-c: #a6ff00; /* modulation */
+    --danger: #ff5a5a;
+    --radius: 4px;
+    --radius-lg: 8px;
+    --font-ui: 'Inter', system-ui, sans-serif;
+    --font-mono: 'JetBrains Mono', ui-monospace, monospace;
+    --cable-filter: none;
+    --cable-width: 2;
+    --cable-dash: none;
+    --node-shadow: 0 2px 10px rgba(0,0,0,0.35);
+    --glow-strength: 0;
+  }
+
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: #0c0d10;
+    color: var(--text);
+    font-family: var(--font-ui);
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    padding: 20px 14px 40px;
+  }
+
+  /* ---------------- meta controls (not part of the in-game UI) ---------------- */
+  .meta {
+    width: 100%;
+    max-width: 1180px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 16px;
+    margin-bottom: 16px;
+    flex-wrap: wrap;
+  }
+  .meta h1 {
+    font-size: 15px;
+    font-weight: 600;
+    color: #cfd2d8;
+    margin: 0;
+  }
+  .meta p {
+    margin: 2px 0 0;
+    font-size: 12px;
+    color: #6b6f78;
+  }
+  .theme-switch {
+    display: flex;
+    gap: 6px;
+    background: #17181c;
+    border: 1px solid #26282e;
+    border-radius: 999px;
+    padding: 4px;
+  }
+  .theme-switch button {
+    appearance: none;
+    border: none;
+    background: transparent;
+    color: #9a9ea7;
+    font-family: var(--font-ui);
+    font-size: 12.5px;
+    font-weight: 500;
+    padding: 7px 14px;
+    border-radius: 999px;
+    cursor: pointer;
+    transition: background .15s ease, color .15s ease;
+    white-space: nowrap;
+  }
+  .theme-switch button:hover { color: #d3d6db; }
+  .theme-switch button.active {
+    background: #2c2f36;
+    color: #fff;
+  }
+  .theme-switch button .dot {
+    display: inline-block;
+    width: 7px; height: 7px;
+    border-radius: 50%;
+    margin-right: 7px;
+    vertical-align: middle;
+  }
+
+  /* ---------------- app frame ---------------- */
+  .app-frame {
+    width: 100%;
+    max-width: 1180px;
+    aspect-ratio: 16 / 9.6;
+    background: var(--bg-app);
+    color: var(--text);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-lg);
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+    box-shadow: 0 20px 60px rgba(0,0,0,0.5);
+    font-family: var(--font-ui);
+  }
+
+  /* ---------------- transport header ---------------- */
+  .transport {
+    flex: 0 0 auto;
+    display: flex;
+    align-items: center;
+    gap: 18px;
+    padding: 0 16px;
+    height: 46px;
+    background: var(--bg-panel);
+    border-bottom: 1px solid var(--border);
+  }
+  .transport-group { display: flex; align-items: center; gap: 8px; }
+  .t-btn {
+    display: flex; align-items: center; gap: 6px;
+    background: var(--bg-panel-2);
+    border: 1px solid var(--border);
+    color: var(--text);
+    border-radius: var(--radius);
+    padding: 6px 12px;
+    font-size: 12.5px;
+    font-weight: 500;
+    cursor: default;
+  }
+  .t-btn.play { color: var(--accent-c); border-color: color-mix(in srgb, var(--accent-c) 35%, var(--border)); }
+  .t-field-label { font-size: 11px; color: var(--text-dim); text-transform: uppercase; letter-spacing: .04em; }
+  .t-field-value {
+    background: var(--bg-panel-2);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 5px 10px;
+    font-family: var(--font-mono);
+    font-size: 12.5px;
+    min-width: 38px;
+    text-align: center;
+  }
+  .transport .spacer { flex: 1; }
+  .icon-btn {
+    width: 30px; height: 30px;
+    display: flex; align-items: center; justify-content: center;
+    border-radius: var(--radius);
+    border: 1px solid var(--border);
+    background: var(--bg-panel-2);
+    font-size: 14px;
+  }
+
+  /* ---------------- body: 3 columns ---------------- */
+  .body {
+    flex: 1 1 auto;
+    display: grid;
+    grid-template-columns: 210px 1fr 240px;
+    min-height: 0;
+  }
+
+  /* -------- left drawer -------- */
+  .drawer-left {
+    background: var(--bg-panel);
+    border-right: 1px solid var(--border);
+    padding: 10px;
+    overflow-y: auto;
+    font-size: 12.5px;
+  }
+  .filter-box {
+    background: var(--bg-panel-2);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 6px 8px;
+    color: var(--text-dim);
+    font-size: 11.5px;
+    margin-bottom: 10px;
+  }
+  .tree-group { margin-bottom: 4px; }
+  .tree-head {
+    color: var(--text-dim);
+    font-size: 11px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: .04em;
+    padding: 4px 2px;
+  }
+  .tree-sub {
+    color: var(--text-dim);
+    padding: 3px 2px 3px 12px;
+    font-size: 12px;
+  }
+  .tree-leaf {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 4px 4px 4px 22px;
+    border-radius: var(--radius);
+    color: var(--text);
+    font-family: var(--font-mono);
+    font-size: 11.5px;
+  }
+  .tree-leaf.active { background: var(--bg-panel-2); }
+  .tree-leaf .play-ico { color: var(--accent-a); font-size: 10px; }
+
+  /* -------- canvas -------- */
+  .canvas {
+    position: relative;
+    background:
+      radial-gradient(var(--bg-canvas-dot) 1px, transparent 1px) 0 0/22px 22px,
+      var(--bg-canvas);
+    overflow: hidden;
+  }
+  .node {
+    position: absolute;
+    width: 148px;
+    background: var(--bg-panel);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-lg);
+    box-shadow: var(--node-shadow);
+    font-size: 11.5px;
+  }
+  .node .node-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 7px 10px;
+    border-bottom: 1px solid var(--border-soft);
+    font-weight: 600;
+    color: var(--text);
+  }
+  .node .node-kind {
+    font-size: 9.5px;
+    color: var(--text-faint);
+    text-transform: uppercase;
+    letter-spacing: .04em;
+    font-weight: 500;
+  }
+  .node .node-body { padding: 8px 10px 10px; color: var(--text-dim); font-size: 11px; }
+  .node.selected { border-color: var(--accent-a); }
+  .port {
+    position: absolute;
+    width: 9px; height: 9px;
+    border-radius: 50%;
+    top: 50%;
+    transform: translateY(-50%);
+    border: 2px solid var(--bg-canvas);
+  }
+  .port.out { right: -5px; background: var(--accent-b); }
+  .port.in { left: -5px; background: var(--accent-b); }
+
+  #node-sample { left: 60px; top: 70px; }
+  #node-euclid { left: 300px; top: 168px; }
+  #node-out { left: 560px; top: 258px; width: 118px; }
+
+  svg.wires { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; }
+  .wire-glow {
+    fill: none;
+    stroke: var(--accent-b);
+    stroke-width: var(--cable-width);
+    filter: var(--cable-filter);
+    stroke-dasharray: var(--cable-dash);
+    stroke-linecap: round;
+  }
+  .pulse { fill: var(--accent-b); filter: var(--cable-filter); }
+
+  /* -------- right inspector -------- */
+  .inspector {
+    background: var(--bg-panel);
+    border-left: 1px solid var(--border);
+    padding: 12px;
+    font-size: 12px;
+    overflow-y: auto;
+  }
+  .insp-title { font-size: 13px; font-weight: 700; margin-bottom: 2px; }
+  .insp-sub { color: var(--text-dim); font-size: 11px; font-family: var(--font-mono); margin-bottom: 14px; }
+  .field-row { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; }
+  .field-row label { color: var(--text-dim); font-size: 11.5px; }
+  .field-row .val {
+    background: var(--bg-panel-2);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 4px 10px;
+    font-family: var(--font-mono);
+    font-size: 11.5px;
+    min-width: 46px;
+    text-align: center;
+  }
+  .ring-label { color: var(--text-dim); font-size: 11px; margin: 14px 0 6px; }
+  .ring { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 14px; }
+  .ring .step {
+    width: 16px; height: 16px;
+    border-radius: 50%;
+    border: 1.5px solid var(--accent-a);
+  }
+  .ring .step.on { background: var(--accent-a); }
+  .insp-actions { display: flex; flex-direction: column; gap: 6px; margin-top: 10px; }
+  .insp-actions button, .insp-row-btns button {
+    font-family: var(--font-ui);
+    background: var(--bg-panel-2);
+    border: 1px solid var(--border);
+    color: var(--text);
+    border-radius: var(--radius);
+    padding: 7px 10px;
+    font-size: 11.5px;
+  }
+  .insp-row-btns { display: flex; gap: 6px; margin-bottom: 4px; }
+  .insp-row-btns button { flex: 1; }
+  .danger-btn { color: var(--danger) !important; }
+
+  /* -------- status bar -------- */
+  .status {
+    flex: 0 0 auto;
+    height: 26px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 0 14px;
+    background: var(--bg-panel);
+    border-top: 1px solid var(--border);
+    color: var(--text-dim);
+    font-size: 10.5px;
+    font-family: var(--font-mono);
+  }
+  .status .sep { color: var(--text-faint); }
+  .status .ok { color: var(--accent-c); }
+
+  /* ================= THEME: CLOCKWORK ================= */
+  .app-frame[data-theme="clockwork"] {
+    --bg-app: #e8dfd0;
+    --bg-canvas: #ece4d6;
+    --bg-canvas-dot: #c4b8a5;
+    --bg-panel: #dcd0ba;
+    --bg-panel-2: #efe7d8;
+    --border: #b3a488;
+    --border-soft: #cabfa8;
+    --text: #2c2620;
+    --text-dim: #6b5f4d;
+    --text-faint: #a1937b;
+    --accent-a: #b8860b;
+    --accent-b: #8c6a1f;
+    --accent-c: #6d7a3d;
+    --radius: 3px;
+    --radius-lg: 3px;
+    --font-ui: 'Georgia', 'Iowan Old Style', serif;
+    --font-mono: 'Georgia', serif;
+    --node-shadow: inset 0 0 0 1px #fff6, 0 3px 6px rgba(60,45,20,0.25);
+  }
+  .app-frame[data-theme="clockwork"] .node {
+    background: linear-gradient(180deg, #f1e7d3, #d9c8a8);
+    border: 2px solid #8c6a1f;
+  }
+  .app-frame[data-theme="clockwork"] .node .node-head {
+    background: linear-gradient(180deg, #d4af37, #a9822a);
+    color: #2c2010;
+    border-bottom: 2px solid #8c6a1f;
+    border-radius: 1px 1px 0 0;
+  }
+  .app-frame[data-theme="clockwork"] .t-btn,
+  .app-frame[data-theme="clockwork"] .t-field-value,
+  .app-frame[data-theme="clockwork"] .icon-btn,
+  .app-frame[data-theme="clockwork"] .filter-box,
+  .app-frame[data-theme="clockwork"] .field-row .val,
+  .app-frame[data-theme="clockwork"] .insp-actions button,
+  .app-frame[data-theme="clockwork"] .insp-row-btns button {
+    background: linear-gradient(180deg, #f1e7d3, #d9c8a8);
+    border: 1px solid #8c6a1f;
+  }
+  .app-frame[data-theme="clockwork"] .ring .step { border-color: #8c6a1f; border-radius: 2px; }
+  .app-frame[data-theme="clockwork"] .ring .step.on { background: #b8860b; }
+  .app-frame[data-theme="clockwork"] .wire-glow {
+    stroke: #7a5c22;
+    stroke-width: 3;
+    filter: none;
+  }
+  .app-frame[data-theme="clockwork"] .pulse { fill: #d4af37; filter: none; }
+
+  /* ================= THEME: CRT ================= */
+  .app-frame[data-theme="crt"] {
+    --bg-app: #060a08;
+    --bg-canvas: #080c0a;
+    --bg-canvas-dot: #123322;
+    --bg-panel: #0a0f0c;
+    --bg-panel-2: #0d140f;
+    --border: #1f4a30;
+    --border-soft: #163524;
+    --text: #33ff66;
+    --text-dim: #24aa48;
+    --text-faint: #196b32;
+    --accent-a: #33ff66;
+    --accent-b: #33ff66;
+    --accent-c: #33ff66;
+    --danger: #ff5a5a;
+    --radius: 0px;
+    --radius-lg: 0px;
+    --font-ui: var(--font-mono);
+    --node-shadow: none;
+    --cable-filter: drop-shadow(0 0 3px #33ff66);
+    --cable-width: 1;
+  }
+  .app-frame[data-theme="crt"] * { font-family: 'JetBrains Mono', ui-monospace, monospace !important; text-transform: none; }
+  .app-frame[data-theme="crt"] .node {
+    background: #060a08;
+    border: 1px solid #33ff66;
+    box-shadow: 0 0 8px rgba(51,255,102,0.15), inset 0 0 6px rgba(51,255,102,0.05);
+  }
+  .app-frame[data-theme="crt"] .node .node-head { border-bottom: 1px solid #1f4a30; text-shadow: 0 0 4px #33ff66; }
+  .app-frame[data-theme="crt"] .node.selected { box-shadow: 0 0 12px rgba(51,255,102,0.5); }
+  .app-frame[data-theme="crt"] .t-btn,
+  .app-frame[data-theme="crt"] .t-field-value,
+  .app-frame[data-theme="crt"] .icon-btn,
+  .app-frame[data-theme="crt"] .filter-box,
+  .app-frame[data-theme="crt"] .field-row .val,
+  .app-frame[data-theme="crt"] .insp-actions button,
+  .app-frame[data-theme="crt"] .insp-row-btns button {
+    background: #060a08; border: 1px solid #1f4a30; text-shadow: 0 0 3px #33ff66;
+  }
+  .app-frame[data-theme="crt"] .ring .step { border-radius: 0; }
+  .app-frame[data-theme="crt"] .port { box-shadow: 0 0 4px #33ff66; }
+  .app-frame[data-theme="crt"] .canvas::after {
+    content: "";
+    position: absolute; inset: 0;
+    background: repeating-linear-gradient(0deg, rgba(0,0,0,0.18) 0px, rgba(0,0,0,0.18) 1px, transparent 1px, transparent 3px);
+    pointer-events: none;
+  }
+
+  /* ================= THEME: VANILLA ================= */
+  .app-frame[data-theme="vanilla"] {
+    --bg-app: #c6c6c6;
+    --bg-canvas: #373737;
+    --bg-canvas-dot: #454545;
+    --bg-panel: #c6c6c6;
+    --bg-panel-2: #8b8b8b;
+    --border: #373737;
+    --border-soft: #545454;
+    --text: #1a1a1a;
+    --text-dim: #4b4b4b;
+    --text-faint: #6f6f6f;
+    --accent-a: #55ff55;
+    --accent-b: #5555ff;
+    --accent-c: #ffff55;
+    --radius: 0px;
+    --radius-lg: 0px;
+    --font-ui: 'Minecraftia', 'JetBrains Mono', monospace;
+    --font-mono: 'Minecraftia', 'JetBrains Mono', monospace;
+    --node-shadow: none;
+  }
+  .app-frame[data-theme="vanilla"] .transport,
+  .app-frame[data-theme="vanilla"] .drawer-left,
+  .app-frame[data-theme="vanilla"] .inspector,
+  .app-frame[data-theme="vanilla"] .status {
+    background: #c6c6c6;
+    color: #1a1a1a;
+  }
+  .app-frame[data-theme="vanilla"] .node {
+    background: #c6c6c6;
+    border-style: solid;
+    border-width: 3px;
+    border-color: #ffffff #555555 #555555 #ffffff;
+    border-radius: 0;
+    color: #1a1a1a;
+  }
+  .app-frame[data-theme="vanilla"] .node .node-head {
+    background: #a8a8a8;
+    border-bottom: 2px solid #555;
+    color: #1a1a1a;
+  }
+  .app-frame[data-theme="vanilla"] .node .node-kind { color: #5c3fa8; }
+  .app-frame[data-theme="vanilla"] .t-btn,
+  .app-frame[data-theme="vanilla"] .icon-btn,
+  .app-frame[data-theme="vanilla"] .t-field-value,
+  .app-frame[data-theme="vanilla"] .field-row .val,
+  .app-frame[data-theme="vanilla"] .filter-box,
+  .app-frame[data-theme="vanilla"] .insp-actions button,
+  .app-frame[data-theme="vanilla"] .insp-row-btns button {
+    background: #c6c6c6;
+    border-style: solid;
+    border-width: 2px;
+    border-color: #ffffff #555555 #555555 #ffffff;
+    border-radius: 0;
+    color: #1a1a1a;
+  }
+  .app-frame[data-theme="vanilla"] .ring .step { border-radius: 0; border-color: #1a1a1a; }
+  .app-frame[data-theme="vanilla"] .ring .step.on { background: #55ff55; }
+  .app-frame[data-theme="vanilla"] .port { border-radius: 0; width: 8px; height: 8px; }
+  .app-frame[data-theme="vanilla"] .wire-glow { stroke-width: 3; filter: none; }
+
+  .legend {
+    width: 100%;
+    max-width: 1180px;
+    margin-top: 14px;
+    font-size: 11.5px;
+    color: #6b6f78;
+    line-height: 1.6;
+  }
+  .legend b { color: #9a9ea7; }
+</style>
+</head>
+<body>
+
+<div class="meta">
+  <div>
+    <h1>Groove Sequencer — theme preview</h1>
+    <p>Static mockup of the layout in §1 of the spec, skinned per §5. Not a live build.</p>
+  </div>
+  <div class="theme-switch" id="switch">
+    <button data-theme="tactical" class="active"><span class="dot" style="background:#00e5ff"></span>Tactical Studio Rack</button>
+    <button data-theme="clockwork"><span class="dot" style="background:#d4af37"></span>Acoustic Clockwork</button>
+    <button data-theme="crt"><span class="dot" style="background:#33ff66"></span>Retro CRT</button>
+    <button data-theme="vanilla"><span class="dot" style="background:#5c3fa8"></span>Vanilla Clean</button>
+  </div>
+</div>
+
+<div class="app-frame" id="frame" data-theme="tactical">
+
+  <div class="transport">
+    <div class="transport-group">
+      <div class="t-btn play">▶ Play</div>
+      <div class="t-btn">■ Stop</div>
+    </div>
+    <div class="transport-group">
+      <span class="t-field-label">BPM</span><span class="t-field-value">128</span>
+    </div>
+    <div class="transport-group">
+      <span class="t-field-label">Swing</span><span class="t-field-value">0%</span>
+    </div>
+    <div class="transport-group">
+      <span class="t-field-label">Cycle</span><span class="t-field-value">04.25</span>
+    </div>
+    <div class="transport-group">
+      <span class="t-field-label">Voices</span><span class="t-field-value">08/32</span>
+    </div>
+    <div class="spacer"></div>
+    <div class="icon-btn">☰</div>
+  </div>
+
+  <div class="body">
+    <div class="drawer-left">
+      <div class="filter-box">🔍 Filter samples…</div>
+      <div class="tree-group">
+        <div class="tree-head">▼ Built-in</div>
+        <div class="tree-sub">▼ Percussion</div>
+        <div class="tree-leaf"><span class="play-ico">►</span>bd_808_sub</div>
+        <div class="tree-leaf active"><span class="play-ico">►</span>bd_acoustic</div>
+        <div class="tree-leaf"><span class="play-ico">►</span>sn_linn_tight</div>
+        <div class="tree-sub">▶ Synths</div>
+        <div class="tree-sub">▶ World &amp; Ambience</div>
+      </div>
+      <div class="tree-group">
+        <div class="tree-head">▶ Custom Packs</div>
+      </div>
+    </div>
+
+    <div class="canvas">
+      <svg class="wires" viewBox="0 0 900 500" preserveAspectRatio="none">
+        <path class="wire-glow" d="M 208 100 C 260 100, 260 198, 300 198" />
+        <path class="wire-glow" d="M 448 198 C 500 198, 500 288, 560 288" />
+        <circle class="pulse" r="3.5">
+          <animateMotion dur="1.4s" repeatCount="indefinite"
+            path="M 208 100 C 260 100, 260 198, 300 198" />
+        </circle>
+        <circle class="pulse" r="3.5">
+          <animateMotion dur="1.6s" repeatCount="indefinite" begin="0.3s"
+            path="M 448 198 C 500 198, 500 288, 560 288" />
+        </circle>
+      </svg>
+
+      <div class="node" id="node-sample">
+        <div class="node-head">808_sub <span class="node-kind">Sound Gen</span></div>
+        <div class="node-body">freq 55Hz · gain 0.8</div>
+        <div class="port out"></div>
+      </div>
+
+      <div class="node selected" id="node-euclid">
+        <div class="node-head">Euclid (5/8) <span class="node-kind">Transform</span></div>
+        <div class="node-body">steps 16 · rot +2</div>
+        <div class="port in"></div>
+        <div class="port out"></div>
+      </div>
+
+      <div class="node" id="node-out">
+        <div class="node-head">Master Out <span class="node-kind">Bus #0</span></div>
+        <div class="port in"></div>
+      </div>
+    </div>
+
+    <div class="inspector">
+      <div class="insp-title">Node: Euclid (5/8)</div>
+      <div class="insp-sub">transform/euclid</div>
+
+      <div class="field-row"><label>Steps</label><span class="val">16</span></div>
+      <div class="field-row"><label>Pulses</label><span class="val">5</span></div>
+      <div class="field-row"><label>Rotation</label><span class="val">+2</span></div>
+
+      <div class="ring-label">Interactive Ring</div>
+      <div class="ring">
+        <div class="step on"></div><div class="step"></div><div class="step on"></div><div class="step on"></div><div class="step"></div>
+        <div class="step on"></div><div class="step"></div><div class="step on"></div><div class="step"></div><div class="step on"></div>
+      </div>
+
+      <div class="insp-row-btns">
+        <button>Mute Step</button>
+        <button>Invert</button>
+      </div>
+      <div class="insp-actions">
+        <button>Disconnect All</button>
+        <button class="danger-btn">Delete Node</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="status">
+    <span class="ok">●</span> Audio Engine Synchronized
+    <span class="sep">·</span> Buffer 512 samples @ 44.1kHz
+    <span class="sep">·</span> Downbeat Quantize: 1 Bar
+  </div>
+</div>
+
+<div class="legend">
+  <b>Note:</b> this is a visual-direction mockup only — node positions, drawer contents, and the
+  inspector fields are illustrative, not the final data model. Cable animation shows the "live pulse"
+  behavior from §3; layout matches the transport / drawer / canvas / inspector split from §1.
+</div>
+
+<script>
+  const buttons = document.querySelectorAll('#switch button');
+  const frame = document.getElementById('frame');
+  buttons.forEach(btn => {
+    btn.addEventListener('click', () => {
+      buttons.forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+      frame.setAttribute('data-theme', btn.dataset.theme);
+    });
+  });
+</script>
+
+</body>
+</html>
