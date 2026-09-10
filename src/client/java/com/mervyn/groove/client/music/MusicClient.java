@@ -24,6 +24,7 @@ public final class MusicClient {
     private static LiveRenderer renderer = new LiveRenderer();
     private static LiveRenderer.Timeline program;
     private static groove.engine.SessionTimeline.Snapshot latestSnapshot;
+    private static MusicPackets.Snapshot latestWire;
     private static java.util.Map<groove.engine.samples.AssetRef, String> sampleStatus = java.util.Map.of();
     private static GrooveSound sound;
     private static GrooveAudioStream stream;
@@ -34,14 +35,16 @@ public final class MusicClient {
             if (context.client().screen instanceof com.mervyn.groove.client.ui.GrooveEditorScreen editor) editor.submissionResult(packet);
         });
         ClientPlayNetworking.registerGlobalReceiver(MusicPackets.Snapshot.TYPE, (packet, context) -> {
-            if (!packet.epoch().equals(epoch)) {
-                reset(context.client());
-                epoch = packet.epoch();
-            }
-            if (packet.snapshot().revision() <= revision) return;
-            revision = packet.snapshot().revision();
-            latestSnapshot = packet.snapshot();
-            refreshSamples();
+            context.client().execute(() -> {
+                if (!packet.epoch().equals(epoch)) {
+                    reset(context.client());
+                    epoch = packet.epoch();
+                }
+                if (packet.revision() <= revision) return;
+                revision = packet.revision();
+                latestWire = packet;
+                refreshSamples();
+            });
         });
         ClientPlayNetworking.registerGlobalReceiver(MusicPackets.Pong.TYPE, (packet, context) -> {
             if (packet.sent() == outstandingPing) {
@@ -82,14 +85,16 @@ public final class MusicClient {
         return latestSnapshot == null ? null : latestSnapshot.pending() == null ? latestSnapshot.current() : latestSnapshot.pending();
     }
     public static void refreshSamples() {
-        var snapshot = latestSnapshot;
-        if (snapshot == null || COMPILER.isShutdown()) return;
+        var wire = latestWire;
+        if (wire == null || COMPILER.isShutdown()) return;
         long ticket = ++generation;
         COMPILER.execute(() -> {
             try {
+                var snapshot = wire.snapshot();
                 var prepared = SampleLibrary.prepare(snapshot);
                 Minecraft.getInstance().execute(() -> {
                     if (ticket != generation) return;
+                    latestSnapshot = snapshot;
                     program = prepared.timeline(); sampleStatus = prepared.status();
                     renderer.publish(program);
                     SampleLibrary.request(prepared.needed());
@@ -102,7 +107,7 @@ public final class MusicClient {
     }
     private static void reset(Minecraft client) {
         generation++; revision = -1; epoch = null; program = null;
-        latestSnapshot = null; sampleStatus = java.util.Map.of();
+        latestSnapshot = null; latestWire = null; sampleStatus = java.util.Map.of();
         lastPing = 0; outstandingPing = 0;
         if (sound != null) client.getSoundManager().stop(sound);
         if (stream != null) stream.close();

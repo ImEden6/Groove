@@ -1,6 +1,8 @@
 package com.mervyn.groove.client.ui;
 
 import groove.engine.Graph;
+import groove.engine.NodeType;
+import groove.engine.NodeParam;
 
 import java.util.ArrayDeque;
 import java.util.Collection;
@@ -69,19 +71,19 @@ public final class EditorState {
      *  of surprising the user with a rejection at submit time. Everything else is left
      *  to real validation at the PatchSubmission boundary. */
     public Graph toGraph() {
-        int effectiveVersion = nodes.values().stream().anyMatch(n -> n.type().equals("generator/sample"))
+        int effectiveVersion = nodes.values().stream().anyMatch(n -> n.type() == NodeType.GENERATOR_SAMPLE)
                 ? Math.max(version, 2) : version;
         return new Graph(effectiveVersion, List.copyOf(nodes.values()), List.copyOf(edges));
     }
     public void dropSample(groove.engine.samples.AssetRef ref, Vec2 position, String target) {
         Graph.Node old = nodes.get(target);
-        if (old != null && !old.type().equals("generator/sample") && !old.type().equals("tone")) return;
+        if (old != null && old.type() != NodeType.GENERATOR_SAMPLE && old.type() != NodeType.TONE) return;
         if (old == null && nodes.size() >= 64) throw new IllegalArgumentException("Maximum 64 nodes");
         pushUndo();
         String id = old == null ? uniqueId("sample") : old.id();
-        Map<String, Double> params = old != null && old.type().equals("generator/sample") ? old.params()
-                : Map.of("pitchRatio", 1.0, "gain", .8, "pan", 0.0);
-        nodes.put(id, new Graph.Node(id, "generator/sample", params, ref));
+        Map<String, Double> params = old != null && old.type() == NodeType.GENERATOR_SAMPLE ? old.params()
+                : Map.of(NodeParam.PITCH_RATIO, 1.0, NodeParam.GAIN, .8, NodeParam.PAN, 0.0);
+        nodes.put(id, new Graph.Node(id, NodeType.GENERATOR_SAMPLE, params, ref));
         if (old == null) layout.place(id, position);
         select(id, false); markDirty();
     }
@@ -188,11 +190,11 @@ public final class EditorState {
     // === ports and cables ===
     public boolean hasOutputPort(String nodeId) {
         Graph.Node node = nodes.get(nodeId);
-        return node != null && !node.type().equals("output");
+        return node != null && node.type() != NodeType.OUTPUT;
     }
     public boolean hasInputPort(String nodeId) {
         Graph.Node node = nodes.get(nodeId);
-        return node != null && !node.type().equals("tone") && !node.type().equals("generator/sample");
+        return node != null && node.type() != NodeType.TONE && node.type() != NodeType.GENERATOR_SAMPLE;
     }
 
     /** Mirrors GraphCompiler's arity and cycle rules closely enough for immediate UI
@@ -202,7 +204,7 @@ public final class EditorState {
         if (fromId.equals(toId) || !hasOutputPort(fromId) || !hasInputPort(toId)) return false;
         Graph.Node to = nodes.get(toId);
         long currentInputs = edges.stream().filter(e -> e.toNode().equals(toId)).count();
-        boolean roomForMore = to.type().equals("stack") ? currentInputs < 16 : currentInputs < 1;
+        boolean roomForMore = to.type() == NodeType.STACK ? currentInputs < 16 : currentInputs < 1;
         return roomForMore
                 && !edges.contains(new Graph.Edge(fromId, "out", toId, "in"))
                 && !reaches(toId, fromId);
@@ -279,9 +281,9 @@ public final class EditorState {
         Map<String, Double> params = new LinkedHashMap<>(node.params());
         double raw = valueDrag.startValue() + delta;
         params.put(valueDrag.param(), clampParam(node.type(), valueDrag.param(), raw, params));
-        if (node.type().equals("euclid") && valueDrag.param().equals("steps")) {
-            params.put("pulses", Math.min(params.get("steps"),
-                    params.getOrDefault("pulses", defaultParams("euclid").get("pulses"))));
+        if (node.type() == NodeType.EUCLID && valueDrag.param().equals(NodeParam.STEPS)) {
+            params.put(NodeParam.PULSES, Math.min(params.get(NodeParam.STEPS),
+                    params.getOrDefault(NodeParam.PULSES, defaultParams(NodeType.EUCLID).get(NodeParam.PULSES))));
         }
         nodes.put(node.id(), new Graph.Node(node.id(), node.type(), params, node.sample()));
         markDirty();
@@ -293,52 +295,57 @@ public final class EditorState {
      *  comparable, reasonable drag distance to sweep (roughly 150-400px). */
     private static double sensitivity(String param) {
         return switch (param) {
-            case "frequency", "cutoffHz" -> 40.0;
-            case "gain" -> 0.005;
-            case "pan" -> 0.01;
-            case "pitchRatio" -> 0.02;
-            case "wave" -> 0.05;
-            case "factor" -> 0.1;
-            case "steps", "pulses" -> 0.3;
-            case "rotation" -> 0.5;
+            case NodeParam.FREQUENCY, NodeParam.CUTOFF_HZ -> 40.0;
+            case NodeParam.GAIN -> 0.005;
+            case NodeParam.PAN -> 0.01;
+            case NodeParam.PITCH_RATIO -> 0.02;
+            case NodeParam.WAVE -> 0.05;
+            case NodeParam.FACTOR -> 0.1;
+            case NodeParam.STEPS, NodeParam.PULSES -> 0.3;
+            case NodeParam.ROTATION -> 0.5;
             default -> 1.0;
         };
     }
 
-    public static double clampParam(String type, String param, double value, Map<String, Double> existingParams) {
+    public static double clampParam(NodeType type, String param, double value, Map<String, Double> existingParams) {
         return switch (param) {
-            case "frequency" -> Math.max(20.0, Math.min(16000.0, value));
-            case "cutoffHz" -> Math.max(20.0, Math.min(20000.0, value));
-            case "gain" -> Math.max(0.0, Math.min(1.0, value));
-            case "pan" -> Math.max(-1.0, Math.min(1.0, value));
-            case "pitchRatio" -> Math.max(0.25, Math.min(4.0, value));
-            case "wave" -> Math.max(0.0, Math.min(1.0, Math.round(value)));
-            case "factor" -> Math.max(1.0, Math.min(16.0, Math.round(value)));
-            case "steps" -> Math.max(1.0, Math.min(64.0, Math.round(value)));
-            case "pulses" -> {
-                double maxSteps = existingParams != null ? existingParams.getOrDefault("steps", 64.0) : 64.0;
+            case NodeParam.FREQUENCY -> Math.max(20.0, Math.min(16000.0, value));
+            case NodeParam.CUTOFF_HZ -> Math.max(20.0, Math.min(20000.0, value));
+            case NodeParam.GAIN -> Math.max(0.0, Math.min(1.0, value));
+            case NodeParam.PAN -> Math.max(-1.0, Math.min(1.0, value));
+            case NodeParam.PITCH_RATIO -> Math.max(0.25, Math.min(4.0, value));
+            case NodeParam.WAVE -> Math.max(0.0, Math.min(1.0, Math.round(value)));
+            case NodeParam.FACTOR -> Math.max(1.0, Math.min(16.0, Math.round(value)));
+            case NodeParam.STEPS -> Math.max(1.0, Math.min(64.0, Math.round(value)));
+            case NodeParam.PULSES -> {
+                double maxSteps = existingParams != null ? existingParams.getOrDefault(NodeParam.STEPS, 64.0) : 64.0;
                 yield Math.max(0.0, Math.min(maxSteps, Math.round(value)));
             }
-            case "rotation" -> Math.max(-64.0, Math.min(64.0, Math.round(value)));
+            case NodeParam.ROTATION -> Math.max(-64.0, Math.min(64.0, Math.round(value)));
             default -> value;
         };
     }
 
-    public static Map<String, Double> defaultParams(String type) {
+    public static Map<String, Double> defaultParams(NodeType type) {
         return switch (type) {
-            case "tone" -> {
+            case GENERATOR_SAMPLE -> {
                 Map<String, Double> m = new LinkedHashMap<>();
-                m.put("frequency", 220.0); m.put("gain", 0.25); m.put("pan", 0.0); m.put("wave", 0.0); m.put("cutoffHz", 20000.0);
+                m.put(NodeParam.PITCH_RATIO, 1.0); m.put(NodeParam.GAIN, .8); m.put(NodeParam.PAN, 0.0);
                 yield m;
             }
-            case "euclid" -> {
+            case TONE -> {
                 Map<String, Double> m = new LinkedHashMap<>();
-                m.put("steps", 16.0); m.put("pulses", 4.0); m.put("rotation", 0.0);
+                m.put(NodeParam.FREQUENCY, 220.0); m.put(NodeParam.GAIN, 0.25); m.put(NodeParam.PAN, 0.0); m.put(NodeParam.WAVE, 0.0); m.put(NodeParam.CUTOFF_HZ, 20000.0);
                 yield m;
             }
-            case "fast" -> {
+            case EUCLID -> {
                 Map<String, Double> m = new LinkedHashMap<>();
-                m.put("factor", 2.0);
+                m.put(NodeParam.STEPS, 16.0); m.put(NodeParam.PULSES, 4.0); m.put(NodeParam.ROTATION, 0.0);
+                yield m;
+            }
+            case FAST -> {
+                Map<String, Double> m = new LinkedHashMap<>();
+                m.put(NodeParam.FACTOR, 2.0);
                 yield m;
             }
             default -> Map.of();
@@ -360,7 +367,7 @@ public final class EditorState {
     /** Shift+A or Tab opens the fuzzy search quick spawn palette at the given world point. */
     public void openQuickSpawn(Vec2 atWorld) { quickSpawnAt = atWorld; }
     public void closeQuickSpawn() { quickSpawnAt = null; }
-    public void spawnNode(String id, String type) {
+    public void spawnNode(String id, NodeType type) {
         if (quickSpawnAt == null || nodes.containsKey(id)) return;
         pushUndo();
         nodes.put(id, new Graph.Node(id, type, defaultParams(type)));

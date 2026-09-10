@@ -5,6 +5,8 @@ import com.mervyn.groove.client.ui.theme.PanelKind;
 import com.mervyn.groove.client.ui.theme.PortState;
 import com.mervyn.groove.client.ui.theme.ThemeRenderer;
 import groove.engine.Graph;
+import groove.engine.NodeType;
+import groove.engine.NodeParam;
 import net.minecraft.client.gui.GuiGraphics;
 import net.minecraft.client.gui.screens.Screen;
 import net.minecraft.network.chat.Component;
@@ -42,11 +44,14 @@ public final class GrooveEditorScreen extends Screen {
     private AssetRef draggedSample;
     private double sampleDownX, sampleDownY;
     private static final int DRAWER_WIDTH = 160;
-    private static final List<String> SPAWNABLE_TYPES = List.of("tone", "euclid", "fast", "stack", "output");
+    private static final List<NodeType> SPAWNABLE_TYPES = List.of(NodeType.TONE, NodeType.EUCLID, NodeType.FAST, NodeType.STACK, NodeType.OUTPUT);
     private int quickSpawnSelected;
     private AssetRef waveRef;
     private float[] waveform;
     private boolean confirmClose;
+    private int knobScroll;
+    private String knobNode;
+    private final SampleSearch sampleSearch = new SampleSearch();
 
     public GrooveEditorScreen(Graph graph) { this(graph, new NoOpThemeRenderer()); }
 
@@ -118,7 +123,7 @@ public final class GrooveEditorScreen extends Screen {
             // border now (see docs/SEQUENCER-UI-ARCHITECTURE.md section 4a), and text flush
             // against the old flat-fill inset used to sit right on top of it.
             graphics.drawString(font, font.plainSubstrByWidth(node.id(), 136), 8, 8, renderer.textColor(), false);
-            graphics.drawString(font, font.plainSubstrByWidth(node.type(), 136), 8, 30, renderer.textColor(), false);
+            graphics.drawString(font, font.plainSubstrByWidth(node.type().idStem(), 136), 8, 30, renderer.textColor(), false);
             graphics.pose().popPose();
             if (state.hasOutputPort(node.id())) {
                 Vec2 port = state.toScreen(NodeGeometry.outputPort(origin));
@@ -172,10 +177,10 @@ public final class GrooveEditorScreen extends Screen {
                     int h = (int) (waveform[i] * 12);
                     graphics.fill(x + i * 2, 104 - h, x + i * 2 + 1, 105 + h, 0xff77bbdd);
                 }
-            } else if (node.type().equals("euclid")) {
-                int steps = (int) Math.round(node.params().getOrDefault("steps", 16.0));
-                int pulses = (int) Math.round(node.params().getOrDefault("pulses", 4.0));
-                int rotation = (int) Math.round(node.params().getOrDefault("rotation", 0.0));
+            } else if (node.type() == NodeType.EUCLID) {
+                int steps = (int) Math.round(node.params().getOrDefault(NodeParam.STEPS, 16.0));
+                int pulses = (int) Math.round(node.params().getOrDefault(NodeParam.PULSES, 4.0));
+                int rotation = (int) Math.round(node.params().getOrDefault(NodeParam.ROTATION, 0.0));
                 steps = Math.max(1, Math.min(64, steps));
                 pulses = Math.max(0, Math.min(steps, pulses));
                 boolean[] stepBits = new boolean[steps];
@@ -186,11 +191,13 @@ public final class GrooveEditorScreen extends Screen {
                 }
                 renderer.drawEuclidRing(graphics, x + 65, 75, stepBits);
             }
-            int row = 0;
-            for (var param : EditorState.displayParams(node).entrySet()) {
-                graphics.drawString(font, String.format(java.util.Locale.ROOT, "%s: %.2f", param.getKey(), param.getValue()), textX, 124 + row++ * 14, textColor, false);
+            graphics.enableScissor(x, knobTop(node), width - 4, knobBottom());
+            for (var knob : knobs(node)) {
+                knob.draw(graphics, font, renderer.themeName(), textColor, node,
+                        EditorState.displayParams(node).get(knob.param()), mouseX, mouseY);
             }
-            graphics.drawString(font, "Drag values / Delete key", textX, 198, textColor, false);
+            graphics.disableScissor();
+            graphics.drawString(font, "Drag / Ctrl: fine", textX, inspectorBottom - 12, textColor, false);
         }
         renderer.drawPanel(graphics, PanelKind.TRANSPORT, 0, height - 20, width, 20);
         graphics.drawString(font, font.plainSubstrByWidth(message, width - 8), 8, height - 14, textColor, false);
@@ -208,7 +215,7 @@ public final class GrooveEditorScreen extends Screen {
                 int iy = py + 18 + i * 16;
                 boolean hovered = mouseX >= px && mouseX < px + popupW && mouseY >= iy && mouseY < iy + 16;
                 if (hovered || i == quickSpawnSelected) graphics.fill(px + 2, iy, px + popupW - 2, iy + 14, 0x40ffffff);
-                graphics.drawString(font, SPAWNABLE_TYPES.get(i), px + 8, iy + 3, (hovered || i == quickSpawnSelected) ? 0xffffff : textColor, false);
+                graphics.drawString(font, SPAWNABLE_TYPES.get(i).idStem(), px + 8, iy + 3, (hovered || i == quickSpawnSelected) ? 0xffffff : textColor, false);
             }
         }
     }
@@ -250,11 +257,10 @@ public final class GrooveEditorScreen extends Screen {
                 state.clearSelection();
                 return true;
             }
-            int row = (int) ((mouseY - 124) / 14);
-            var displayParams = EditorState.displayParams(node);
-            if (button == 0 && mouseY >= 124 && row < displayParams.size()) {
-                String param = displayParams.keySet().stream().skip(row).findFirst().orElseThrow();
-                input.startValueDrag(node.id(), param, mouseY, hasControlDown());
+            browsing = false;
+            if (button == 0 && mouseY >= knobTop(node) && mouseY < knobBottom()) {
+                knobs(node).stream().filter(knob -> knob.contains(mouseX, mouseY)).findFirst()
+                        .ifPresent(knob -> input.startValueDrag(node.id(), knob.param(), mouseY, hasControlDown()));
             }
             // Any other click inside the inspector (euclid ring, waveform, empty space) is
             // swallowed here rather than falling through to the canvas underneath. The
@@ -291,7 +297,15 @@ public final class GrooveEditorScreen extends Screen {
 
     @Override
     public boolean mouseScrolled(double mouseX, double mouseY, double scrollX, double scrollY) {
-        if (!state.selection().isEmpty() && insideInspector(mouseX, mouseY)) return true;
+        if (!state.selection().isEmpty() && insideInspector(mouseX, mouseY)) {
+            if (!state.isValueDragging()) {
+                var node = state.node(state.selection().iterator().next());
+                clampKnobScroll(node); // Reset scrolling when the selected node changes.
+                knobScroll += (int) (-Math.signum(scrollY) * RotaryKnob.HEIGHT);
+                clampKnobScroll(node); // Clamp to the available content.
+            }
+            return true;
+        }
         if (drawer && mouseX < DRAWER_WIDTH) { scroll -= (int) Math.signum(scrollY); clampScroll(samples().size()); return true; }
         input.mouseScroll(scrollY, mouseX, mouseY);
         return true;
@@ -344,6 +358,30 @@ public final class GrooveEditorScreen extends Screen {
     public boolean isPauseScreen() { return false; }
 
     public Graph currentGraph() { return state.toGraph(); }
+    private int knobTop(Graph.Node node) {
+        return Math.min(node.sample() != null ? 120 : node.type() == NodeType.EUCLID ? 108 : 50,
+                Math.max(50, knobBottom() - RotaryKnob.HEIGHT));
+    }
+    private int knobBottom() { return Math.max(50, Math.min(height - 20, 220) - 18); }
+    private void clampKnobScroll(Graph.Node node) {
+        if (!node.id().equals(knobNode)) { knobNode = node.id(); knobScroll = 0; }
+        int contentHeight = ((EditorState.displayParams(node).size() + 1) / 2) * RotaryKnob.HEIGHT;
+        knobScroll = Math.max(0, Math.min(knobScroll, Math.max(0, contentHeight - (knobBottom() - knobTop(node)))));
+    }
+    private List<RotaryKnob> knobs(Graph.Node node) {
+        clampKnobScroll(node);
+        var params = EditorState.displayParams(node);
+        int x = Math.max(DRAWER_WIDTH + 10, width - 150) + 4;
+        int cellWidth = Math.max(1, (width - x - 4) / 2);
+        var result = new java.util.ArrayList<RotaryKnob>();
+        int i = 0;
+        for (String param : params.keySet()) {
+            result.add(new RotaryKnob(param, x + (i % 2) * cellWidth,
+                    knobTop(node) + (i / 2) * RotaryKnob.HEIGHT - knobScroll, cellWidth));
+            i++;
+        }
+        return result;
+    }
     private boolean canvasVisible(double x, double y) {
         return x >= 0 && x < width && y >= 24 && y < height - 20
                 && (!drawer || x >= DRAWER_WIDTH)
@@ -369,16 +407,7 @@ public final class GrooveEditorScreen extends Screen {
     private int visibleRows() { return Math.max(1, (height - 88) / 16); }
     private void clampScroll(int size) { scroll = Math.max(0, Math.min(scroll, Math.max(0, size - visibleRows()))); }
     private List<SampleCatalog.Entry> samples() {
-        String query = search == null ? "" : search.getValue().toLowerCase(java.util.Locale.ROOT).trim();
-        return SampleLibrary.catalog().entries().stream().filter(e -> {
-            String id = e.ref().assetId();
-            for (String token : query.split("\\s+")) {
-                if (token.equals("@custom")) { if (!id.startsWith("custom:")) return false; }
-                else if (token.equals("@factory")) { if (!id.startsWith("factory:")) return false; }
-                else if (!id.contains(token)) return false;
-            }
-            return true;
-        }).toList();
+        return sampleSearch.filter(SampleLibrary.catalog(), search == null ? "" : search.getValue());
     }
     private void reloadSession() {
         if (request != null) return;
@@ -422,12 +451,12 @@ public final class GrooveEditorScreen extends Screen {
         super.onClose();
     }
 
-    private void spawnChosenNode(String type) {
+    private void spawnChosenNode(NodeType type) {
         int count = 1;
-        String id = type + "_" + count;
-        while (state.node(id) != null) { count++; id = type + "_" + count; }
+        String id = type.idStem() + "_" + count;
+        while (state.node(id) != null) { count++; id = type.idStem() + "_" + count; }
         state.spawnNode(id, type);
-        message = "Spawned " + type + " (" + id + ")";
+        message = "Spawned " + type.idStem() + " (" + id + ")";
     }
 
     private static InputController.Button mouseButton(int glfwButton) {
