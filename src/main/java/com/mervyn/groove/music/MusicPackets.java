@@ -14,20 +14,34 @@ import groove.engine.samples.SampleData;
 import groove.engine.samples.SampleTransfer;
 
 public final class MusicPackets {
-    public record Snapshot(UUID epoch, SessionTimeline.Snapshot snapshot) implements CustomPacketPayload {
+    public record WireState(long revision, long at, double cycle, double bpm, boolean playing, String graph) {
+        WireState(SessionState state) {
+            this(state.revision(), state.effectiveNanos(), state.anchorCycle(), state.bpm(), state.playing(), GraphJson.encode(state.graph()));
+        }
+        SessionState decode() { return new SessionState(revision, at, cycle, bpm, playing, GraphJson.decode(graph)); }
+    }
+    public record Snapshot(UUID epoch, WireState current, WireState pending) implements CustomPacketPayload {
+        public Snapshot(UUID epoch, SessionTimeline.Snapshot snapshot) {
+            this(epoch, new WireState(snapshot.current()), snapshot.pending() == null ? null : new WireState(snapshot.pending()));
+        }
+        public long revision() { return pending == null ? current.revision() : pending.revision(); }
+        /** Compiler-worker only; the wire codec deliberately does not parse graph JSON. */
+        public SessionTimeline.Snapshot snapshot() {
+            return new SessionTimeline.Snapshot(current.decode(), pending == null ? null : pending.decode());
+        }
         public static final Type<Snapshot> TYPE = new Type<>(GrooveMod.id("music_state"));
         public static final StreamCodec<RegistryFriendlyByteBuf, Snapshot> CODEC = new StreamCodec<>() {
             public Snapshot decode(RegistryFriendlyByteBuf buf) {
                 UUID epoch = buf.readUUID();
-                SessionState current = readState(buf);
-                SessionState pending = buf.readBoolean() ? readState(buf) : null;
-                return new Snapshot(epoch, new SessionTimeline.Snapshot(current, pending));
+                WireState current = readState(buf);
+                WireState pending = buf.readBoolean() ? readState(buf) : null;
+                return new Snapshot(epoch, current, pending);
             }
             public void encode(RegistryFriendlyByteBuf buf, Snapshot packet) {
                 buf.writeUUID(packet.epoch);
-                writeState(buf, packet.snapshot.current());
-                buf.writeBoolean(packet.snapshot.pending() != null);
-                if (packet.snapshot.pending() != null) writeState(buf, packet.snapshot.pending());
+                writeState(buf, packet.current());
+                buf.writeBoolean(packet.pending() != null);
+                if (packet.pending() != null) writeState(buf, packet.pending());
             }
         };
         public Type<? extends CustomPacketPayload> type() { return TYPE; }
@@ -100,15 +114,15 @@ public final class MusicPackets {
     }
     private static AssetRef readRef(RegistryFriendlyByteBuf b) { return new AssetRef(b.readUtf(160), b.readUtf(64)); }
     private static void writeRef(RegistryFriendlyByteBuf b, AssetRef ref) { b.writeUtf(ref.assetId(), 160); b.writeUtf(ref.sha256(), 64); }
-    private static SessionState readState(RegistryFriendlyByteBuf buf) {
+    private static WireState readState(RegistryFriendlyByteBuf buf) {
         long revision = buf.readVarLong(), at = buf.readLong();
         double cycle = buf.readDouble(), bpm = buf.readDouble();
         boolean playing = buf.readBoolean();
-        return new SessionState(revision, at, cycle, bpm, playing, GraphJson.decode(buf.readUtf(GraphJson.MAX_LENGTH)));
+        return new WireState(revision, at, cycle, bpm, playing, buf.readUtf(GraphJson.MAX_LENGTH));
     }
-    private static void writeState(RegistryFriendlyByteBuf buf, SessionState state) {
-        buf.writeVarLong(state.revision()); buf.writeLong(state.effectiveNanos());
-        buf.writeDouble(state.anchorCycle()); buf.writeDouble(state.bpm()); buf.writeBoolean(state.playing());
-        buf.writeUtf(GraphJson.encode(state.graph()), GraphJson.MAX_LENGTH);
+    private static void writeState(RegistryFriendlyByteBuf buf, WireState state) {
+        buf.writeVarLong(state.revision()); buf.writeLong(state.at());
+        buf.writeDouble(state.cycle()); buf.writeDouble(state.bpm()); buf.writeBoolean(state.playing());
+        buf.writeUtf(state.graph(), GraphJson.MAX_LENGTH);
     }
 }
