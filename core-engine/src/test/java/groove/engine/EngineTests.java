@@ -9,6 +9,7 @@ public final class EngineTests {
     private static final Tone TONE = new Tone(Tone.Wave.SINE, 220, .3, 0, 20000);
 
     public static void main(String[] args) {
+        DspTests.run();
         invalid(() -> new Arc(Double.NaN, 1));
         invalid(() -> new Arc(2, 1));
         invalid(() -> Pattern.tone(TONE).fast(Double.POSITIVE_INFINITY));

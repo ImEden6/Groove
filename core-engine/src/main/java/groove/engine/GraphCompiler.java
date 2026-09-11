@@ -53,8 +53,8 @@ public final class GraphCompiler {
         Graph.Node node = nodes.get(id);
         List<String> links = inputs.get(id);
         Set<String> allowed = switch (node.type()) {
-            case TONE -> Set.of(NodeParam.FREQUENCY, NodeParam.GAIN, NodeParam.PAN, NodeParam.WAVE, NodeParam.CUTOFF_HZ);
-            case GENERATOR_SAMPLE -> Set.of(NodeParam.PITCH_RATIO, NodeParam.GAIN, NodeParam.PAN);
+            case TONE -> Set.of(NodeParam.FREQUENCY, NodeParam.GAIN, NodeParam.PAN, NodeParam.WAVE, NodeParam.CUTOFF_HZ, NodeParam.RESONANCE_Q);
+            case GENERATOR_SAMPLE -> Set.of(NodeParam.PITCH_RATIO, NodeParam.GAIN, NodeParam.PAN, NodeParam.CUTOFF_HZ, NodeParam.RESONANCE_Q);
             case FAST -> Set.of(NodeParam.FACTOR);
             case EUCLID -> Set.of(NodeParam.STEPS, NodeParam.PULSES, NodeParam.ROTATION);
             case STACK, OUTPUT -> Set.of();
@@ -76,11 +76,12 @@ public final class GraphCompiler {
             double cutoffHz = number(node, NodeParam.CUTOFF_HZ, 20000);
             require(cutoffHz >= 20 && cutoffHz <= 20000, "cutoffHz must be 20..20000 Hz");
             yield new Compiled(Pattern.tone(new Tone(Tone.Wave.values()[wave], frequency,
-                    number(node, NodeParam.GAIN, .25), number(node, NodeParam.PAN, 0), cutoffHz)), 1);
+                    number(node, NodeParam.GAIN, .25), number(node, NodeParam.PAN, 0), cutoffHz, number(node, NodeParam.RESONANCE_Q, Biquad.DEFAULT_Q))), 1);
         }
         case GENERATOR_SAMPLE -> {
             yield new Compiled(Pattern.sample(new groove.engine.samples.SampleVoice(node.sample(),
-                    number(node, NodeParam.PITCH_RATIO, 1), number(node, NodeParam.GAIN, .8), number(node, NodeParam.PAN, 0))), 1);
+                    number(node, NodeParam.PITCH_RATIO, 1), number(node, NodeParam.GAIN, .8), number(node, NodeParam.PAN, 0), number(node, NodeParam.CUTOFF_HZ, 20000),
+                    number(node, NodeParam.RESONANCE_Q, Biquad.DEFAULT_Q))), 1);
         }
         case STACK -> {
             int cost = children.stream().mapToInt(Compiled::cost).sum();

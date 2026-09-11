@@ -36,12 +36,17 @@ public final class BackendTests {
         editorChecks(sampleGraph);
         check(GraphJson.decode(GraphJson.encode(sampleGraph)).equals(sampleGraph), "Sample reference JSON round trip");
         Graph filteredGraph = new Graph(1, java.util.List.of(
-                new Graph.Node("lead", NodeType.TONE, java.util.Map.of(NodeParam.FREQUENCY, 440.0, NodeParam.CUTOFF_HZ, 733.0)),
+                new Graph.Node("lead", NodeType.TONE, java.util.Map.of(NodeParam.FREQUENCY, 440.0, NodeParam.CUTOFF_HZ, 733.0, NodeParam.RESONANCE_Q, 3.0)),
                 new Graph.Node("out", NodeType.OUTPUT, java.util.Map.of())),
                 java.util.List.of(Graph.edge("lead", "out")));
         Graph decodedFiltered = GraphJson.decode(GraphJson.encode(filteredGraph));
         check(decodedFiltered.equals(filteredGraph), "Custom cutoffHz JSON round trip");
         check(decodedFiltered.nodes().get(0).params().get(NodeParam.CUTOFF_HZ) == 733.0, "cutoffHz value survives encode/decode exactly");
+        Graph filteredSample = new Graph(2, java.util.List.of(
+                new Graph.Node("sample", NodeType.GENERATOR_SAMPLE, java.util.Map.of(NodeParam.CUTOFF_HZ, 500.0, NodeParam.RESONANCE_Q, 2.0),
+                        groove.engine.samples.FactorySamples.ref("factory:basic/kick.wav")),
+                new Graph.Node("out", NodeType.OUTPUT, java.util.Map.of())), java.util.List.of(Graph.edge("sample", "out")));
+        check(GraphJson.decode(GraphJson.encode(filteredSample)).equals(filteredSample), "Sample cutoff/Q JSON round trip");
         invalid(() -> GraphJson.decode("null"));
         invalid(() -> GraphJson.decode("[".repeat(17) + "]".repeat(17)));
         invalid(() -> GraphJson.decode(" ".repeat(GraphJson.MAX_LENGTH + 1)));
@@ -64,7 +69,7 @@ public final class BackendTests {
             check(raw.equals(malformed), "Wire codec leaves JSON unparsed");
             invalid(raw::snapshot);
             buf.clear();
-            var submit = new MusicPackets.Submit(original.epoch(), UUID.randomUUID(), 0, GraphJson.encode(sampleGraph), 128, true);
+            var submit = new MusicPackets.Submit(original.epoch(), UUID.randomUUID(), 0, GraphJson.encode(filteredSample), 128, true);
             MusicPackets.Submit.CODEC.encode(buf, submit);
             check(MusicPackets.Submit.CODEC.decode(buf).equals(submit), "Patch submission wire round trip");
             check(buf.readableBytes() == 0, "Submission consumes packet exactly");

@@ -37,7 +37,7 @@ public final class SampleTests {
         invalid(() -> new SampleData(8000, 1, new float[]{Float.NaN}));
         invalid(() -> SampleData.validate(8000, 1, 80001));
         SampleVoice fast = new SampleVoice(ref, 2, 1, 0), normal = new SampleVoice(ref, 1, 1, 0);
-        check(Math.abs(fast.value(kick, .05, 0) - normal.value(kick, .1, 0)) < 1e-6, "Pitch scales playback position");
+        check(Math.abs(fast.value(kick, .05, 0, 48000) - normal.value(kick, .1, 0, 24000)) < 1e-6, "Pitch scales playback position");
         check(fast.value(kick, .31, 0) == 0, "Pitched sample finishes sooner");
         SampleCache cache = new SampleCache(immutable.bytes()); cache.put("a", immutable); cache.put("b", immutable);
         check(cache.get("a") == null && cache.get("b") == immutable && cache.bytes() == immutable.bytes(), "LRU respects byte budget");

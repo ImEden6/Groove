@@ -22,15 +22,49 @@ public final class LiveRenderer {
         final SessionState state;
         final LoopPlan plan;
         final java.util.Map<groove.engine.samples.AssetRef, groove.engine.samples.SampleData> samples;
-        final Biquad[] filters;
+        final ActiveVoice[] voices = new ActiveVoice[MAX_VOICES];
+        final ActiveVoice[] tails = new ActiveVoice[MAX_VOICES];
+        final int[] events = new int[MAX_VOICES];
+        final double[] onsets = new double[MAX_VOICES];
+        int count, tailCursor;
+        long lastNow = Long.MIN_VALUE, lastResync;
         VoiceProgram(Program program) {
             state = program.state(); plan = program.plan(); samples = program.samples();
-            filters = new Biquad[plan.size()];
-            for (int i = 0; i < filters.length; i++) {
-                filters[i] = new Biquad();
-                if (plan.event(i).tone() != null) filters[i].setLowPass(plan.event(i).tone().cutoffHz(), SAMPLE_RATE);
+            for (int i = 0; i < MAX_VOICES; i++) {
+                voices[i] = new ActiveVoice(); tails[i] = new ActiveVoice();
             }
         }
+        void candidate(int event, double onset) {
+            int at = count;
+            if (at == MAX_VOICES) {
+                at--;
+                if (onset <= onsets[at]) return;
+            } else count++;
+            while (at > 0 && onset > onsets[at - 1]) {
+                events[at] = events[at - 1]; onsets[at] = onsets[at - 1]; at--;
+            }
+            events[at] = event; onsets[at] = onset;
+        }
+    }
+    private static final class ActiveVoice {
+        int event = -1, fadeFrame;
+        double onset;
+        boolean wanted;
+        final Biquad left = new Biquad(), right = new Biquad();
+        void start(VoiceProgram program, int index, double cycle) {
+            event = index; onset = cycle; fadeFrame = 0;
+            Event e = program.plan.event(index);
+            double cutoff = e.tone() != null ? e.tone().cutoffHz() : e.sample().cutoffHz();
+            double q = e.tone() != null ? e.tone().resonanceQ() : e.sample().resonanceQ();
+            left.reset(); right.reset();
+            left.setLowPass(cutoff, q, SAMPLE_RATE); right.setLowPass(cutoff, q, SAMPLE_RATE);
+        }
+    }
+    private static final int STEAL_FRAMES = 120;
+    private static final double[] STEAL_FADE = new double[STEAL_FRAMES];
+    static {
+        for (int i = 0; i < STEAL_FRAMES; i++)
+            STEAL_FADE[i] = .5 * (1 + Math.cos(Math.PI * i / (STEAL_FRAMES - 1)));
     }
     private volatile Playback timeline;
     private boolean initialized;
@@ -112,56 +146,82 @@ public final class LiveRenderer {
             out[0] = 0; out[1] = 0; return;
         }
         double cycles = program.state.cycleAt(now);
-        double phase = cycles - Math.floor(cycles);
         double secondsPerCycle = 240 / program.state.bpm();
-        double sumL = 0, sumR = 0;
-        int active = 0;
-        Biquad[] toneFilters = program.filters;
+        // A seek discards historical filter/tail state, just like a fresh late join.
+        if (program.lastResync != resyncs || (program.lastNow != Long.MIN_VALUE && (now < program.lastNow || now - program.lastNow > 250_000_000L))) {
+            for (ActiveVoice v : program.voices) v.event = -1;
+            for (ActiveVoice v : program.tails) v.event = -1;
+        }
+        program.lastResync = resyncs;
+        program.lastNow = now;
+        program.count = 0;
         for (int i = 0; i < program.plan.size(); i++) {
             Event event = program.plan.event(i);
+            double onset = Math.floor(cycles) + event.whole().start();
+            if (onset > cycles) onset--;
+            double duration;
             if (event.sample() != null) {
-                var voice = event.sample();
-                var pcm = program.samples.get(voice.asset());
-                if (pcm == null) continue; // Unresolved or mismatched assets are silent.
-                double onset = Math.floor(cycles) + event.whole().start();
-                if (onset > cycles) onset--;
-                double duration = pcm.duration() / voice.pitchRatio();
-                // One-shots may cross steps/cycles; bounded by the shared voice limit.
-                while (onset >= program.state.anchorCycle()) {
-                    double age = (cycles - onset) * secondsPerCycle;
-                    if (age >= duration || active >= MAX_VOICES) break;
-                    active++;
-                    sumL += voice.value(pcm, age, 0);
-                    sumR += voice.value(pcm, age, 1);
-                    onset--;
-                }
-                if (active >= MAX_VOICES) break;
-                continue;
+                var pcm = program.samples.get(event.sample().asset());
+                if (pcm == null) continue;
+                duration = pcm.duration() / event.sample().pitchRatio();
+            } else duration = (event.whole().end() - event.whole().start()) * secondsPerCycle;
+            for (int overlap = 0; overlap < MAX_VOICES && onset >= program.state.anchorCycle(); overlap++, onset--) {
+                if ((cycles - onset) * secondsPerCycle >= duration) break;
+                program.candidate(i, onset);
             }
-            Tone tone = event.tone();
-            boolean withinWindow = phase >= event.whole().start() && phase < event.whole().end();
-            double age = withinWindow ? (phase - event.whole().start()) * secondsPerCycle : 0;
-            double raw = 0;
-            if (withinWindow) {
-                double oscillator = age * tone.frequency();
-                oscillator -= Math.floor(oscillator);
-                raw = tone.wave() == Tone.Wave.SINE ? Math.sin(2 * Math.PI * oscillator)
-                        : 2 * oscillator - 1 - polyBlep(oscillator, tone.frequency() / SAMPLE_RATE);
-            }
-            // Always advance the filter, even while silent, so it rings down naturally
-            // instead of freezing and clicking on the note's next attack.
-            double filtered = toneFilters[i].process(raw);
-            if (!withinWindow) continue;
-            if (active++ >= MAX_VOICES) break;
-            double remaining = (event.whole().end() - phase) * secondsPerCycle;
-            double envelope = Math.min(1, Math.min(age / .005, remaining / .020));
-            double angle = (tone.pan() + 1) * Math.PI / 4;
-            double mono = filtered * tone.gain() * envelope;
-            sumL += mono * Math.cos(angle);
-            sumR += mono * Math.sin(angle);
         }
-        out[0] = sumL;
-        out[1] = sumR;
+        for (ActiveVoice v : program.voices) {
+            v.wanted = false;
+            for (int i = 0; i < program.count; i++)
+                if (v.event == program.events[i] && v.onset == program.onsets[i]) { v.wanted = true; break; }
+        }
+        for (int i = 0; i < MAX_VOICES; i++) {
+            ActiveVoice v = program.voices[i];
+            if (v.event < 0 || v.wanted) continue;
+            // Preserve both channel filter histories by moving the entire voice into the tail ring.
+            int tail = program.tailCursor;
+            program.tailCursor = (tail + 1) % MAX_VOICES;
+            program.voices[i] = program.tails[tail];
+            program.voices[i].event = -1;
+            program.tails[tail] = v; v.fadeFrame = 0;
+        }
+        for (int i = 0; i < program.count; i++) {
+            boolean exists = false;
+            for (ActiveVoice v : program.voices)
+                if (v.event == program.events[i] && v.onset == program.onsets[i]) { exists = true; break; }
+            if (!exists) for (ActiveVoice v : program.voices) if (v.event < 0) {
+                v.start(program, program.events[i], program.onsets[i]); break;
+            }
+        }
+        out[0] = 0; out[1] = 0;
+        for (ActiveVoice v : program.voices) if (v.event >= 0) addVoice(program, v, cycles, secondsPerCycle, 1, out);
+        for (ActiveVoice v : program.tails) if (v.event >= 0) {
+            addVoice(program, v, cycles, secondsPerCycle, STEAL_FADE[v.fadeFrame++], out);
+            if (v.fadeFrame == STEAL_FRAMES) v.event = -1;
+        }
+    }
+
+    private void addVoice(VoiceProgram program, ActiveVoice v, double cycles, double secondsPerCycle,
+                          double fade, double[] out) {
+        Event event = program.plan.event(v.event);
+        double age = (cycles - v.onset) * secondsPerCycle;
+        if (event.sample() != null) {
+            var voice = event.sample();
+            var pcm = program.samples.get(voice.asset());
+            out[0] += v.left.process(voice.value(pcm, age, 0, SAMPLE_RATE)) * fade;
+            out[1] += v.right.process(voice.value(pcm, age, 1, SAMPLE_RATE)) * fade;
+            return;
+        }
+        Tone tone = event.tone();
+        double remaining = (event.whole().end() - event.whole().start()) * secondsPerCycle - age;
+        double oscillator = age * tone.frequency();
+        oscillator -= Math.floor(oscillator);
+        double raw = remaining <= 0 ? 0 : tone.wave() == Tone.Wave.SINE ? Math.sin(2 * Math.PI * oscillator)
+                : 2 * oscillator - 1 - polyBlep(oscillator, tone.frequency() / SAMPLE_RATE);
+        double envelope = Math.max(0, Math.min(1, Math.min(age / .005, remaining / .020)));
+        double mono = v.left.process(raw) * tone.gain() * envelope * fade;
+        double angle = (tone.pan() + 1) * Math.PI / 4;
+        out[0] += mono * Math.cos(angle); out[1] += mono * Math.sin(angle);
     }
 
     private static double polyBlep(double t, double dt) {
