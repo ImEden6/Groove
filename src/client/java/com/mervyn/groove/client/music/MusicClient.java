@@ -27,11 +27,15 @@ public final class MusicClient {
             new ArrayBlockingQueue<>(1), task -> {
                 Thread thread = new Thread(task, "Groove graph compiler"); thread.setDaemon(true); return thread;
             }, new ThreadPoolExecutor.DiscardOldestPolicy());
+    private static final ScheduledExecutorService SCHEDULER = Executors.newSingleThreadScheduledExecutor(task -> {
+        Thread thread = new Thread(task, "Groove lookahead"); thread.setDaemon(true); return thread;
+    });
+    private static LiveRenderer.Timeline failedSchedule;
     private static UUID epoch;
     private static long revision = -1, generation, lastPing, outstandingPing;
-    private static ClockSync clock = new ClockSync();
+    private static volatile ClockSync clock = new ClockSync();
     private static LiveRenderer renderer = new LiveRenderer();
-    private static LiveRenderer.Timeline program;
+    private static volatile LiveRenderer.Timeline program;
     private static groove.engine.SessionTimeline.Snapshot latestSnapshot;
     private static MusicPackets.Snapshot latestWire;
     private static java.util.Map<groove.engine.samples.AssetRef, String> sampleStatus = java.util.Map.of();
@@ -45,6 +49,16 @@ public final class MusicClient {
     private static int emitterScanCooldown;
 
     public static void register() {
+        SCHEDULER.scheduleWithFixedDelay(() -> {
+            var active = program;
+            if (active == null) { failedSchedule = null; return; }
+            if (active == failedSchedule) return;
+            try { active.prepare(serverNow()); failedSchedule = null; }
+            catch (RuntimeException error) {
+                failedSchedule = active;
+                GrooveMod.LOGGER.error("Groove lookahead preparation failed", error);
+            }
+        }, 0, 50, TimeUnit.MILLISECONDS);
         ClientPlayNetworking.registerGlobalReceiver(MusicPackets.SubmitResult.TYPE, (packet, context) -> {
             if (context.client().screen instanceof com.mervyn.groove.client.ui.GrooveEditorScreen editor) editor.submissionResult(packet);
         });
@@ -69,7 +83,7 @@ public final class MusicClient {
         ClientPlayConnectionEvents.DISCONNECT.register((handler, client) -> reset(client));
         ClientChunkEvents.CHUNK_LOAD.register((level, chunk) -> addSpeakers(chunk));
         ClientChunkEvents.CHUNK_UNLOAD.register((level, chunk) -> removeSpeakers(level, chunk));
-        ClientLifecycleEvents.CLIENT_STOPPING.register(client -> { reset(client); COMPILER.shutdownNow(); });
+        ClientLifecycleEvents.CLIENT_STOPPING.register(client -> { reset(client); COMPILER.shutdownNow(); SCHEDULER.shutdownNow(); });
         ClientTickEvents.END_CLIENT_TICK.register(client -> {
             if (client.getConnection() == null || !ClientPlayNetworking.canSend(MusicPackets.Ping.TYPE)) return;
             long now = System.nanoTime();
@@ -116,11 +130,13 @@ public final class MusicClient {
             try {
                 var snapshot = wire.snapshot();
                 var prepared = SampleLibrary.prepare(snapshot);
+                prepared.timeline().prepare(serverNow());
                 Minecraft.getInstance().execute(() -> {
                     if (ticket != generation) return;
                     latestSnapshot = snapshot;
                     program = prepared.timeline(); sampleStatus = prepared.status();
                     renderer.publish(program);
+                    for (Emitter emitter : emitters.values()) emitter.renderer.publish(program);
                     SampleLibrary.request(prepared.needed());
                 });
             } catch (RuntimeException error) {
@@ -188,7 +204,7 @@ public final class MusicClient {
                     sourceRenderer.publish(program);
                     GrooveAudioStream sourceStream = new GrooveAudioStream(sourceRenderer, clock, true);
                     GrooveSound sourceSound = new GrooveSound(sourceStream, pos, height);
-                    emitters.put(pos, new Emitter(sourceSound, sourceStream, height));
+                    emitters.put(pos, new Emitter(sourceSound, sourceStream, height, sourceRenderer));
                     client.getSoundManager().play(sourceSound);
                 });
         emitters.entrySet().removeIf(entry -> {
@@ -220,5 +236,5 @@ public final class MusicClient {
         emitter.stream.close();
     }
 
-    private record Emitter(GrooveSound sound, GrooveAudioStream stream, int height) {}
+    private record Emitter(GrooveSound sound, GrooveAudioStream stream, int height, LiveRenderer renderer) {}
 }

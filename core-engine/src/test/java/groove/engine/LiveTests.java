@@ -78,8 +78,10 @@ public final class LiveTests {
         check(error < .00001, "Chunk boundaries agree within timestamp rounding");
         check(energy > 1, "Live output is audible");
         LiveRenderer late = new LiveRenderer(); late.publish(compiled);
+        compiled.prepare(epoch + 5_123_000_000L);
         late.render(block, 137, epoch + 5_123_000_000L);
         check(late.resyncs() == 0, "Late join starts directly at current phase");
+        compiled.prepare(epoch + 50_000_000_000L);
         late.render(block, 137, epoch + 50_000_000_000L);
         check(late.resyncs() == 1, "Long stall explicitly resynchronizes");
         var stopped = new SessionState(2, epoch + 2_000_000_000L, 1, 120, false, demo);
@@ -96,10 +98,12 @@ public final class LiveTests {
         LiveRenderer a = new LiveRenderer(), b = new LiveRenderer();
         a.publish(compiled); b.publish(compiled);
         float[] aAudio = new float[2048], bAudio = new float[2048];
+        compiled.prepare(aTarget);
         a.render(aAudio, 1024, aTarget); b.render(bAudio, 1024, bTarget);
         check(Arrays.equals(aAudio, bAudio), "Aligned clients synthesize identical audio");
         // A newly joined client catches up without replaying the first cycle.
         long joinedAt = epoch + 123_456_000_000L;
+        compiled.prepare(joinedAt);
         a.render(aAudio, 1024, joinedAt); // long-running client recovers after a stall
         LiveRenderer joining = new LiveRenderer(); joining.publish(compiled);
         joining.render(bAudio, 1024, joinedAt);

@@ -315,7 +315,7 @@ public final class EditorState {
             case NodeParam.PAN -> Math.max(-1.0, Math.min(1.0, value));
             case NodeParam.PITCH_RATIO -> Math.max(0.25, Math.min(4.0, value));
             case NodeParam.WAVE -> Math.max(0.0, Math.min(1.0, Math.round(value)));
-            case NodeParam.FACTOR -> Math.max(1.0, Math.min(16.0, Math.round(value)));
+            case NodeParam.FACTOR -> Math.max(.25, Math.min(16.0, Math.round(value * 100.0) / 100.0));
             case NodeParam.STEPS -> Math.max(1.0, Math.min(64.0, Math.round(value)));
             case NodeParam.PULSES -> {
                 double maxSteps = existingParams != null ? existingParams.getOrDefault(NodeParam.STEPS, 64.0) : 64.0;

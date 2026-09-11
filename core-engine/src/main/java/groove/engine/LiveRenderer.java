@@ -1,17 +1,35 @@
 package groove.engine;
 
 /**
- * Bounded periodic scheduler/rendering path. Evaluating precompiled note intervals
- * directly makes late joins and seeks deterministic without replaying old attacks.
+ * Bounded rolling scheduler/rendering path. Worker-prepared absolute note intervals
+ * make late joins and seeks deterministic without replaying old attacks.
  * Single audio-thread owner; publish immutable programs from a compiler worker.
  */
 public final class LiveRenderer {
     public static final int SAMPLE_RATE = 48000, MAX_VOICES = 32;
-    public record Program(SessionState state, LoopPlan plan, java.util.Map<groove.engine.samples.AssetRef, groove.engine.samples.SampleData> samples) {
+    public static final class Program {
+        private final SessionState state;
+        private final LoopPlan plan;
+        private final java.util.Map<groove.engine.samples.AssetRef, groove.engine.samples.SampleData> samples;
+        private final LookaheadScheduler scheduler;
         public Program(SessionState state, LoopPlan plan) { this(state, plan, java.util.Map.of()); }
-        public Program { samples = java.util.Map.copyOf(samples); }
+        public Program(SessionState state, LoopPlan plan, java.util.Map<groove.engine.samples.AssetRef, groove.engine.samples.SampleData> samples) {
+            this.state = state; this.plan = plan; this.samples = java.util.Map.copyOf(samples);
+            double history = 0;
+            for (var pcm : samples.values()) history = Math.max(history, pcm.duration() / .25);
+            scheduler = plan.pattern() == null ? null : new LookaheadScheduler(plan.pattern(), history, state.bpm());
+            prepare(state.effectiveNanos());
+        }
+        public SessionState state() { return state; }
+        public LoopPlan plan() { return plan; }
+        public java.util.Map<groove.engine.samples.AssetRef, groove.engine.samples.SampleData> samples() { return samples; }
+        public void prepare(long serverNanos) {
+            if (scheduler != null) scheduler.prepare(state.cycleAt(Math.max(serverNanos, state.effectiveNanos())));
+        }
     }
     public record Timeline(Program current, Program pending) {
+        /** Call periodically from one worker, including before late-join publication. */
+        public void prepare(long serverNanos) { current.prepare(serverNanos); if (pending != null) pending.prepare(serverNanos); }
         public static Timeline compile(SessionTimeline.Snapshot snapshot) {
             return new Timeline(new Program(snapshot.current(), GraphCompiler.compile(snapshot.current().graph())),
                     snapshot.pending() == null ? null : new Program(snapshot.pending(), GraphCompiler.compile(snapshot.pending().graph())));
@@ -21,39 +39,44 @@ public final class LiveRenderer {
     private static final class VoiceProgram {
         final SessionState state;
         final LoopPlan plan;
+        final LookaheadScheduler scheduler;
+        LookaheadScheduler.Window window;
+        boolean missed;
         final java.util.Map<groove.engine.samples.AssetRef, groove.engine.samples.SampleData> samples;
         final ActiveVoice[] voices = new ActiveVoice[MAX_VOICES];
         final ActiveVoice[] tails = new ActiveVoice[MAX_VOICES];
         final int[] events = new int[MAX_VOICES];
+        final Event[] data = new Event[MAX_VOICES];
         final double[] onsets = new double[MAX_VOICES];
         int count, tailCursor;
         long lastNow = Long.MIN_VALUE, lastResync;
         VoiceProgram(Program program) {
-            state = program.state(); plan = program.plan(); samples = program.samples();
+            state = program.state(); plan = program.plan(); samples = program.samples(); scheduler = program.scheduler;
             for (int i = 0; i < MAX_VOICES; i++) {
                 voices[i] = new ActiveVoice(); tails[i] = new ActiveVoice();
             }
         }
-        void candidate(int event, double onset) {
+        void candidate(int event, double onset, Event value) {
             int at = count;
             if (at == MAX_VOICES) {
                 at--;
                 if (onset <= onsets[at]) return;
             } else count++;
             while (at > 0 && onset > onsets[at - 1]) {
-                events[at] = events[at - 1]; onsets[at] = onsets[at - 1]; at--;
+                events[at] = events[at - 1]; data[at] = data[at - 1]; onsets[at] = onsets[at - 1]; at--;
             }
-            events[at] = event; onsets[at] = onset;
+            events[at] = event; data[at] = value; onsets[at] = onset;
         }
     }
     private static final class ActiveVoice {
         int event = -1, fadeFrame;
+        Event data;
         double onset;
         boolean wanted;
         final Biquad left = new Biquad(), right = new Biquad();
-        void start(VoiceProgram program, int index, double cycle) {
+        void start(Event e, int index, double cycle) {
             event = index; onset = cycle; fadeFrame = 0;
-            Event e = program.plan.event(index);
+            data = e;
             double cutoff = e.tone() != null ? e.tone().cutoffHz() : e.sample().cutoffHz();
             double q = e.tone() != null ? e.tone().resonanceQ() : e.sample().resonanceQ();
             left.reset(); right.reset();
@@ -70,7 +93,7 @@ public final class LiveRenderer {
     private boolean initialized;
     private long origin;
     private double elapsed;
-    private long resyncs;
+    private volatile long resyncs, scheduleMisses;
     private double fade;
     private Playback observed, previous;
     private double programBlend = 1;
@@ -86,6 +109,7 @@ public final class LiveRenderer {
                 value.pending() == null ? null : new VoiceProgram(value.pending()));
     }
     public long resyncs() { return resyncs; }
+    public long scheduleMisses() { return scheduleMisses; }
     /** Audio-owner call after an underrun; the next block rejoins the supplied playback time. */
     public void resynchronize() { initialized = false; elapsed = 0; fade = 0; resyncs++; }
 
@@ -104,6 +128,7 @@ public final class LiveRenderer {
             previous = observed; observed = currentTimeline;
             programBlend = previous == null ? 1 : 0;
         }
+        capture(currentTimeline); capture(previous);
         for (int f = 0; f < frames; f++, elapsed += step) {
             long now = origin + Math.round(elapsed);
             fade = Math.min(1, fade + 1.0 / 240);
@@ -120,6 +145,12 @@ public final class LiveRenderer {
             programBlend = Math.min(1, programBlend + 1.0 / 240);
             if (programBlend == 1) previous = null;
         }
+    }
+
+    private static void capture(Playback playback) {
+        if (playback == null) return;
+        if (playback.current.scheduler != null) playback.current.window = playback.current.scheduler.window();
+        if (playback.pending != null && playback.pending.scheduler != null) playback.pending.window = playback.pending.scheduler.window();
     }
 
     private void sampleTimeline(Playback timeline, long now, double[] out) {
@@ -147,33 +178,44 @@ public final class LiveRenderer {
         }
         double cycles = program.state.cycleAt(now);
         double secondsPerCycle = 240 / program.state.bpm();
+        if (program.scheduler != null && (program.window == null || !program.window.contains(cycles))) {
+            scheduleMisses++; program.missed = true; out[0] = 0; out[1] = 0; return;
+        }
         // A seek discards historical filter/tail state, just like a fresh late join.
-        if (program.lastResync != resyncs || (program.lastNow != Long.MIN_VALUE && (now < program.lastNow || now - program.lastNow > 250_000_000L))) {
+        if (program.missed || program.lastResync != resyncs || (program.lastNow != Long.MIN_VALUE && (now < program.lastNow || now - program.lastNow > 250_000_000L))) {
             for (ActiveVoice v : program.voices) v.event = -1;
             for (ActiveVoice v : program.tails) v.event = -1;
         }
+        program.missed = false;
         program.lastResync = resyncs;
         program.lastNow = now;
         program.count = 0;
-        for (int i = 0; i < program.plan.size(); i++) {
+        if (program.scheduler != null) {
+            for (int i = 0; i < program.window.size(); i++) {
+                var entry = program.window.entry(i);
+                Event event = entry.event();
+                double onset = event.whole().start();
+                if (onset > cycles) break;
+                if (event.sample() != null && onset < program.state.anchorCycle()) continue;
+                double duration = eventDuration(program, event, secondsPerCycle);
+                if (duration < 0) continue;
+                if ((cycles - onset) * secondsPerCycle < duration) program.candidate(entry.ordinal(), onset, event);
+            }
+        } else for (int i = 0; i < program.plan.size(); i++) {
             Event event = program.plan.event(i);
             double onset = Math.floor(cycles) + event.whole().start();
             if (onset > cycles) onset--;
-            double duration;
-            if (event.sample() != null) {
-                var pcm = program.samples.get(event.sample().asset());
-                if (pcm == null) continue;
-                duration = pcm.duration() / event.sample().pitchRatio();
-            } else duration = (event.whole().end() - event.whole().start()) * secondsPerCycle;
+            double duration = eventDuration(program, event, secondsPerCycle);
+            if (duration < 0) continue;
             for (int overlap = 0; overlap < MAX_VOICES && onset >= program.state.anchorCycle(); overlap++, onset--) {
                 if ((cycles - onset) * secondsPerCycle >= duration) break;
-                program.candidate(i, onset);
+                program.candidate(i, onset, event);
             }
         }
         for (ActiveVoice v : program.voices) {
             v.wanted = false;
             for (int i = 0; i < program.count; i++)
-                if (v.event == program.events[i] && v.onset == program.onsets[i]) { v.wanted = true; break; }
+                if (matches(v, program, i)) { v.wanted = true; break; }
         }
         for (int i = 0; i < MAX_VOICES; i++) {
             ActiveVoice v = program.voices[i];
@@ -188,9 +230,9 @@ public final class LiveRenderer {
         for (int i = 0; i < program.count; i++) {
             boolean exists = false;
             for (ActiveVoice v : program.voices)
-                if (v.event == program.events[i] && v.onset == program.onsets[i]) { exists = true; break; }
+                if (matches(v, program, i)) { exists = true; break; }
             if (!exists) for (ActiveVoice v : program.voices) if (v.event < 0) {
-                v.start(program, program.events[i], program.onsets[i]); break;
+                v.start(program.data[i], program.events[i], program.onsets[i]); break;
             }
         }
         out[0] = 0; out[1] = 0;
@@ -201,9 +243,22 @@ public final class LiveRenderer {
         }
     }
 
+    private static double eventDuration(VoiceProgram program, Event event, double secondsPerCycle) {
+        if (event.sample() == null) return (event.whole().end() - event.whole().start()) * secondsPerCycle;
+        var pcm = program.samples.get(event.sample().asset());
+        return pcm == null ? -1 : pcm.duration() / event.sample().pitchRatio();
+    }
+
+    private static boolean matches(ActiveVoice voice, VoiceProgram program, int index) {
+        if (voice.event < 0 || voice.event != program.events[index] || voice.onset != program.onsets[index]) return false;
+        Event a = voice.data, b = program.data[index];
+        return a.whole().equals(b.whole()) && java.util.Objects.equals(a.tone(), b.tone())
+                && java.util.Objects.equals(a.sample(), b.sample());
+    }
+
     private void addVoice(VoiceProgram program, ActiveVoice v, double cycles, double secondsPerCycle,
                           double fade, double[] out) {
-        Event event = program.plan.event(v.event);
+        Event event = v.data;
         double age = (cycles - v.onset) * secondsPerCycle;
         if (event.sample() != null) {
             var voice = event.sample();

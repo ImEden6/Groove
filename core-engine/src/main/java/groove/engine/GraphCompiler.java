@@ -2,7 +2,7 @@ package groove.engine;
 
 import java.util.*;
 
-/** Strict, bounded v1 compiler. Run on a control/worker thread, never an audio callback. */
+/** Strict, bounded v1/v2 compiler. Run on a control/worker thread, never an audio callback. */
 public final class GraphCompiler {
     public static final int MAX_NODES = 64, MAX_EVENTS = 128;
     private final Map<String, Graph.Node> nodes = new LinkedHashMap<>();
@@ -40,10 +40,8 @@ public final class GraphCompiler {
         require(compiled.size() == nodes.size(), "Every node must reach the output");
         List<Event> events = result.pattern.query(new Arc(0, 1));
         require(events.size() <= MAX_EVENTS, "Too many events");
-        for (Event event : events)
-            require(event.whole().start() >= 0 && event.whole().end() <= 1, "Note outside loop");
         events.sort(Comparator.comparingDouble(e -> e.whole().start()));
-        return new LoopPlan(events);
+        return new LoopPlan(events, result.pattern);
     }
 
     private Compiled visit(String id, int depth) {
@@ -90,9 +88,10 @@ public final class GraphCompiler {
         }
                 case FAST -> {
                     Compiled child = children.getFirst();
-                    int factor = integer(node, NodeParam.FACTOR, 2, 1, 16);
+                    double factor = number(node, NodeParam.FACTOR, 2);
+                    require(factor >= .25 && factor <= 16, "Invalid factor");
                     require(child.cost * factor <= MAX_EVENTS, "Graph exceeds event budget");
-                    yield new Compiled(child.pattern.fast(factor), child.cost * factor);
+                    yield new Compiled(child.pattern.fast(factor), (int) Math.ceil(child.cost * Math.max(1, factor)));
                 }
                 case EUCLID -> {
                     Compiled child = children.getFirst();

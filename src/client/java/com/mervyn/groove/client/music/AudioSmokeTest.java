@@ -9,6 +9,8 @@ import net.fabricmc.loader.api.FabricLoader;
 public final class AudioSmokeTest {
     private static GrooveAudioStream stream;
     private static GrooveSound sound;
+    private static LiveRenderer renderer;
+    private static LiveRenderer.Timeline timeline;
     private static long began;
     private static boolean complete;
     private static boolean stalled, stopping;
@@ -18,6 +20,7 @@ public final class AudioSmokeTest {
         began = System.nanoTime();
         ClientTickEvents.END_CLIENT_TICK.register(client -> {
             if (complete) return;
+            if (timeline != null) timeline.prepare(System.nanoTime());
             if (System.nanoTime() - began > 90_000_000_000L) throw new IllegalStateException("GROOVE AUDIO SMOKE FAILED: timeout; stream="
                     + (stream == null ? "null" : stream.reads() + " reads; closed=" + stream.closed())
                     + "; overlay=" + client.getOverlay());
@@ -31,11 +34,12 @@ public final class AudioSmokeTest {
                     GrooveMod.LOGGER.info("Groove Vorbis decode passed: {} frames", decoded.frames());
                 } catch (java.io.IOException error) { throw new IllegalStateException("Missing OGG smoke fixture", error); }
                 ClockSync clock = new ClockSync(); clock.observe(now, now, now);
-                LiveRenderer renderer = new LiveRenderer();
+                renderer = new LiveRenderer();
                 var prepared = SampleLibrary.prepare(new SessionTimeline.Snapshot(
                         new SessionState(1, now - 100_000_000L, 0, 128, true, groove.engine.samples.FactorySamples.demo()), null));
                 if (!prepared.needed().isEmpty()) throw new IllegalStateException("Factory samples unresolved");
-                renderer.publish(prepared.timeline());
+                timeline = prepared.timeline();
+                renderer.publish(timeline);
                 stream = new GrooveAudioStream(renderer, clock);
                 sound = new GrooveSound(stream);
                 client.getSoundManager().play(sound);
@@ -45,9 +49,10 @@ public final class AudioSmokeTest {
                 stalled = true;
                 stream.stallNextReadForTest();
             }
-            if (stream != null && stream.reads() >= 32 && !stopping) {
+            if (stream != null && stream.reads() >= 256 && !stopping) {
                 if (stream.maxQueuedFrames() == 0 || stream.peak() < .01 || stream.closed())
                     throw new IllegalStateException("GROOVE AUDIO SMOKE FAILED: missing queue timing or PCM");
+                if (renderer.scheduleMisses() != 0) throw new IllegalStateException("Lookahead starved during smoke test");
                 if (stream.recoveries() == 0) throw new IllegalStateException("Underrun recovery was not exercised");
                 client.getSoundManager().stop(sound);
                 stopping = true; stoppedAt = System.nanoTime();

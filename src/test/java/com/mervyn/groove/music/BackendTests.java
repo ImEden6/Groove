@@ -30,6 +30,14 @@ public final class BackendTests {
             secondSave.get(5, java.util.concurrent.TimeUnit.SECONDS);
             check(order.equals(java.util.List.of(1, 2)), "Saves retain submission order");
         } finally { saves.shutdownNow(); }
+        for (int version : new int[]{1, 2}) {
+            Graph fractional = new Graph(version, java.util.List.of(
+                    new Graph.Node("tone", NodeType.TONE, java.util.Map.of()),
+                    new Graph.Node("speed", NodeType.FAST, java.util.Map.of(NodeParam.FACTOR, 1.5)),
+                    new Graph.Node("out", NodeType.OUTPUT, java.util.Map.of())),
+                    java.util.List.of(Graph.edge("tone", "speed"), Graph.edge("speed", "out")));
+            check(GraphJson.decode(GraphJson.encode(fractional)).equals(fractional), "Fractional speed preserves v1/v2 serialization");
+        }
         Graph graph = Graph.demo();
         check(GraphJson.decode(GraphJson.encode(graph)).equals(graph), "Graph JSON round trip");
         Graph sampleGraph = groove.engine.samples.FactorySamples.demo();

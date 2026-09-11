@@ -11,6 +11,7 @@ public final class EngineTests {
     public static void main(String[] args) {
         DspTests.run();
         ResamplerTests.run();
+        SchedulerTests.run();
         invalid(() -> new Arc(Double.NaN, 1));
         invalid(() -> new Arc(2, 1));
         invalid(() -> Pattern.tone(TONE).fast(Double.POSITIVE_INFINITY));
