@@ -47,20 +47,20 @@ final class DspTests {
         for (int i = 0; i < tone.length; i++) tone[i] = (float)Math.sin(2 * Math.PI * 10000 * i / 48000);
         SampleData sine = new SampleData(48000, 1, tone);
         double linear = 0, sinc = 0;
-        for (int i = 10; i < 11000; i++) {
+        for (int i = 100; i < 11000; i++) {
             double position = i * 4 + .25;
             double l = sine.at(position, 0), r = sine.at(position, 0, 4);
             linear += l*l; sinc += r*r;
         }
         double rejection = 10 * Math.log10(linear / sinc);
-        System.out.printf(Locale.ROOT, "8-point sinc: %.2f dB alias reduction vs linear (10 kHz, 4x, 48 kHz).%n", rejection);
-        check(rejection > 6, "Sinc reduces above-Nyquist alias energy");
+        System.out.printf(Locale.ROOT, "Multirate sinc: %.2f dB alias reduction vs linear (10 kHz, 4x, 48 kHz).%n", rejection);
+        check(rejection > 50, "Sinc reduces above-Nyquist alias energy");
         for (double step : new double[]{.25, .5, 1, 2, 4, 16})
             for (double position : new double[]{0, .1, 100.25, 47999.9})
                 check(Float.isFinite(sine.at(position, 0, step)), "Resampling finite at boundaries and rates");
-        float[] dc = new float[100]; Arrays.fill(dc, .5f);
+        float[] dc = new float[4096]; Arrays.fill(dc, .5f);
         SampleData constant = new SampleData(48000, 1, dc);
-        check(Math.abs(constant.at(50.25, 0, 4) - .5) < 1e-6, "Sinc has unity DC gain");
+        check(Math.abs(constant.at(2048.25, 0, 4) - .5) < 1e-6, "Sinc has unity DC gain");
         stealFade();
         System.out.println("Phase 1 DSP regressions passed.");
     }

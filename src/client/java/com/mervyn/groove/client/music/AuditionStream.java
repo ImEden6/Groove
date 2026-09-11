@@ -21,7 +21,7 @@ public final class AuditionStream implements AudioStream {
         int frames = (int) Math.min(remaining, Math.min(2048, bytes / 4));
         ByteBuffer buffer = MemoryUtil.memAlloc(frames * 4).order(ByteOrder.LITTLE_ENDIAN);
         for (int i = 0; i < frames; i++, frame++) for (int c = 0; c < 2; c++)
-            buffer.putShort((short) Math.round(voice.value(sample, frame / 48000.0, c, 48000) * 32767));
+            buffer.putShort((short) Math.round(Math.max(-1, Math.min(1, voice.value(sample, frame / 48000.0, c, 48000))) * 32767));
         return buffer.flip();
     }
     public void close() { closed = true; }
