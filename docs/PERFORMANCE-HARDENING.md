@@ -14,7 +14,7 @@
   bounded to 16 waiting requests. Queued is not saved: completion/failure feedback
   returns to the server thread. Shutdown drains saves for up to 30 seconds and
   warns if the deadline expires. Graph and tempo now commit together in one
-  atomically replaced file; see [SESSION-SAVES.md](SESSION-SAVES.md). Startup and explicit load reads have
+  atomically replaced file; see [BACKEND-USAGE.md](BACKEND-USAGE.md#session-persistence-and-transactional-saves). Startup and explicit load reads have
   not been moved off-thread in this change.
 
 Verification: full build and executable regression suites, including raw malformed

@@ -49,17 +49,36 @@ Run `/groove save` to get an editable demo. This smaller example creates a rhyth
 Version-1 nodes: `tone`, `euclid`, `fast`, `stack`, `output`. Version 2 adds
 `generator/sample`; see [samples and packs](SAMPLES.md). Tone parameters are
 `frequency` (20–16000 Hz), `gain` (0–1), `pan` (-1–1), and `wave` (0=sine, 1=saw).
-`fast.factor` is an integer from 1–16. `euclid.steps` is 1–64, `pulses` is 0–steps,
+`fast.factor` is a finite decimal from 0.25 to 16.0 (e.g. 0.25, 1.5, 2.0). `euclid.steps` is 1–64, `pulses` is 0–steps,
 and positive `rotation` moves hits later. Stack accepts up to 16 incoming edges.
 All edges carry patterns through `out`/`in` ports. Exactly one output is required;
-every node must reach it. There are no feedback cycles in v1.
+every node must reach it. There are no feedback cycles in v1/v2.
 
 Validation caps graphs at 64 nodes, 128 edges, 16 levels of nesting, and a conservative
 128 events per cycle before evaluating them. File inputs are capped at 32 KiB.
 The renderer plays at most 32 simultaneously active notes in stable graph order.
-These restrictions keep this first live scheduler periodic and bounded. Fractional
-speed transforms, automation, multiple buses, and feedback DSP require
-additional graph types and scheduling work.
+The rolling lookahead scheduler evaluates fractional speed transforms continuously
+without restarting every cycle; parameter automation over time, multiple mix buses,
+and feedback DSP remain staged for future Phase 2 work.
+
+## Session persistence and transactional saves
+
+`/groove save` queues a save of both the selected graph and its BPM into the world's
+`groove-session.json`. Version 1 stores `version`, `bpm`, and `graphJson` (the graph
+JSON encoded as a string). The temporary file is flushed before a single atomic
+replacement. Unsupported atomic replacement reports a failure; there is no
+non-atomic fallback. This prevents mixed graph/tempo generations, but is not a
+guarantee against every filesystem or power-loss failure.
+
+Startup and `/groove load` prefer this file and restore graph and tempo together.
+Startup remains stopped; explicit load preserves the current playback setting and
+uses the normal scheduled transition. A malformed combined save reports an error
+rather than silently loading stale legacy files (startup uses the demo defaults).
+
+When no combined file exists, legacy `groove-patch.json` plus `groove-tempo.txt` are
+read. Missing legacy tempo defaults to 128. The next save creates the combined
+file; legacy files are not deleted or updated. After migration, edit the combined
+file, not the old files. The existing ordered background queue remains in use.
 
 ## Timing and audio
 
@@ -81,7 +100,10 @@ unmeasured device/output latency remain. It does not promise sample-accurate sou
 across different computers. Resource/device reload or underrun restarts are retried
 within five seconds. Disconnect closes the stream. Single-player pause follows
 Minecraft's sound pause; on resume the session rejoins the monotonic transport.
-Physical speaker positioning and headphone items are still future work.
+Speaker towers (`GrooveBlocks.SPEAKER`) provide physical positional audio in the world,
+stacking up to 32 blocks tall with height-scaled volume and distance culling for up to 8
+nearest towers within 64 blocks. When speakers are in range, monitor audio mutes in favor
+of in-world mono streams. Headphone items remain future work.
 
 ## Verification
 

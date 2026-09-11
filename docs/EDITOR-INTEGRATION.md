@@ -14,7 +14,7 @@ Open `/groove-editor` (or specify tactical, clockwork, crt, vanilla). The defaul
 ## Custom packs and limitations
 
 World persistence now saves patch and tempo together in `groove-session.json`.
-See [session saves](SESSION-SAVES.md) for legacy compatibility and atomic-save guarantees.
+See [session saves](BACKEND-USAGE.md#session-persistence-and-transactional-saves) for legacy compatibility and atomic-save guarantees.
 
 Client packs live in `<game directory>/groove/samples`. For shared playback, install the exact same custom file at the matching relative path in `<world>/sequencer_samples` on the server. Submission checks the full hash against the server catalog. It does not upload files or browse unreferenced server-only packs. Existing bounded asset transfers serve accepted patch references to listeners.
 

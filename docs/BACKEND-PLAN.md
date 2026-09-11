@@ -2,18 +2,18 @@
 
 ## Current implementation
 
-Milestones 2, 3, and 5 now have an initial implementation alongside the original
-offline engine. See [backend usage](BACKEND-USAGE.md) for the exact supported scope.
-The live graph is restricted to bounded one-cycle patterns, so an immutable loop
-schedule and direct note-phase reconstruction replace the originally proposed
-rolling event queue. There is one server-wide stereo monitoring session, with
-operator commands, explicit JSON persistence, revisioned downbeat changes, clock
-offset estimation, and a Fabric audio stream. The sample backend now includes
-WAV/Vorbis decoding, pitched one-shots, auditioning, bounded catalogs/caches,
-SHA-256 references, and restricted asset transfer; see [samples and packs](SAMPLES.md).
-Tone nodes now have a biquad low-pass filter (`cutoffHz`), in both the offline
-engine and live playback. Physical emitters, richer pattern types, sample-node
-filtering, and further synthesis remain future work; see
+Milestones 2, 3, 4, and 5 have landed alongside the core engine. See [backend usage](BACKEND-USAGE.md)
+for the exact supported scope. The live graph now uses a rolling lookahead scheduler
+with continuous multi-cycle pattern evaluation and fractional speed transforms (Phase 2 Stage 1;
+see [PHASE-2-SCHEDULER.md](PHASE-2-SCHEDULER.md)). There is one server-wide monitoring session, with
+operator commands, transactional JSON persistence, revisioned downbeat changes, clock offset
+estimation, and a Fabric audio stream. Physical speaker blocks (`GrooveBlocks.SPEAKER`) stack
+into towers providing positional audio with distance culling. The sample backend includes
+WAV/Vorbis decoding, pitched one-shots, auditioning, bounded catalogs/caches, SHA-256
+references, and 48-tap Kaiser-windowed sinc resampling; see [samples and packs](SAMPLES.md)
+and [engine evolution](ENGINE-EVOLUTION.md). Tone and sample nodes feature biquad low-pass
+filtering (`cutoffHz` and `resonanceQ`), with voice-stealing crossfades. Parameter automation
+over time, modulation nodes, and headphone items remain future work; see
 [FUTURE-WORK.md](FUTURE-WORK.md) for the full current list.
 
 The milestone descriptions below preserve the longer-term design targets, not a
@@ -48,8 +48,8 @@ it must not accept arbitrary untrusted graphs until bounded evaluation exists.
 Scores begin at cycle zero and are finite. Tempo changes, seeking, graph input,
 samples, filters, audio device playback, and network integration are not implemented.
 Notes can ring beyond the score horizon if the caller keeps rendering; the demo
-exports exactly the requested horizon. Voice stealing can click and needs a short
-crossfade before production. Tanh saturation adds harmonics and is not an
+exports exactly the requested horizon. Voice stealing uses a 120-frame (2.5 ms)
+raised-cosine crossfade to eliminate clicks. Tanh saturation adds harmonics and is not an
 anti-aliasing filter or a transparent peak limiter.
 
 ## Milestone 2: graph and live scheduler
@@ -101,4 +101,5 @@ client edits. Test with simulated delay, jitter, loss, and concurrent edits.
 The node editor, physical speaker blocks, and headphones can be layered onto
 these tested interfaces after local playback and synchronization work. The
 node editor has since landed (see [EDITOR-INTEGRATION.md](EDITOR-INTEGRATION.md));
-speaker blocks and headphones have not — see [FUTURE-WORK.md](FUTURE-WORK.md).
+speaker blocks have also landed with positional audio (see [BACKEND-USAGE.md](BACKEND-USAGE.md));
+headphones have not — see [FUTURE-WORK.md](FUTURE-WORK.md).

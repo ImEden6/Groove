@@ -88,6 +88,8 @@ $$\frac{dc}{dt} = \frac{\text{BPM}}{60 \times 4}$$
 
 ### Core Primitives & Interfaces
 
+*(Implemented in `:core-engine` as `Arc`, `Event`, `Tone`, and `SampleVoice`; early prototype record shapes are shown below for architectural reference)*
+
 ```java
 public record TimeArc(double start, double end) {
     public TimeArc {
@@ -131,7 +133,7 @@ $$\text{isHit}(i) = \left(\left( (i + r) \bmod n \times k \right) \bmod n\right)
 
 ## 5. DSP & Audio Output Pipeline
 
-* **Output Format:** $44,100\text{ Hz}$, 16-bit Signed Integer PCM, Interleaved Stereo.
+* **Output Format:** $48,000\text{ Hz}$, 16-bit Signed Integer PCM, Interleaved Stereo.
 * **Buffer Strategy:** 3-Buffer OpenAL Hardware Ring Queue.
 * **Frame Chunk Size:** $512\text{ samples}$ ($\approx 11.61\text{ ms}$).
 * **PolyBLEP Anti-Aliasing (Sawtooth):**
