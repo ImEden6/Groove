@@ -12,17 +12,22 @@ import java.nio.ByteOrder;
 /** PCM ownership transfers to Minecraft SoundBuffer, which frees the native allocation. */
 public final class GrooveAudioStream implements AudioStream {
     public static final int CHUNK_FRAMES = 2048;
-    private static final AudioFormat FORMAT = new AudioFormat(LiveRenderer.SAMPLE_RATE, 16, 2, true, false);
+    private static final AudioFormat STEREO_FORMAT = new AudioFormat(LiveRenderer.SAMPLE_RATE, 16, 2, true, false);
+    private static final AudioFormat MONO_FORMAT = new AudioFormat(LiveRenderer.SAMPLE_RATE, 16, 1, true, false);
     private final LiveRenderer renderer;
     private final ClockSync clock;
+    private final boolean mono;
     private final float[] samples = new float[CHUNK_FRAMES * 2];
     private volatile boolean closed;
     private volatile long reads, maxQueuedFrames;
     private volatile double peak;
     private volatile long recoveries;
     private volatile boolean stallNextRead;
-    public GrooveAudioStream(LiveRenderer renderer, ClockSync clock) { this.renderer = renderer; this.clock = clock; }
-    public AudioFormat getFormat() { return FORMAT; }
+    public GrooveAudioStream(LiveRenderer renderer, ClockSync clock) { this(renderer, clock, false); }
+    public GrooveAudioStream(LiveRenderer renderer, ClockSync clock, boolean mono) {
+        this.renderer = renderer; this.clock = clock; this.mono = mono;
+    }
+    public AudioFormat getFormat() { return mono ? MONO_FORMAT : STEREO_FORMAT; }
     public boolean closed() { return closed; }
     public long reads() { return reads; }
     public long maxQueuedFrames() { return maxQueuedFrames; }
@@ -42,15 +47,23 @@ public final class GrooveAudioStream implements AudioStream {
             while ((remaining = deadline - System.nanoTime()) > 0)
                 java.util.concurrent.locks.LockSupport.parkNanos(remaining);
         }
-        int frames = Math.min(CHUNK_FRAMES, bytes / 4);
+        int frames = Math.min(CHUNK_FRAMES, bytes / (mono ? 2 : 4));
         long target = clock.serverTime(System.nanoTime()) + Math.round(queuedFrames * 1e9 / LiveRenderer.SAMPLE_RATE);
         renderer.render(samples, frames, target);
         maxQueuedFrames = Math.max(maxQueuedFrames, queuedFrames);
-        ByteBuffer pcm = MemoryUtil.memAlloc(frames * 4).order(ByteOrder.LITTLE_ENDIAN);
+        ByteBuffer pcm = MemoryUtil.memAlloc(frames * (mono ? 2 : 4)).order(ByteOrder.LITTLE_ENDIAN);
         double blockPeak = peak;
-        for (int i = 0; i < frames * 2; i++) {
-            blockPeak = Math.max(blockPeak, Math.abs(samples[i]));
-            pcm.putShort((short) Math.round(samples[i] * 32767));
+        for (int frame = 0; frame < frames; frame++) {
+            float left = samples[frame * 2], right = samples[frame * 2 + 1];
+            if (mono) {
+                float mixed = (left + right) * .5f;
+                blockPeak = Math.max(blockPeak, Math.abs(mixed));
+                pcm.putShort((short) Math.round(mixed * 32767));
+            } else {
+                blockPeak = Math.max(blockPeak, Math.max(Math.abs(left), Math.abs(right)));
+                pcm.putShort((short) Math.round(left * 32767));
+                pcm.putShort((short) Math.round(right * 32767));
+            }
         }
         peak = blockPeak;
         reads++;

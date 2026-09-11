@@ -5,7 +5,9 @@ import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
 import net.minecraft.world.level.LevelAccessor;
 import net.minecraft.world.level.LevelReader;
+import net.minecraft.world.level.block.EntityBlock;
 import net.minecraft.world.level.block.HorizontalDirectionalBlock;
+import net.minecraft.world.level.block.entity.BlockEntity;
 import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.level.block.state.StateDefinition;
 import net.minecraft.world.level.block.state.properties.EnumProperty;
@@ -18,7 +20,7 @@ import net.minecraft.world.item.context.BlockPlaceContext;
  * is what makes "base has no ring, everything stacked on it has one" fall
  * out automatically instead of needing separate base/body items.
  */
-public final class SpeakerBlock extends HorizontalDirectionalBlock {
+public final class SpeakerBlock extends HorizontalDirectionalBlock implements EntityBlock {
     public static final EnumProperty<SpeakerPart> PART = EnumProperty.create("part", SpeakerPart.class);
     private static final MapCodec<SpeakerBlock> CODEC = simpleCodec(SpeakerBlock::new);
 
@@ -28,6 +30,11 @@ public final class SpeakerBlock extends HorizontalDirectionalBlock {
     }
 
     @Override protected MapCodec<SpeakerBlock> codec() { return CODEC; }
+
+    @Override
+    public BlockEntity newBlockEntity(BlockPos pos, BlockState state) {
+        return new SpeakerBlockEntity(pos, state);
+    }
 
     @Override
     protected void createBlockStateDefinition(StateDefinition.Builder<net.minecraft.world.level.block.Block, BlockState> builder) {

@@ -1,7 +1,10 @@
 package com.mervyn.groove.client.music;
 
 import com.mervyn.groove.GrooveMod;
+import com.mervyn.groove.block.GrooveBlocks;
+import com.mervyn.groove.block.SpeakerBlockEntity;
 import com.mervyn.groove.music.MusicPackets;
+import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientChunkEvents;
 import groove.engine.ClockSync;
 import groove.engine.LiveRenderer;
 import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientLifecycleEvents;
@@ -9,7 +12,13 @@ import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents;
 import net.fabricmc.fabric.api.client.networking.v1.ClientPlayConnectionEvents;
 import net.fabricmc.fabric.api.client.networking.v1.ClientPlayNetworking;
 import net.minecraft.client.Minecraft;
+import net.minecraft.core.BlockPos;
+import net.minecraft.world.level.chunk.LevelChunk;
 
+import java.util.HashMap;
+import java.util.HashSet;
+import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.*;
 
@@ -29,6 +38,11 @@ public final class MusicClient {
     private static GrooveSound sound;
     private static GrooveAudioStream stream;
     private static int retryTicks;
+    private static final Set<BlockPos> speakerSegments = new HashSet<>();
+    private static final Map<BlockPos, Emitter> emitters = new HashMap<>();
+    private static final int MAX_EMITTERS = 8;
+    private static final double MAX_AUDIBLE_DIST_SQR = 64.0 * 64.0;
+    private static int emitterScanCooldown;
 
     public static void register() {
         ClientPlayNetworking.registerGlobalReceiver(MusicPackets.SubmitResult.TYPE, (packet, context) -> {
@@ -53,6 +67,8 @@ public final class MusicClient {
             }
         });
         ClientPlayConnectionEvents.DISCONNECT.register((handler, client) -> reset(client));
+        ClientChunkEvents.CHUNK_LOAD.register((level, chunk) -> addSpeakers(chunk));
+        ClientChunkEvents.CHUNK_UNLOAD.register((level, chunk) -> removeSpeakers(level, chunk));
         ClientLifecycleEvents.CLIENT_STOPPING.register(client -> { reset(client); COMPILER.shutdownNow(); });
         ClientTickEvents.END_CLIENT_TICK.register(client -> {
             if (client.getConnection() == null || !ClientPlayNetworking.canSend(MusicPackets.Ping.TYPE)) return;
@@ -62,8 +78,16 @@ public final class MusicClient {
                 outstandingPing = now;
                 ClientPlayNetworking.send(new MusicPackets.Ping(now));
             }
-            if (client.level == null || program == null || !clock.ready() || client.isPaused()
-                    || client.getOverlay() != null || !client.getSoundManager().getAvailableSounds().contains(GrooveMod.id("session"))) return;
+            if (client.level == null || client.player == null || program == null || !clock.ready() || client.isPaused()
+                    || client.getOverlay() != null || !client.getSoundManager().getAvailableSounds().contains(GrooveMod.id("session"))) {
+                stopEmitters(client);
+                return;
+            }
+            updateEmitters(client);
+            if (!emitters.isEmpty()) {
+                stopMonitor(client);
+                return;
+            }
             if (retryTicks > 0) { retryTicks--; return; }
             if (sound == null || stream.closed() || !client.getSoundManager().isActive(sound)) {
                 if (sound != null) client.getSoundManager().stop(sound);
@@ -109,10 +133,92 @@ public final class MusicClient {
         generation++; revision = -1; epoch = null; program = null;
         latestSnapshot = null; latestWire = null; sampleStatus = java.util.Map.of();
         lastPing = 0; outstandingPing = 0;
-        if (sound != null) client.getSoundManager().stop(sound);
-        if (stream != null) stream.close();
-        sound = null; stream = null; retryTicks = 0;
+        stopMonitor(client);
+        stopEmitters(client);
+        speakerSegments.clear();
+        emitterScanCooldown = 0;
         clock = new ClockSync(); renderer = new LiveRenderer();
         COMPILER.getQueue().clear();
     }
+
+    private static void addSpeakers(LevelChunk chunk) {
+        boolean added = false;
+        for (var entry : chunk.getBlockEntities().entrySet()) {
+            if (entry.getValue() instanceof SpeakerBlockEntity) {
+                speakerSegments.add(entry.getKey().immutable());
+                added = true;
+            }
+        }
+        if (added) emitterScanCooldown = 0;
+    }
+
+    private static void removeSpeakers(net.minecraft.client.multiplayer.ClientLevel level, LevelChunk chunk) {
+        boolean removed = speakerSegments.removeIf(pos -> pos.getX() >> 4 == chunk.getPos().x && pos.getZ() >> 4 == chunk.getPos().z);
+        emitters.entrySet().removeIf(entry -> {
+            if (entry.getKey().getX() >> 4 != chunk.getPos().x || entry.getKey().getZ() >> 4 != chunk.getPos().z)
+                return false;
+            stopEmitter(Minecraft.getInstance(), entry.getValue());
+            return true;
+        });
+        if (removed) emitterScanCooldown = 0;
+    }
+
+    private static void updateEmitters(Minecraft client) {
+        if (emitterScanCooldown > 0) {
+            emitterScanCooldown--;
+            return;
+        }
+        emitterScanCooldown = 10;
+        BlockPos playerPos = client.player.blockPosition();
+        Set<BlockPos> bases = new HashSet<>();
+        for (BlockPos pos : speakerSegments) {
+            if (pos.distSqr(playerPos) > MAX_AUDIBLE_DIST_SQR) continue;
+            if (!client.level.getBlockState(pos).is(GrooveBlocks.SPEAKER)
+                    || client.level.getBlockState(pos.below()).is(GrooveBlocks.SPEAKER)) continue;
+            bases.add(pos);
+        }
+        bases.stream().sorted(java.util.Comparator.comparingDouble(pos -> pos.distSqr(playerPos)))
+                .limit(MAX_EMITTERS).forEach(pos -> {
+                    int height = towerHeight(client, pos);
+                    Emitter emitter = emitters.get(pos);
+                    if (emitter != null && emitter.height == height && !emitter.stream.closed()
+                            && client.getSoundManager().isActive(emitter.sound)) return;
+                    if (emitter != null) stopEmitter(client, emitter);
+                    LiveRenderer sourceRenderer = new LiveRenderer();
+                    sourceRenderer.publish(program);
+                    GrooveAudioStream sourceStream = new GrooveAudioStream(sourceRenderer, clock, true);
+                    GrooveSound sourceSound = new GrooveSound(sourceStream, pos, height);
+                    emitters.put(pos, new Emitter(sourceSound, sourceStream, height));
+                    client.getSoundManager().play(sourceSound);
+                });
+        emitters.entrySet().removeIf(entry -> {
+            if (bases.contains(entry.getKey())) return false;
+            stopEmitter(client, entry.getValue());
+            return true;
+        });
+    }
+
+    private static int towerHeight(Minecraft client, BlockPos base) {
+        int height = 1;
+        while (height < 32 && client.level.getBlockState(base.above(height)).is(GrooveBlocks.SPEAKER)) height++;
+        return height;
+    }
+
+    private static void stopMonitor(Minecraft client) {
+        if (sound != null) client.getSoundManager().stop(sound);
+        if (stream != null) stream.close();
+        sound = null; stream = null; retryTicks = 0;
+    }
+
+    private static void stopEmitters(Minecraft client) {
+        for (Emitter emitter : emitters.values()) stopEmitter(client, emitter);
+        emitters.clear();
+    }
+
+    private static void stopEmitter(Minecraft client, Emitter emitter) {
+        client.getSoundManager().stop(emitter.sound);
+        emitter.stream.close();
+    }
+
+    private record Emitter(GrooveSound sound, GrooveAudioStream stream, int height) {}
 }
