@@ -5,8 +5,16 @@ import java.util.Map;
 
 /** Versioned musical graph; editor layout deliberately lives outside this model. */
 public record Graph(int version, List<Node> nodes, List<Edge> edges) {
+    public static final int CURRENT_VERSION = 3;
     public Graph { nodes = List.copyOf(nodes); edges = List.copyOf(edges); }
-    public record Node(String id, NodeType type, Map<String, Double> params, groove.engine.samples.AssetRef sample) {
+
+    /** Validate before upgrading so migration cannot legalize invalid legacy graphs. */
+    public Graph toV3() {
+        GraphCompiler.compile(this);
+        return version == CURRENT_VERSION ? this : new Graph(CURRENT_VERSION, nodes, edges);
+    }
+    public record Node(String id, NodeType type, Map<String, Double> params, groove.engine.samples.AssetRef sample, Long birthNanos) {
+        public Node(String id, NodeType type, Map<String, Double> params, groove.engine.samples.AssetRef sample) { this(id, type, params, sample, null); }
         public Node(String id, NodeType type, Map<String, Double> params) { this(id, type, params, null); }
         public Node { params = Map.copyOf(params); }
     }

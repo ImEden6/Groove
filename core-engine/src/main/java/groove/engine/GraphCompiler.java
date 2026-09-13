@@ -2,7 +2,7 @@ package groove.engine;
 
 import java.util.*;
 
-/** Strict, bounded v1/v2 compiler. Run on a control/worker thread, never an audio callback. */
+/** Strict, bounded v1/v2/v3 compiler. Run on a control/worker thread, never an audio callback. */
 public final class GraphCompiler {
     public static final int MAX_NODES = 64, MAX_EVENTS = 128;
     private final Map<String, Graph.Node> nodes = new LinkedHashMap<>();
@@ -11,31 +11,40 @@ public final class GraphCompiler {
     private final Set<String> visiting = new HashSet<>();
     private record Compiled(Pattern pattern, int cost) {}
 
-    public static LoopPlan compile(Graph graph) { return new GraphCompiler().build(graph); }
+    public static LoopPlan compile(Graph graph) {
+        if (graph.nodes().stream().anyMatch(n -> n.type() != null && n.type().isSignalNode())) return SignalGraph.compile(graph);
+        return new GraphCompiler().build(graph);
+    }
 
     private LoopPlan build(Graph graph) {
-        require(graph.version() == 1 || graph.version() == 2, "Unsupported graph version");
+        require(graph.version() >= 1 && graph.version() <= Graph.CURRENT_VERSION, "Unsupported graph version");
         require(!graph.nodes().isEmpty() && graph.nodes().size() <= MAX_NODES, "Expected 1..64 nodes");
         require(graph.edges().size() <= 128, "Too many edges");
         for (Graph.Node node : graph.nodes()) {
             require(node.id() != null && node.id().matches("[a-zA-Z0-9_-]{1,32}"), "Invalid node id");
             require(nodes.putIfAbsent(node.id(), node) == null, "Duplicate node id");
             require(node.type() != null, "Unknown node type");
-            require(node.type() == NodeType.GENERATOR_SAMPLE ? graph.version() == 2 && node.sample() != null : node.sample() == null,
-                    "Sample reference requires a v2 generator/sample node");
+            require(node.birthNanos() == null, "Birth timestamp is only valid on a v3 LFO");
+            require(!node.type().isSignalNode(), "Signal node requires v3 routing");
+            require(node.type() == NodeType.GENERATOR_SAMPLE ? graph.version() >= 2 && node.sample() != null : node.sample() == null,
+                    "Sample reference requires a v2/v3 generator/sample node");
             require(node.params().size() <= 8, "Too many parameters");
             inputs.put(node.id(), new ArrayList<>());
         }
         Set<Graph.Edge> unique = new HashSet<>();
         for (Graph.Edge edge : graph.edges()) {
             require(nodes.containsKey(edge.fromNode()) && nodes.containsKey(edge.toNode()), "Dangling edge");
-            require("out".equals(edge.fromPort()) && "in".equals(edge.toPort()), "Unknown port");
-            require(nodes.get(edge.fromNode()).type() != NodeType.OUTPUT, "Output has no outgoing port");
+            Port source = nodes.get(edge.fromNode()).type().outputPort(edge.fromPort());
+            Port target = nodes.get(edge.toNode()).type().inputPort(edge.toPort());
+            require(source != null && target != null, "Unknown port or wrong port direction");
+            require(target.accepts(source), "Incompatible port types");
             require(unique.add(edge), "Duplicate edge");
             inputs.get(edge.toNode()).add(edge.fromNode());
         }
+        Port.validateArity(nodes.values(), graph.edges());
         var outputs = nodes.values().stream().filter(n -> n.type() == NodeType.OUTPUT).toList();
         require(outputs.size() == 1, "Exactly one output required");
+        require(inputs.get(outputs.getFirst().id()).size() == 1, "Exactly one output input required");
         Compiled result = visit(outputs.getFirst().id(), 0);
         require(compiled.size() == nodes.size(), "Every node must reach the output");
         List<Event> events = result.pattern.query(new Arc(0, 1));
@@ -56,14 +65,10 @@ public final class GraphCompiler {
             case FAST -> Set.of(NodeParam.FACTOR);
             case EUCLID -> Set.of(NodeParam.STEPS, NodeParam.PULSES, NodeParam.ROTATION);
             case STACK, OUTPUT -> Set.of();
+            default -> throw new IllegalStateException("unreachable: signal nodes are rejected in build()");
         };
         require(allowed.containsAll(node.params().keySet()), "Unknown parameter on " + id);
         for (Double value : node.params().values()) require(Double.isFinite(value), "Non-finite parameter");
-        require(switch (node.type()) {
-            case TONE, GENERATOR_SAMPLE -> links.isEmpty();
-            case STACK -> !links.isEmpty() && links.size() <= 16;
-            case FAST, EUCLID, OUTPUT -> links.size() == 1;
-        }, "Wrong input count on " + id);
         List<Compiled> children = new ArrayList<>();
         for (String link : links) children.add(visit(link, depth + 1));
         Compiled result = switch (node.type()) {
@@ -102,6 +107,7 @@ public final class GraphCompiler {
                     yield new Compiled(child.pattern.euclid(steps, pulses, rotation), child.cost * pulses);
                 }
                 case OUTPUT -> children.getFirst();
+                default -> throw new IllegalStateException("unreachable: signal nodes are rejected in build()");
         };
         visiting.remove(id);
         compiled.put(id, result);

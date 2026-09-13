@@ -16,7 +16,7 @@ public final class SessionTimeline {
     private Snapshot snapshot;
     public SessionTimeline(Graph graph, double bpm, long now) {
         GraphCompiler.compile(graph);
-        snapshot = new Snapshot(new SessionState(0, now, 0, bpm, false, graph), null);
+        snapshot = new Snapshot(new SessionState(0, now, 0, bpm, false, SignalGraph.assignBirths(graph, null, now)), null);
     }
     public Snapshot snapshot(long now) {
         if (snapshot.pending != null && now >= snapshot.pending.effectiveNanos())
@@ -33,7 +33,7 @@ public final class SessionTimeline {
         double cycle = current.playing() ? Math.ceil(current.cycleAt(earliest)) : current.anchorCycle();
         long at = current.playing()
                 ? current.effectiveNanos() + Math.round((cycle - current.anchorCycle()) * 240e9 / current.bpm()) : earliest;
-        SessionState next = new SessionState(current.revision() + 1, at, cycle, bpm, playing, graph);
+        SessionState next = new SessionState(current.revision() + 1, at, cycle, bpm, playing, SignalGraph.assignBirths(graph, current.graph(), at));
         snapshot = new Snapshot(current, next);
         return snapshot;
     }

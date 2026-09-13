@@ -9,6 +9,8 @@ public final class EngineTests {
     private static final Tone TONE = new Tone(Tone.Wave.SINE, 220, .3, 0, 20000);
 
     public static void main(String[] args) {
+        PortTests.run();
+        SignalTests.run();
         DspTests.run();
         ResamplerTests.run();
         SchedulerTests.run();

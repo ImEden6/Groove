@@ -24,7 +24,7 @@ Ranked by impact on gameplay, creative expressiveness, and multiplayer usability
 | **5** | **Workstation "In-Use" / Merge UI** | **60** | Medium | Multiplayer UX | Clear player feedback when multiple users attempt simultaneous sequencer edits (exclusive edit lock vs. optimistic conflict resolution). | Open |
 | **6** | **Master Peak Limiter Test Suite** | **50** | Low | Audio Safety | Automated verification that adversarial DSP graphs cannot distort or clip past safety ceilings beyond `tanh`. | Open |
 | **7** | **Cable Pulse Animation Toggle** | **45** | Low | Accessibility | Option to reduce visual motion / flashing during fast BPM sessions. | Open |
-| **8** | **Phase 2 Stages 2–4: Typed Ports, Modulation & Feedback** | **35** | Very High | Architecture | Next increments of Phase 2: typed `PATTERN`/`MOD_FLOAT`/`TRIGGER`/`AUDIO` ports, v3 schema migration, LFO/envelope nodes, and delayed feedback DSP. | Staged |
+| **8** | **Phase 2 routing extensions** | **35** | Very High | Architecture | Modulation, control buffers, named ports and delayed feedback have landed. Next: independent audio sources, arbitrary pattern triggers and effect-history reconstruction. | Extensions |
 
 ---
 
@@ -49,10 +49,10 @@ The following items from earlier roadmaps are fully implemented and verified in 
 
 ## DSP / Engine (Remaining)
 
-- **Phase 2 next stages (v3 schema & modulation).** Fractional speeds and rolling scheduling are complete. The remaining Phase 2 increments will introduce:
-  - Typed ports (`PATTERN`, `MOD_FLOAT`, `TRIGGER`, `AUDIO`) and v3 graph schema migration.
-  - Deterministic LFO, envelope, attenuverter, and step sequence nodes evaluated from shared transport time.
-  - Delayed feedback audio routing (enforcing at least one 64-frame block of delay, rejecting zero-delay cycles).
+- **Phase 2 routing extensions.** Modulation nodes, 64-frame control ramps, named sockets and delayed feedback have landed; see [signals](PHASE-2-SIGNALS.md). Remaining extensions include:
+  - Multiple independent audio-render sources (currently stack patterns before one stereo source).
+  - Arbitrary pattern triggers and overlapping polyphonic envelopes (currently periodic sequence trigger arcs).
+  - Reconstruction of historical echoes/filter state for late joins and graph edits.
 - **No tempo automation, seeking, or non-integer-cycle start.** Dynamic tempo changes at runtime exist via `/groove tempo`, but score/pattern-side tempo curves and timeline seeking do not.
 
 ## Physical Presence in the World (Remaining)

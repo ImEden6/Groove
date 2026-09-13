@@ -2,7 +2,7 @@
 
 ## Still unimplemented (from this doc)
 
-- Parameter automation over time, multiple mix buses, and feedback DSP remain staged for future Phase 2 work.
+- Multiple independent audio-render sources and reconstruction of effect history on late join remain future work. Modulation, mix buses and delayed feedback are implemented in v3.
 - Headphone items remain future work — monitor audio mutes for in-world speaker streams instead.
 
 Target: Minecraft 1.21.1, Fabric Loader, Fabric API, Java 21. Install the built mod
@@ -22,6 +22,7 @@ Enable cheats in a test single-player world, or use an operator account on a ser
 | `/groove tempo 140` | Change tempo while preserving cycle position |
 | `/groove demo` | Replace the patch with the built-in demo |
 | `/groove sample-demo` | Load the factory sample-based drum demo |
+| `/groove signal-demo` | Load the v3 filter sweep and feedback echo demo |
 | `/groove save` | Save the accepted patch and tempo in the world folder |
 | `/groove load` | Validate and load graph and BPM from `groove-session.json` (legacy two-file saves remain readable) |
 
@@ -56,15 +57,16 @@ Version-1 nodes: `tone`, `euclid`, `fast`, `stack`, `output`. Version 2 adds
 `frequency` (20–16000 Hz), `gain` (0–1), `pan` (-1–1), and `wave` (0=sine, 1=saw).
 `fast.factor` is a finite decimal from 0.25 to 16.0 (e.g. 0.25, 1.5, 2.0). `euclid.steps` is 1–64, `pulses` is 0–steps,
 and positive `rotation` moves hits later. Stack accepts up to 16 incoming edges.
-All edges carry patterns through `out`/`in` ports. Exactly one output is required;
+V1/v2 edges carry patterns through `out`/`in` ports. Exactly one output is required;
 every node must reach it. There are no feedback cycles in v1/v2.
 
 Validation caps graphs at 64 nodes, 128 edges, 16 levels of nesting, and a conservative
 128 events per cycle before evaluating them. File inputs are capped at 32 KiB.
 The renderer plays at most 32 simultaneously active notes in stable graph order.
 The rolling lookahead scheduler evaluates fractional speed transforms continuously
-without restarting every cycle; parameter automation over time, multiple mix buses,
-and feedback DSP remain staged for future Phase 2 work.
+without restarting every cycle. V3 adds LFO/envelope/sequence controls, filters,
+multiple mix buses and delayed feedback; see [signal graph usage](PHASE-2-SIGNALS.md)
+for sockets, parameter units, server phase rules and the single audio-source limit.
 
 ## Session persistence and transactional saves
 

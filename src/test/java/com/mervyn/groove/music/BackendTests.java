@@ -13,6 +13,7 @@ public final class BackendTests {
         SharedConstants.tryDetectVersion(); Bootstrap.bootStrap();
         persistenceChecks();
         typedCompatibilityChecks();
+        signalChecks();
         var searchCache = new com.mervyn.groove.client.ui.SampleSearch();
         var catalog = groove.engine.samples.SampleCatalog.scan(null);
         var rows = searchCache.filter(catalog, "@factory");
@@ -30,13 +31,14 @@ public final class BackendTests {
             secondSave.get(5, java.util.concurrent.TimeUnit.SECONDS);
             check(order.equals(java.util.List.of(1, 2)), "Saves retain submission order");
         } finally { saves.shutdownNow(); }
-        for (int version : new int[]{1, 2}) {
+        for (int version : new int[]{1, 2, 3}) {
             Graph fractional = new Graph(version, java.util.List.of(
                     new Graph.Node("tone", NodeType.TONE, java.util.Map.of()),
                     new Graph.Node("speed", NodeType.FAST, java.util.Map.of(NodeParam.FACTOR, 1.5)),
                     new Graph.Node("out", NodeType.OUTPUT, java.util.Map.of())),
                     java.util.List.of(Graph.edge("tone", "speed"), Graph.edge("speed", "out")));
             check(GraphJson.decode(GraphJson.encode(fractional)).equals(fractional), "Fractional speed preserves v1/v2 serialization");
+            check(GraphJson.decodeCurrent(GraphJson.encode(fractional)).equals(fractional.toV3()), "Canonical import upgrades legacy graphs");
         }
         Graph graph = Graph.demo();
         check(GraphJson.decode(GraphJson.encode(graph)).equals(graph), "Graph JSON round trip");
@@ -50,7 +52,7 @@ public final class BackendTests {
         Graph decodedFiltered = GraphJson.decode(GraphJson.encode(filteredGraph));
         check(decodedFiltered.equals(filteredGraph), "Custom cutoffHz JSON round trip");
         check(decodedFiltered.nodes().get(0).params().get(NodeParam.CUTOFF_HZ) == 733.0, "cutoffHz value survives encode/decode exactly");
-        Graph filteredSample = new Graph(2, java.util.List.of(
+        Graph filteredSample = new Graph(3, java.util.List.of(
                 new Graph.Node("sample", NodeType.GENERATOR_SAMPLE, java.util.Map.of(NodeParam.CUTOFF_HZ, 500.0, NodeParam.RESONANCE_Q, 2.0),
                         groove.engine.samples.FactorySamples.ref("factory:basic/kick.wav")),
                 new Graph.Node("out", NodeType.OUTPUT, java.util.Map.of())), java.util.List.of(Graph.edge("sample", "out")));
@@ -117,10 +119,10 @@ public final class BackendTests {
         check(editor.node(original.id()).params().equals(original.params()), "Swap preserves tuning");
         check(editor.toGraph().edges().equals(graph.edges()), "Swap preserves cables");
         GraphCompiler.compile(editor.toGraph());
-        editor.undo(); check(editor.toGraph().equals(graph), "Undo restores exact sample hash");
+        editor.undo(); check(editor.toGraph().equals(graph.toV3()), "Undo restores exact sample hash in v3");
         editor.redo(); check(editor.node(original.id()).sample().equals(replacement), "Redo restores replacement");
         editor.dropSample(replacement, new com.mervyn.groove.client.ui.Vec2(250, 100), null);
-        check(editor.nodes().size() == graph.nodes().size() + 1 && editor.toGraph().version() == 2, "Drop creates version 2 sample node");
+        check(editor.nodes().size() == graph.nodes().size() + 1 && editor.toGraph().version() == 3, "Drop creates version 3 sample node");
 
         // Quick spawn tests
         editor.openQuickSpawn(new com.mervyn.groove.client.ui.Vec2(300, 200));
@@ -308,7 +310,7 @@ public final class BackendTests {
             java.nio.file.Files.writeString(root.resolve("groove-tempo.txt"), "123");
             check(SessionStore.read(root).equals(original), "Legacy patch and tempo load together");
             SessionStore.write(root, original);
-            var next = new SessionStore.Saved(groove.engine.samples.FactorySamples.demo(), 177);
+            var next = new SessionStore.Saved(SignalGraph.assignBirths(SignalDemo.graph(), null, 123_456_789), 177);
             try {
                 SessionStore.write(root, next, (from, to) -> {
                     throw new java.nio.file.AtomicMoveNotSupportedException(from.toString(), to.toString(), "test failure");
@@ -334,6 +336,55 @@ public final class BackendTests {
             }
             java.nio.file.Files.delete(root);
         }
+    }
+    private static void signalChecks() {
+        for (boolean audioFirst : new boolean[]{false, true}) {
+            var outputEditor = new com.mervyn.groove.client.ui.EditorState(new Graph(3,
+                    java.util.List.of(new Graph.Node("tone", NodeType.TONE, java.util.Map.of()),
+                            new Graph.Node("render", NodeType.AUDIO_RENDER, java.util.Map.of()),
+                            new Graph.Node("out", NodeType.OUTPUT, java.util.Map.of())),
+                    java.util.List.of(Graph.edge("tone", "render"))));
+            String firstSource = audioFirst ? "render" : "tone", firstPort = audioFirst ? "audio" : "in";
+            String secondSource = audioFirst ? "tone" : "render", secondPort = audioFirst ? "in" : "audio";
+            check(outputEditor.connect(firstSource, "out", "out", firstPort), "OUTPUT accepts first " + firstPort + " connection");
+            var before = outputEditor.toGraph();
+            check(!outputEditor.canConnect(secondSource, "out", "out", secondPort), "OUTPUT dims alternate socket when " + firstPort + " is occupied");
+            check(!outputEditor.connect(secondSource, "out", "out", secondPort), "OUTPUT rejects second input after " + firstPort);
+            check(outputEditor.toGraph().equals(before), "Rejected OUTPUT connection leaves graph unchanged");
+            outputEditor.disconnectPort("out", firstPort, false);
+            check(outputEditor.connect(secondSource, "out", "out", secondPort), "OUTPUT accepts alternate socket after disconnection");
+        }
+        Graph graph = SignalGraph.assignBirths(SignalDemo.graph(), null, 987_654_321);
+        check(GraphJson.decode(GraphJson.encode(graph)).equals(graph), "Signal JSON preserves birth stamps and feedback edges");
+        var state = new SessionState(2, 1_000_000_000, 0, 120, true, graph);
+        var snapshot = new MusicPackets.Snapshot(UUID.randomUUID(), new SessionTimeline.Snapshot(state, null));
+        var buf = new RegistryFriendlyByteBuf(Unpooled.buffer(), RegistryAccess.EMPTY);
+        try {
+            MusicPackets.Snapshot.CODEC.encode(buf, snapshot);
+            check(MusicPackets.Snapshot.CODEC.decode(buf).snapshot().current().equals(state), "Signal snapshot round trip");
+            buf.clear();
+            var submit = new MusicPackets.Submit(UUID.randomUUID(), UUID.randomUUID(), 2, GraphJson.encode(graph),120,true);
+            MusicPackets.Submit.CODEC.encode(buf,submit);
+            check(MusicPackets.Submit.CODEC.decode(buf).equals(submit), "Signal submission round trip");
+        } finally { buf.release(); }
+        var editor = new com.mervyn.groove.client.ui.EditorState(graph);
+        editor.disconnectPort("filter", "cutoff", false);
+        check(editor.edges().contains(Graph.edge("render","filter")), "Snipping modulation preserves audio input");
+        check(!editor.canConnect("render","out","filter","cutoff"), "Editor rejects audio into modulation socket");
+        check(editor.connect("range","out","filter","cutoff"), "Editor reconnects named modulation socket");
+        check(!editor.canConnect("mix","out","mix","in"), "Editor rejects feedback bypass");
+        editor.disconnectPort("delay","in",false);
+        check(editor.connect("mix","out","delay","in"), "Editor permits delayed feedback");
+        editor.beginValueDrag("lfo","wave",100,false); editor.dragValueTo(80); editor.endValueDrag();
+        check(editor.node("lfo").birthNanos().equals(987_654_321L), "Editor parameter edits retain birth metadata");
+        editor.undo(); GraphCompiler.compile(editor.toGraph());
+        editor.disconnectPort("filter","cutoff",false);
+        editor.layout().place("filter",new com.mervyn.groove.client.ui.Vec2(300,100));
+        var input = new com.mervyn.groove.client.ui.InputController(editor);
+        editor.startWireDrag("range","out",new com.mervyn.groove.client.ui.Vec2(0,0));
+        var port = com.mervyn.groove.client.ui.NodeGeometry.port(editor.layout().get("filter"),NodeType.FILTER,"cutoff",false);
+        input.mouseUp(port.x(),port.y(),(x,y)->true);
+        check(editor.edges().contains(new Graph.Edge("range","out","filter","cutoff")), "Pointer targets second named socket");
     }
     private static void invalid(Runnable action) {
         try { action.run(); } catch (IllegalArgumentException expected) { return; }

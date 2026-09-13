@@ -14,6 +14,7 @@ public final class AudioSmokeTest {
     private static long began;
     private static boolean complete;
     private static boolean stalled, stopping;
+    private static boolean signals;
     private static long stoppedAt;
     public static void register() {
         if (!FabricLoader.getInstance().isDevelopmentEnvironment() || !Boolean.getBoolean("groove.audioSmoke")) return;
@@ -48,6 +49,13 @@ public final class AudioSmokeTest {
             if (stream != null && stream.reads() >= 8 && !stalled) {
                 stalled = true;
                 stream.stallNextReadForTest();
+            }
+            if (stream != null && stream.reads() >= 128 && !signals) {
+                long now = System.nanoTime();
+                Graph graph = SignalGraph.assignBirths(SignalDemo.graph(),null,now);
+                timeline = LiveRenderer.Timeline.compile(new SessionTimeline.Snapshot(new SessionState(2,now,0,128,true,graph),null));
+                timeline.prepare(now); renderer.publish(timeline); signals = true;
+                GrooveMod.LOGGER.info("Groove audio smoke switched to modulation and feedback routing");
             }
             if (stream != null && stream.reads() >= 256 && !stopping) {
                 if (stream.maxQueuedFrames() == 0 || stream.peak() < .01 || stream.closed())

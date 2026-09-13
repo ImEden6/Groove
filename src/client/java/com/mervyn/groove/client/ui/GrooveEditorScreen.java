@@ -44,7 +44,8 @@ public final class GrooveEditorScreen extends Screen {
     private AssetRef draggedSample;
     private double sampleDownX, sampleDownY;
     private static final int DRAWER_WIDTH = 160;
-    private static final List<NodeType> SPAWNABLE_TYPES = List.of(NodeType.TONE, NodeType.EUCLID, NodeType.FAST, NodeType.STACK, NodeType.OUTPUT);
+    private static final List<NodeType> SPAWNABLE_TYPES = java.util.Arrays.stream(NodeType.values())
+            .filter(t -> t != NodeType.GENERATOR_SAMPLE).toList();
     private int quickSpawnSelected;
     private AssetRef waveRef;
     private float[] waveform;
@@ -60,7 +61,7 @@ public final class GrooveEditorScreen extends Screen {
         state = new EditorState(graph);
         input = new InputController(state);
         this.renderer = renderer;
-        baseGraph = graph; baseEpoch = MusicClient.epoch();
+        baseGraph = new Graph(Graph.CURRENT_VERSION, graph.nodes(), graph.edges()); baseEpoch = MusicClient.epoch();
         baseRevision = MusicClient.snapshot() == null ? -1 : MusicClient.snapshot().revision();
         state.onTogglePlay(() -> submit(true));
         state.onGraphChanged(() -> confirmClose = false);
@@ -98,15 +99,15 @@ public final class GrooveEditorScreen extends Screen {
             Vec2 from = state.layout().get(edge.fromNode());
             Vec2 to = state.layout().get(edge.toNode());
             if (from == null || to == null) continue;
-            Vec2 fromScreen = state.toScreen(NodeGeometry.outputPort(from));
-            Vec2 toScreen = state.toScreen(NodeGeometry.inputPort(to));
+            Vec2 fromScreen = state.toScreen(NodeGeometry.port(from, state.node(edge.fromNode()).type(), edge.fromPort(), true));
+            Vec2 toScreen = state.toScreen(NodeGeometry.port(to, state.node(edge.toNode()).type(), edge.toPort(), false));
             renderer.drawCable(graphics, new CableView(fromScreen, toScreen, tempoPhase), tempoPhase);
         }
         if (state.isWireDragging()) {
             EditorState.WireDrag drag = state.wireDrag();
             Vec2 from = state.layout().get(drag.fromNode());
             if (from != null) {
-                Vec2 fromScreen = state.toScreen(NodeGeometry.outputPort(from));
+                Vec2 fromScreen = state.toScreen(NodeGeometry.port(from, state.node(drag.fromNode()).type(), drag.fromPort(), true));
                 Vec2 toScreen = state.toScreen(drag.pointer());
                 renderer.drawCable(graphics, new CableView(fromScreen, toScreen, tempoPhase), tempoPhase);
             }
@@ -125,13 +126,17 @@ public final class GrooveEditorScreen extends Screen {
             graphics.drawString(font, font.plainSubstrByWidth(node.id(), 136), 8, 8, renderer.textColor(), false);
             graphics.drawString(font, font.plainSubstrByWidth(node.type().idStem(), 136), 8, 30, renderer.textColor(), false);
             graphics.pose().popPose();
-            if (state.hasOutputPort(node.id())) {
-                Vec2 port = state.toScreen(NodeGeometry.outputPort(origin));
+            for (var socket : node.type().outputPorts()) {
+                Vec2 port = state.toScreen(NodeGeometry.port(origin, node.type(), socket.name(), true));
                 renderer.drawPort(graphics, (int) port.x(), (int) port.y(), PortState.FREE);
+                if (port.distanceTo(new Vec2(mouseX,mouseY)) < 9)
+                    graphics.renderTooltip(font, Component.literal(socket.name()+" · "+socket.type().name()),mouseX,mouseY);
             }
-            if (state.hasInputPort(node.id())) {
-                Vec2 port = state.toScreen(NodeGeometry.inputPort(origin));
+            for (var socket : node.type().inputPorts()) {
+                Vec2 port = state.toScreen(NodeGeometry.port(origin, node.type(), socket.name(), false));
                 renderer.drawPort(graphics, (int) port.x(), (int) port.y(), PortState.FREE);
+                if (port.distanceTo(new Vec2(mouseX,mouseY)) < 9)
+                    graphics.renderTooltip(font, Component.literal(socket.name()+" · "+socket.type().name()),mouseX,mouseY);
             }
         }
         if (request != null && System.nanoTime() - submittedAt > 10_000_000_000L) {
@@ -206,16 +211,17 @@ public final class GrooveEditorScreen extends Screen {
         if (draggedSample != null && sampleDragging) graphics.drawString(font, draggedSample.assetId(), mouseX + 8, mouseY, 0xffcc66, false);
         if (state.isQuickSpawnOpen()) {
             Vec2 screen = state.toScreen(state.quickSpawnAt());
-            int popupW = 120, popupH = 20 + SPAWNABLE_TYPES.size() * 16;
+            int rows = (SPAWNABLE_TYPES.size()+1)/2;
+            int popupW = 240, popupH = 20 + rows * 16;
             int px = (int) Math.max(10, Math.min(width - popupW - 10, screen.x()));
             int py = (int) Math.max(26, Math.min(height - popupH - 25, screen.y()));
             renderer.drawPanel(graphics, PanelKind.DRAWER, px, py, popupW, popupH);
             graphics.drawString(font, "Quick Spawn", px + 8, py + 8, textColor, false);
             for (int i = 0; i < SPAWNABLE_TYPES.size(); i++) {
-                int iy = py + 18 + i * 16;
-                boolean hovered = mouseX >= px && mouseX < px + popupW && mouseY >= iy && mouseY < iy + 16;
-                if (hovered || i == quickSpawnSelected) graphics.fill(px + 2, iy, px + popupW - 2, iy + 14, 0x40ffffff);
-                graphics.drawString(font, SPAWNABLE_TYPES.get(i).idStem(), px + 8, iy + 3, (hovered || i == quickSpawnSelected) ? 0xffffff : textColor, false);
+                int iy = py + 18 + (i%rows) * 16, ix = px + (i/rows)*120;
+                boolean hovered = mouseX >= ix && mouseX < ix + 120 && mouseY >= iy && mouseY < iy + 16;
+                if (hovered || i == quickSpawnSelected) graphics.fill(ix + 2, iy, ix + 118, iy + 14, 0x40ffffff);
+                graphics.drawString(font, SPAWNABLE_TYPES.get(i).idStem(), ix + 8, iy + 3, (hovered || i == quickSpawnSelected) ? 0xffffff : textColor, false);
             }
         }
     }
@@ -226,11 +232,12 @@ public final class GrooveEditorScreen extends Screen {
         search.setFocused(false); bpm.setFocused(false); setFocused(null);
         if (state.isQuickSpawnOpen()) {
             Vec2 screen = state.toScreen(state.quickSpawnAt());
-            int popupW = 120, popupH = 20 + SPAWNABLE_TYPES.size() * 16;
+            int rows = (SPAWNABLE_TYPES.size()+1)/2;
+            int popupW = 240, popupH = 20 + rows * 16;
             int px = (int) Math.max(10, Math.min(width - popupW - 10, screen.x()));
             int py = (int) Math.max(26, Math.min(height - popupH - 25, screen.y()));
             if (mouseX >= px && mouseX < px + popupW && mouseY >= py + 18 && mouseY < py + popupH) {
-                int index = (int) ((mouseY - (py + 18)) / 16);
+                int index = (int)((mouseX-px)/120)*rows + (int) ((mouseY - (py + 18)) / 16);
                 if (index >= 0 && index < SPAWNABLE_TYPES.size()) {
                     spawnChosenNode(SPAWNABLE_TYPES.get(index));
                     return true;
@@ -414,7 +421,7 @@ public final class GrooveEditorScreen extends Screen {
         var desired = MusicClient.desiredState();
         if (desired == null) { message = "No live session"; return; }
         if (!state.toGraph().equals(baseGraph) && !message.equals("Reload again to discard your local draft.")) { message = "Reload again to discard your local draft."; return; }
-        state.loadGraph(desired.graph()); baseGraph = desired.graph(); baseEpoch = MusicClient.epoch(); baseRevision = MusicClient.snapshot().revision();
+        state.loadGraph(desired.graph()); baseGraph = state.toGraph(); baseEpoch = MusicClient.epoch(); baseRevision = MusicClient.snapshot().revision();
         bpm.setValue(Double.toString(desired.bpm())); message = "Loaded server revision " + baseRevision;
     }
     private void submit(boolean toggle) {

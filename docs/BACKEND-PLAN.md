@@ -3,7 +3,7 @@
 ## Still unimplemented (from this doc)
 
 - No headphone item (Curios/Trinkets integration, `AL_SOURCE_RELATIVE` head-locked sink, underwater muffling).
-- Phase 2 next stages: typed `PATTERN`/`MOD_FLOAT`/`TRIGGER`/`AUDIO` ports, v3 graph schema migration, deterministic LFO/envelope/attenuverter/step-sequence nodes, delayed feedback audio routing.
+- Phase 2 extensions: multiple independent audio-render sources, arbitrary pattern triggers/polyphonic envelopes, and effect-history reconstruction on late join. Modulation nodes, control buffers, delayed routing and named editor sockets are implemented; see [signals](PHASE-2-SIGNALS.md).
 - No tempo automation, timeline seeking, or non-integer-cycle start (runtime `/groove tempo` exists; score/pattern-side tempo curves do not).
 - No adaptive resync tuning beyond fixed slew/step thresholds under asymmetric/high-jitter conditions.
 - No server-side chunk-unload or distance culling for audio session state (session is server-wide/persistent).
@@ -24,8 +24,8 @@ into towers providing positional audio with distance culling. The sample backend
 WAV/Vorbis decoding, pitched one-shots, auditioning, bounded catalogs/caches, SHA-256
 references, and 48-tap Kaiser-windowed sinc resampling; see [samples and packs](SAMPLES.md)
 and [engine evolution](ENGINE-EVOLUTION.md). Tone and sample nodes feature biquad low-pass
-filtering (`cutoffHz` and `resonanceQ`), with voice-stealing crossfades. Parameter automation
-over time, modulation nodes, and headphone items remain future work; see
+filtering (`cutoffHz` and `resonanceQ`), with voice-stealing crossfades. V3 adds deterministic
+modulation and delayed audio routing; headphone items and score tempo automation remain future work; see
 [FUTURE-WORK.md](FUTURE-WORK.md) for the full current list.
 
 The milestone descriptions below preserve the longer-term design targets, not a

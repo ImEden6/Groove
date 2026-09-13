@@ -2,12 +2,9 @@
 
 ## Still unimplemented (from this doc)
 
-- Typed ports and v3 graph/serialization migration.
-- Deterministic LFO/envelope evaluation nodes.
-- Delayed feedback/audio routing.
-- Editor integration for the above.
+- Multiple independent audio-render sources and effect-history reconstruction remain future work. Typed ports, v3, modulation, delayed routing and named editor sockets have since landed; see [signals](PHASE-2-SIGNALS.md).
 
-Implemented the scheduling foundation while retaining graph v1/v2 and the existing packet format. Typed ports, v3 migration, modulation nodes, feedback routing, and the port editor remain later stages.
+Stage 1 implemented the scheduling foundation while retaining graph v1/v2 and the existing packet format. Later increments add [typed ports/v3](PHASE-2-PORTS.md) and [modulation, feedback and named editor sockets](PHASE-2-SIGNALS.md).
 
 ## Behavior
 
@@ -50,4 +47,4 @@ Commands: `./gradlew.bat -p core-engine check` and `./gradlew.bat test :core-eng
 
 ## Next stage
 
-Introduce typed ports and v3 migration as a separately verified increment, followed by deterministic LFO/envelope evaluation, then delayed feedback/audio routing and editor integration. The separately upgraded resampler now passes its defined 50 dB rejection tests; see [ENGINE-EVOLUTION.md](ENGINE-EVOLUTION.md).
+Typed ports and v3 migration are implemented in [stage 2](PHASE-2-PORTS.md). Modulation and delayed routing have also landed; see [signals](PHASE-2-SIGNALS.md) for the supported scope and remaining extensions. The resampler passes its defined 50 dB rejection tests; see [ENGINE-EVOLUTION.md](ENGINE-EVOLUTION.md).

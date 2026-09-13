@@ -26,6 +26,7 @@ public final class GraphJson {
                         case EUCLID -> "euclid";
                         case STACK -> "stack";
                         case OUTPUT -> "output";
+                        default -> value.idStem();
                     });
                 }
                 @Override
@@ -39,12 +40,19 @@ public final class GraphJson {
                         case "euclid" -> NodeType.EUCLID;
                         case "stack" -> NodeType.STACK;
                         case "output" -> NodeType.OUTPUT;
-                        default -> throw new IOException("Unknown node type: " + s);
+                        default -> {
+                            NodeType match = null;
+                            for (NodeType type : NodeType.values()) if (type.isSignalNode() && type.idStem().equals(s)) match = type;
+                            if (match == null) throw new IOException("Unknown node type: " + s);
+                            yield match;
+                        }
                     };
                 }
             })
             .setPrettyPrinting().create();
     public static String encode(Graph graph) { return GSON.toJson(graph); }
+    /** Explicit canonical import; decode itself remains lossless for stored and wire snapshots. */
+    public static Graph decodeCurrent(String json) { return decode(json).toV3(); }
     public static Graph decode(String json) {
         if (json.length() > MAX_LENGTH) throw new IllegalArgumentException("Patch exceeds 32 KiB characters");
         int depth = 0;

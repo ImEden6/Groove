@@ -40,6 +40,7 @@ public final class LiveRenderer {
         final SessionState state;
         final LoopPlan plan;
         final LookaheadScheduler scheduler;
+        final SignalRuntime signals;
         LookaheadScheduler.Window window;
         boolean missed;
         final java.util.Map<groove.engine.samples.AssetRef, groove.engine.samples.SampleData> samples;
@@ -52,6 +53,7 @@ public final class LiveRenderer {
         long lastNow = Long.MIN_VALUE, lastResync;
         VoiceProgram(Program program) {
             state = program.state(); plan = program.plan(); samples = program.samples(); scheduler = program.scheduler;
+            signals = plan.signals() == null ? null : plan.signals().runtime(state);
             for (int i = 0; i < MAX_VOICES; i++) {
                 voices[i] = new ActiveVoice(); tails[i] = new ActiveVoice();
             }
@@ -185,6 +187,7 @@ public final class LiveRenderer {
         if (program.missed || program.lastResync != resyncs || (program.lastNow != Long.MIN_VALUE && (now < program.lastNow || now - program.lastNow > 250_000_000L))) {
             for (ActiveVoice v : program.voices) v.event = -1;
             for (ActiveVoice v : program.tails) v.event = -1;
+            if (program.signals != null) program.signals.reset();
         }
         program.missed = false;
         program.lastResync = resyncs;
@@ -241,6 +244,7 @@ public final class LiveRenderer {
             addVoice(program, v, cycles, secondsPerCycle, STEAL_FADE[v.fadeFrame++], out);
             if (v.fadeFrame == STEAL_FRAMES) v.event = -1;
         }
+        if (program.signals != null) program.signals.process(out, now);
     }
 
     private static double eventDuration(VoiceProgram program, Event event, double secondsPerCycle) {

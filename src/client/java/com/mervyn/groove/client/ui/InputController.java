@@ -24,7 +24,7 @@ public final class InputController {
 
     private boolean panning, draggingNodes, spaceHeld;
     private double lastScreenX, lastScreenY;
-    private String hoveredInputPort; // last node id hovered as a wire drag target, or null
+    private PortHit hoveredInputPort;
     private long lastFPressMillis = -1;
 
     public InputController(EditorState state) { this.state = state; }
@@ -88,13 +88,13 @@ public final class InputController {
             return;
         }
         if (button == Button.SECONDARY) {
-            hitPort(world).ifPresent(hit -> state.disconnectPort(hit.nodeId(), hit.output()));
+            hitPort(world).ifPresent(hit -> state.disconnectPort(hit.nodeId(), hit.port(), hit.output()));
             return;
         }
         // The primary button starts a wire from an output port, selects and drags a node body, or deselects on empty canvas.
         Optional<PortHit> port = hitPort(world);
         if (port.isPresent() && port.get().output()) {
-            state.startWireDrag(port.get().nodeId(), world);
+            state.startWireDrag(port.get().nodeId(), port.get().port(), world);
             return;
         }
         Optional<String> nodeId = hitNode(world);
@@ -131,7 +131,7 @@ public final class InputController {
 
     public void mouseUp() {
         if (state.isWireDragging()) {
-            if (hoveredInputPort != null) state.completeWireDrag(hoveredInputPort); else state.cancelWireDrag();
+            if (hoveredInputPort != null) state.completeWireDrag(hoveredInputPort.nodeId(), hoveredInputPort.port()); else state.cancelWireDrag();
         }
         if (state.isValueDragging()) state.endValueDrag();
         panning = false; draggingNodes = false; hoveredInputPort = null;
@@ -152,13 +152,13 @@ public final class InputController {
         if (!canvasVisible.test(screenX, screenY)) return;
         Vec2 world = state.toWorld(screenX, screenY);
         hoveredInputPort = hitPort(world).filter(hit -> !hit.output()).filter(hit -> {
-            Vec2 port = state.toScreen(NodeGeometry.inputPort(state.layout().get(hit.nodeId())));
+            Vec2 port = state.toScreen(NodeGeometry.port(state.layout().get(hit.nodeId()), state.node(hit.nodeId()).type(), hit.port(), false));
             return canvasVisible.test(port.x(), port.y());
-        }).map(PortHit::nodeId).orElse(null);
+        }).orElse(null);
     }
 
     // === hit testing, shares NodeGeometry with the eventual ThemeRenderer ===
-    private record PortHit(String nodeId, boolean output) {}
+    private record PortHit(String nodeId, String port, boolean output) {}
 
     private Optional<String> hitNode(Vec2 world) {
         for (Graph.Node node : state.nodes()) {
@@ -171,10 +171,12 @@ public final class InputController {
         for (Graph.Node node : state.nodes()) {
             Vec2 origin = state.layout().get(node.id());
             if (origin == null) continue;
-            if (state.hasOutputPort(node.id()) && NodeGeometry.outputPort(origin).distanceTo(world) <= NodeGeometry.MAGNET_RADIUS)
-                return Optional.of(new PortHit(node.id(), true));
-            if (state.hasInputPort(node.id()) && NodeGeometry.inputPort(origin).distanceTo(world) <= NodeGeometry.MAGNET_RADIUS)
-                return Optional.of(new PortHit(node.id(), false));
+            for (var port : node.type().outputPorts())
+                if (NodeGeometry.port(origin,node.type(),port.name(),true).distanceTo(world) <= NodeGeometry.MAGNET_RADIUS)
+                    return Optional.of(new PortHit(node.id(),port.name(),true));
+            for (var port : node.type().inputPorts())
+                if (NodeGeometry.port(origin,node.type(),port.name(),false).distanceTo(world) <= NodeGeometry.MAGNET_RADIUS)
+                    return Optional.of(new PortHit(node.id(),port.name(),false));
         }
         return Optional.empty();
     }

@@ -16,6 +16,12 @@ public final class NodeGeometry {
 
     public static Vec2 outputPort(Vec2 nodeOrigin) { return nodeOrigin.plus(WIDTH, HEIGHT / 2); }
     public static Vec2 inputPort(Vec2 nodeOrigin) { return nodeOrigin.plus(0, HEIGHT / 2); }
+    public static Vec2 port(Vec2 origin, groove.engine.NodeType type, String name, boolean output) {
+        var ports = output ? type.outputPorts() : type.inputPorts();
+        for (int i=0;i<ports.size();i++) if (ports.get(i).name().equals(name))
+            return origin.plus(output ? WIDTH : 0, HEIGHT/2 + i*26);
+        throw new IllegalArgumentException("Unknown port " + name);
+    }
 
     public static boolean containsBody(Vec2 nodeOrigin, Vec2 point) {
         return point.x() >= nodeOrigin.x() && point.x() <= nodeOrigin.x() + WIDTH

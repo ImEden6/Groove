@@ -151,6 +151,8 @@ public final class MusicServer {
                                 .executes(ctx -> change(ctx.getSource(), "demo", 0)))
                         .then(Commands.literal("sample-demo").requires(s -> s.hasPermission(2))
                                 .executes(ctx -> change(ctx.getSource(), "sample-demo", 0)))
+                        .then(Commands.literal("signal-demo").requires(s -> s.hasPermission(2))
+                                .executes(ctx -> change(ctx.getSource(), "signal-demo", 0)))
                         .then(Commands.literal("load").requires(s -> s.hasPermission(2))
                                 .executes(ctx -> change(ctx.getSource(), "load", 0)))
                         .then(Commands.literal("save").requires(s -> s.hasPermission(2))
@@ -174,7 +176,7 @@ public final class MusicServer {
         source.sendSuccess(() -> Component.literal("Groove: " + (state.playing() ? "playing" : "stopped")
                 + ", " + state.bpm() + " BPM, revision " + snapshot.revision()
                 + (snapshot.pending() == null ? "" : " (change queued)")
-                + ". Commands: play, stop, demo, tempo <bpm>, save, load."), false);
+                + ". Commands: play, stop, demo, sample-demo, signal-demo, tempo <bpm>, save, load."), false);
         return 1;
     }
 
@@ -188,6 +190,7 @@ public final class MusicServer {
             var loaded = action.equals("load") ? SessionStore.read(active.saveRoot) : null;
             Graph graph = loaded != null ? loaded.graph()
                     : action.equals("demo") ? Graph.demo()
+                            : action.equals("signal-demo") ? groove.engine.SignalDemo.graph()
                             : action.equals("sample-demo") ? groove.engine.samples.FactorySamples.demo()
                                     : state.graph();
             boolean playing = action.equals("play") || (!action.equals("stop") && state.playing());

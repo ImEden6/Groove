@@ -7,7 +7,7 @@ public final class LiveTests {
     public static void main(String[] args) {
         Graph demo = Graph.demo();
         check(GraphCompiler.compile(demo).size() == 9, "Demo graph event count");
-        invalid(() -> GraphCompiler.compile(new Graph(3, demo.nodes(), demo.edges())));
+        invalid(() -> GraphCompiler.compile(new Graph(4, demo.nodes(), demo.edges())));
         invalid(() -> GraphCompiler.compile(new Graph(1, List.of(), List.of())));
         var extraNodes = new ArrayList<>(demo.nodes()); extraNodes.add(demo.nodes().getFirst());
         invalid(() -> GraphCompiler.compile(new Graph(1, extraNodes, demo.edges())));
