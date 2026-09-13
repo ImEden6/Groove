@@ -8,7 +8,7 @@ public enum NodeType {
     STACK,
     OUTPUT,
     LFO, ENVELOPE, ATTENUVERTER, STEP_SEQUENCE,
-    AUDIO_RENDER, FILTER, DELAY, MIX_BUS;
+    AUDIO_RENDER, FILTER, DELAY, MIX_BUS, TRIGGER_RENDER;
 
     private static final java.util.List<Port> PATTERN_OUTPUT = java.util.List.of(new Port("out", PortType.PATTERN, 0, 128));
     private static final java.util.List<Port> PATTERN_INPUT = java.util.List.of(new Port("in", PortType.PATTERN, 1, 1));
@@ -18,6 +18,7 @@ public enum NodeType {
     private static final java.util.List<Port> STEP_SEQUENCE_OUTPUT = java.util.List.of(
             new Port("out", PortType.MOD_FLOAT, 0, 128), new Port("trigger", PortType.TRIGGER, 0, 128));
     private static final java.util.List<Port> AUDIO_OUTPUT = java.util.List.of(new Port("out", PortType.AUDIO, 0, 128));
+    private static final java.util.List<Port> TRIGGER_OUTPUT = java.util.List.of(new Port("out", PortType.TRIGGER, 0, 128));
     private static final java.util.List<Port> OUTPUT_INPUT = java.util.List.of(
             new Port("in", PortType.PATTERN, 0, 1), new Port("audio", PortType.AUDIO, 0, 1));
     private static final java.util.List<Port> ENVELOPE_INPUT = java.util.List.of(new Port("trigger", PortType.TRIGGER, 1, 1));
@@ -35,6 +36,7 @@ public enum NodeType {
             case LFO, ENVELOPE, ATTENUVERTER -> MOD_OUTPUT;
             case STEP_SEQUENCE -> STEP_SEQUENCE_OUTPUT;
             case AUDIO_RENDER, FILTER, DELAY, MIX_BUS -> AUDIO_OUTPUT;
+            case TRIGGER_RENDER -> TRIGGER_OUTPUT;
             default -> PATTERN_OUTPUT;
         };
     }
@@ -43,7 +45,7 @@ public enum NodeType {
         return switch (this) {
             case TONE, GENERATOR_SAMPLE -> NO_PORTS;
             case STACK -> STACK_INPUT;
-            case FAST, EUCLID, AUDIO_RENDER -> PATTERN_INPUT;
+            case FAST, EUCLID, AUDIO_RENDER, TRIGGER_RENDER -> PATTERN_INPUT;
             case OUTPUT -> OUTPUT_INPUT;
             case LFO, STEP_SEQUENCE -> NO_PORTS;
             case ENVELOPE -> ENVELOPE_INPUT;
@@ -56,7 +58,7 @@ public enum NodeType {
 
     public boolean isSignalNode() {
         return switch (this) {
-            case LFO, ENVELOPE, ATTENUVERTER, STEP_SEQUENCE, AUDIO_RENDER, FILTER, DELAY, MIX_BUS -> true;
+            case LFO, ENVELOPE, ATTENUVERTER, STEP_SEQUENCE, AUDIO_RENDER, FILTER, DELAY, MIX_BUS, TRIGGER_RENDER -> true;
             default -> false;
         };
     }

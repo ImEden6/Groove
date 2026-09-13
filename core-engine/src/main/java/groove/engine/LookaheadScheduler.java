@@ -21,6 +21,7 @@ public final class LookaheadScheduler {
     }
     private final Pattern pattern;
     private final int historyCycles;
+    private final boolean retainAllEvents;
     private final Bucket[] ring = new Bucket[RING_SIZE];
     private volatile Window window;
     public LookaheadScheduler(Pattern pattern, double sampleHistorySeconds, double bpm) {
@@ -28,6 +29,20 @@ public final class LookaheadScheduler {
         if (!Double.isFinite(sampleHistorySeconds) || sampleHistorySeconds < 0 || sampleHistorySeconds > 40
                 || !Double.isFinite(bpm) || bpm < 30 || bpm > 300) throw new IllegalArgumentException("Invalid scheduler horizon");
         historyCycles = (int)Math.ceil(sampleHistorySeconds * bpm / 240) + 1;
+        retainAllEvents = false;
+    }
+    /** Cycle-bounded lookback, independent of tempo/sample duration, that retains every event
+     *  (not just sample onsets) back to historyCycles. Used by trigger sources, where a consumer
+     *  (e.g. ENVELOPE) needs to see a non-sample onset up to a fixed number of cycles back
+     *  regardless of bpm; the seconds-based constructor's "discard ended tone events past one
+     *  cycle back" rule (correct for audio sources, where a finished tone's pattern event stops
+     *  mattering once the voice itself ends) would otherwise prune exactly the onsets a
+     *  multi-cycle envelope release needs to stay visible. */
+    public LookaheadScheduler(Pattern pattern, int historyCycles) {
+        this.pattern = Objects.requireNonNull(pattern);
+        if (historyCycles < 0 || historyCycles > RING_SIZE - LOOKAHEAD_CYCLES) throw new IllegalArgumentException("Invalid scheduler horizon");
+        this.historyCycles = historyCycles;
+        retainAllEvents = true;
     }
     public Window window() { return window; }
     /** Control/worker thread only. Reuses fixed cycle buckets, publishing atomically after a complete fill. */
@@ -58,7 +73,9 @@ public final class LookaheadScheduler {
             for (Entry entry : bucket.entries) {
                 Event e = entry.event;
                 // Retain tone continuations and sample onsets; discard historical tones that ended.
-                if (e.sample() == null && e.whole().end() <= base - 1) continue;
+                // A trigger scheduler (retainAllEvents) keeps every event back to historyCycles instead,
+                // since a still-releasing envelope voice needs its onset visible well past one cycle back.
+                if (!retainAllEvents && e.sample() == null && e.whole().end() <= base - 1) continue;
                 unique.putIfAbsent(new Key(e.whole(), e.tone(), e.sample(), entry.ordinal), entry);
             }
         }

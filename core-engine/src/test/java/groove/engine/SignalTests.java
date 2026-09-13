@@ -4,7 +4,7 @@ import java.util.*;
 
 final class SignalTests {
     static void run() {
-        validation(); modulation(); feedback(); filter(); live(); multipleSources(); multipleSourceLifecycle(); allocation();
+        validation(); modulation(); feedback(); filter(); live(); multipleSources(); multipleSourceLifecycle(); triggerRenderPlumbing(); arbitraryTriggerEnvelope(); allocation();
         System.out.println("Signal graph modulation, feedback, live and allocation checks passed.");
     }
     private static Graph.Node n(String id,NodeType type,Map<String,Double> params) { return new Graph.Node(id,type,params); }
@@ -245,6 +245,125 @@ final class SignalTests {
         a.render(x,128,3_000_000_000L); fresh.render(y,128,3_000_000_000L);
         check(Arrays.equals(x,y),"Pending tempo revision includes all independent sources");
     }
+    /** Step-1 plumbing only: TRIGGER_RENDER/ENVELOPE compile, schedule and propagate live-renderer
+     *  coverage/resync correctly. ENVELOPE's own evaluated output isn't trigger-aware yet (step 2). */
+    private static void triggerRenderPlumbing() {
+        Graph graph = base(List.of(n("trig",NodeType.TRIGGER_RENDER,Map.of()),n("env",NodeType.ENVELOPE,Map.of()),
+                n("mix",NodeType.MIX_BUS,Map.of())),
+                List.of(Graph.edge("tone","trig"),new Graph.Edge("trig","out","env","trigger"),
+                        Graph.edge("render","mix"),new Graph.Edge("env","out","mix","gain"),out("mix")));
+        SignalGraph signals = GraphCompiler.compile(graph).signals();
+        check(signals.triggerCount()==1 && signals.triggerNodeId(0).equals("trig"),"Stable trigger mapping");
+        // Interleave the trigger before its source/effect nodes to prove ordinals aren't node indices.
+        Graph interleaved = new Graph(3, List.of(n("out",NodeType.OUTPUT,Map.of()),n("trig",NodeType.TRIGGER_RENDER,Map.of()),
+                n("tone",NodeType.TONE,Map.of()),n("env",NodeType.ENVELOPE,Map.of()),n("render",NodeType.AUDIO_RENDER,Map.of()),
+                n("mix",NodeType.MIX_BUS,Map.of())),
+                List.of(Graph.edge("tone","trig"),new Graph.Edge("trig","out","env","trigger"),
+                        Graph.edge("tone","render"),Graph.edge("render","mix"),new Graph.Edge("env","out","mix","gain"),out("mix")));
+        check(GraphCompiler.compile(interleaved).signals().triggerNodeId(0).equals("trig"),"Trigger ordinal independent of node order");
+        // Live scheduling: the trigger child must be prepared, captured and propagate schedule misses like a source child.
+        var program = new LiveRenderer.Program(state(graph,0,0,120),GraphCompiler.compile(graph));
+        var timeline = new LiveRenderer.Timeline(program,null);
+        LiveRenderer live = new LiveRenderer(); live.publish(timeline);
+        float[] x = new float[256];
+        timeline.prepare(0); live.render(x,128,0);
+        check(live.scheduleMisses()==0,"Trigger window prepared alongside audio sources");
+        live.render(x,128,40_000_000_000L);
+        check(Arrays.equals(x,new float[256]) && live.scheduleMisses()>0,"Uncovered trigger window silences the whole route");
+        timeline.prepare(40_000_000_000L); live.resynchronize();
+        LiveRenderer fresh = new LiveRenderer(); fresh.publish(timeline);
+        float[] y = new float[256];
+        live.render(x,128,40_000_000_000L); fresh.render(y,128,40_000_000_000L);
+        check(Arrays.equals(x,y),"Recovery resets the trigger child alongside every audio source");
+        // Cap: exceeding MAX_TRIGGER_SOURCES is rejected before reachability is even checked.
+        var tooManyNodes = new ArrayList<Graph.Node>();
+        for (int i=0;i<SignalGraph.MAX_TRIGGER_SOURCES+1;i++) tooManyNodes.add(n("trig"+i,NodeType.TRIGGER_RENDER,Map.of()));
+        invalid(() -> GraphCompiler.compile(base(tooManyNodes,List.of())));
+        // Exactly at the cap, fully wired through its own filter chain, still compiles.
+        var maxNodes = new ArrayList<Graph.Node>(); var maxEdges = new ArrayList<Graph.Edge>();
+        String filterChain = "render";
+        for (int i=0;i<SignalGraph.MAX_TRIGGER_SOURCES;i++) {
+            String tid="trig"+i, eid="env"+i, fid="filter"+i;
+            maxNodes.add(n(tid,NodeType.TRIGGER_RENDER,Map.of())); maxNodes.add(n(eid,NodeType.ENVELOPE,Map.of()));
+            maxNodes.add(n(fid,NodeType.FILTER,Map.of()));
+            maxEdges.add(Graph.edge("tone",tid)); maxEdges.add(new Graph.Edge(tid,"out",eid,"trigger"));
+            maxEdges.add(Graph.edge(filterChain,fid)); maxEdges.add(new Graph.Edge(eid,"out",fid,"cutoff"));
+            filterChain = fid;
+        }
+        maxEdges.add(out(filterChain));
+        check(GraphCompiler.compile(base(maxNodes,maxEdges)).signals().triggerCount()==SignalGraph.MAX_TRIGGER_SOURCES,"Maximum trigger source count compiles");
+    }
+    private static long cycleNanos(double cycle,double bpm) { return Math.round(cycle*240e9/bpm); }
+    /** Manually primes a single-trigger-source graph's window, mirroring what LiveRenderer's
+     *  capture()/sample() do automatically, so evaluate()'s TRIGGER_RENDER branch has a real
+     *  window to scan when reached directly through SignalRuntime instead of LiveRenderer. */
+    private static void primeTrigger(SignalRuntime dsp,SignalGraph signals,double cycle,double bpm) {
+        var scheduler = new LookaheadScheduler(signals.triggerPlan(0).pattern(),SignalGraph.MAX_ENVELOPE_TAIL_CYCLES);
+        scheduler.prepare(cycle);
+        dsp.process(new double[signals.sourceCount()][2],new LookaheadScheduler.Window[]{scheduler.window()},new double[2],cycleNanos(cycle,bpm));
+    }
+    private static void arbitraryTriggerEnvelope() {
+        // Regression: LookaheadScheduler's audio-tuned retention filter discards a non-sample
+        // event once its whole arc ends more than ~1 cycle before the queried base, regardless
+        // of historyCycles, unless the trigger constructor opts out via retainAllEvents. Assert
+        // directly at the scheduler level that a short (~1/8-cycle) onset from several cycles
+        // back is still present, since going through the full periodic-pattern envelope math
+        // makes isolating one specific historical onset awkward (patterns repeat every cycle).
+        Graph sparse = base(List.of(n("euclid",NodeType.EUCLID,Map.of("steps",8.0,"pulses",1.0)),
+                n("trig",NodeType.TRIGGER_RENDER,Map.of()),n("env",NodeType.ENVELOPE,Map.of()),n("mix",NodeType.MIX_BUS,Map.of())),
+                List.of(Graph.edge("tone","euclid"),Graph.edge("euclid","trig"),new Graph.Edge("trig","out","env","trigger"),
+                        Graph.edge("render","mix"),new Graph.Edge("env","out","mix","gain"),out("mix")));
+        var sparseSignals = GraphCompiler.compile(sparse).signals();
+        var scheduler = new LookaheadScheduler(sparseSignals.triggerPlan(0).pattern(),SignalGraph.MAX_ENVELOPE_TAIL_CYCLES);
+        scheduler.prepare(5.0);
+        boolean sawOldOnset = false;
+        for (int e=0;e<scheduler.window().size();e++)
+            if (scheduler.window().entry(e).event().whole().start() <= 2.0) sawOldOnset = true;
+        check(sawOldOnset,"Trigger scheduler retains a short non-sample onset several cycles back, not just ~1 cycle");
+        // A EUCLID(4,4) firing every step is isochronous at period 1/4, identical to a
+        // STEP_SEQUENCE(steps=1,rate=4) trigger in ONE_SHOT mode: same onset timing means the
+        // same age/releaseAt math, so the two graphs' mixed audio should be bit-identical.
+        Map<String,Double> envParams = Map.of("attack",.02,"decay",.05,"sustain",.4,"release",.03,"mode",0.0);
+        Graph arbitrary = base(List.of(n("euclid",NodeType.EUCLID,Map.of("steps",4.0,"pulses",4.0)),
+                n("trig",NodeType.TRIGGER_RENDER,Map.of()),n("env",NodeType.ENVELOPE,envParams),n("mix",NodeType.MIX_BUS,Map.of())),
+                List.of(Graph.edge("tone","euclid"),Graph.edge("euclid","trig"),new Graph.Edge("trig","out","env","trigger"),
+                        Graph.edge("render","mix"),new Graph.Edge("env","out","mix","gain"),out("mix")));
+        Graph reference = base(List.of(n("seq",NodeType.STEP_SEQUENCE,Map.of("steps",1.0,"rate",4.0)),
+                n("env",NodeType.ENVELOPE,envParams),n("mix",NodeType.MIX_BUS,Map.of())),
+                List.of(new Graph.Edge("seq","trigger","env","trigger"),
+                        Graph.edge("render","mix"),new Graph.Edge("env","out","mix","gain"),out("mix")));
+        float[] fromTrigger = renderFrames(arbitrary,4000,137), fromSequence = renderFrames(reference,4000,137);
+        for (int i=0;i<fromTrigger.length;i++) close(fromTrigger[i],fromSequence[i],1e-6,"Arbitrary pattern trigger matches an equivalent periodic step sequence");
+        // Overlap: a still-releasing earlier voice must not be clobbered by a fresh, quieter
+        // attack. Compare the full two-onset graph against an onset-2-only variant at a point
+        // where onset 1 is still decaying and onset 2 has barely begun; if MAX combine is
+        // working, the full graph's value must exceed the onset-2-only graph's value, since
+        // onset 2's own contribution is identical in both.
+        Map<String,Double> overlapParams = Map.of("attack",.01,"decay",.05,"sustain",.9,"release",.3,"mode",0.0);
+        Graph both = base(List.of(n("euclid",NodeType.EUCLID,Map.of("steps",8.0,"pulses",8.0)),
+                n("trig",NodeType.TRIGGER_RENDER,Map.of()),n("env",NodeType.ENVELOPE,overlapParams),n("mix",NodeType.MIX_BUS,Map.of())),
+                List.of(Graph.edge("tone","euclid"),Graph.edge("euclid","trig"),new Graph.Edge("trig","out","env","trigger"),
+                        Graph.edge("render","mix"),new Graph.Edge("env","out","mix","gain"),out("mix")));
+        Graph onset2Only = replace(both,"euclid",Map.of("steps",8.0,"pulses",1.0,"rotation",1.0));
+        SignalGraph bothSignals = GraphCompiler.compile(both).signals(), onset2Signals = GraphCompiler.compile(onset2Only).signals();
+        SignalRuntime bothDsp = bothSignals.runtime(state(both,0,0,120)), onset2Dsp = onset2Signals.runtime(state(onset2Only,0,0,120));
+        double cycle = .13;
+        primeTrigger(bothDsp,bothSignals,cycle,120); primeTrigger(onset2Dsp,onset2Signals,cycle,120);
+        double bothValue = bothDsp.control("env",cycleNanos(cycle,120)), onset2Value = onset2Dsp.control("env",cycleNanos(cycle,120));
+        check(bothValue > onset2Value + .1,"Still-releasing voice's contribution survives a newer, quieter attack: "+bothValue+" vs "+onset2Value);
+        // Late join / backward seek determinism: evaluate() must stay a pure function of the
+        // window, not carry state forward, since PHASE-2-SIGNALS.md promises a fresh client at
+        // the same time sees the same control value.
+        SignalRuntime freshDsp = bothSignals.runtime(state(both,0,0,120));
+        primeTrigger(freshDsp,bothSignals,cycle,120);
+        close(freshDsp.control("env",cycleNanos(cycle,120)),bothValue,0,"Late join matches an already-running client at the same cycle");
+        double earlierCycle = .05;
+        primeTrigger(bothDsp,bothSignals,earlierCycle,120);
+        double rewound = bothDsp.control("env",cycleNanos(earlierCycle,120));
+        check(rewound != bothValue,"Sanity: the two probed cycles are not coincidentally equal");
+        primeTrigger(bothDsp,bothSignals,cycle,120);
+        close(bothDsp.control("env",cycleNanos(cycle,120)),bothValue,0,"Backward seek then forward re-evaluation reproduces the same value");
+    }
     private static float[] renderFrames(Graph graph,int frames,int chunk) {
         var timeline=new LiveRenderer.Timeline(new LiveRenderer.Program(state(graph,0,0,120),GraphCompiler.compile(graph)),null);
         LiveRenderer renderer=new LiveRenderer(); renderer.publish(timeline);
@@ -276,6 +395,17 @@ final class SignalTests {
         for (int i=2000;i<4000;i++) renderer.render(block,64,Math.round(i*64*1e9/48000));
         bytes=allocation.getThreadAllocatedBytes(id)-before;
         check(bytes==0 && renderer.scheduleMisses()==0,"Live signal renderer allocation/starvation: "+bytes);
+        Graph triggered = base(List.of(n("euclid",NodeType.EUCLID,Map.of("steps",4.0,"pulses",4.0)),
+                n("trig",NodeType.TRIGGER_RENDER,Map.of()),n("env",NodeType.ENVELOPE,Map.of()),n("mix",NodeType.MIX_BUS,Map.of())),
+                List.of(Graph.edge("tone","euclid"),Graph.edge("euclid","trig"),new Graph.Edge("trig","out","env","trigger"),
+                        Graph.edge("render","mix"),new Graph.Edge("env","out","mix","gain"),out("mix")));
+        var triggerProgram = new LiveRenderer.Program(state(triggered,0,0,120),GraphCompiler.compile(triggered));
+        var triggerRenderer = new LiveRenderer(); triggerRenderer.publish(new LiveRenderer.Timeline(triggerProgram,null));
+        for (int i=0;i<2000;i++) triggerRenderer.render(block,64,Math.round(i*64*1e9/48000));
+        before=allocation.getThreadAllocatedBytes(id);
+        for (int i=2000;i<4000;i++) triggerRenderer.render(block,64,Math.round(i*64*1e9/48000));
+        bytes=allocation.getThreadAllocatedBytes(id)-before;
+        check(bytes==0 && triggerRenderer.scheduleMisses()==0,"Trigger-render envelope allocation/starvation: "+bytes);
     }
     private static void close(double actual,double expected,double tolerance,String message) { check(Math.abs(actual-expected)<=tolerance,message+": "+actual+" != "+expected); }
     private static void check(boolean condition,String message) { if (!condition) throw new AssertionError(message); }

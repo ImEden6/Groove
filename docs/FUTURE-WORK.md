@@ -24,7 +24,7 @@ Ranked by impact on gameplay, creative expressiveness, and multiplayer usability
 | **5** | **Workstation "In-Use" / Merge UI** | **60** | Medium | Multiplayer UX | Clear player feedback when multiple users attempt simultaneous sequencer edits (exclusive edit lock vs. optimistic conflict resolution). | Open |
 | **6** | **Master Peak Limiter Test Suite** | **50** | Low | Audio Safety | Automated verification that adversarial DSP graphs cannot distort or clip past safety ceilings beyond `tanh`. | Open |
 | **7** | **Cable Pulse Animation Toggle** | **45** | Low | Accessibility | Option to reduce visual motion / flashing during fast BPM sessions. | Open |
-| **8** | **Phase 2 routing extensions** | **35** | Very High | Architecture | Independent audio-render sources have landed (up to eight, shared event budget). Remaining: arbitrary pattern triggers/polyphonic envelopes and effect-history reconstruction. | Partial (1 of 3) |
+| **8** | **Phase 2 routing extensions** | **35** | Very High | Architecture | Independent audio-render sources and arbitrary pattern triggers/polyphonic envelopes have landed (each up to eight, shared event budget). Remaining: effect-history reconstruction on late join. | Partial (2 of 3) |
 
 ---
 
@@ -36,6 +36,10 @@ The following items from earlier roadmaps are fully implemented and verified in 
   - Up to eight independent pattern-to-audio pipelines with private voice pools and scheduler windows.
   - Separate filter/delay routes, shared upstream patterns, and a combined 128-event cost budget.
   - Multi-source sample playback, worker refill, seek/recovery, packet/persistence and allocation checks.
+- **Arbitrary Pattern Triggers & Polyphonic Envelopes ([PHASE-2-SIGNALS.md](PHASE-2-SIGNALS.md))**:
+  - `trigger_render` lets any pattern subgraph drive an `envelope`, not just `step_sequence`; up to eight per graph.
+  - Overlapping triggers combine with MAX, keeping an envelope's output within its documented 0-1 range.
+  - Stateless per-call window scan preserves late-join/backward-seek determinism; zero-allocation rendering.
 
 - **Phase 1 DSP Primitives ([ENGINE-EVOLUTION.md](ENGINE-EVOLUTION.md))**:
   - Filter on `sample` nodes (`cutoffHz` 20–20000 Hz, `resonanceQ` 0.1–20).
@@ -54,8 +58,7 @@ The following items from earlier roadmaps are fully implemented and verified in 
 
 ## DSP / Engine (Remaining)
 
-- **Phase 2 routing extensions.** Modulation nodes, 64-frame control ramps, named sockets, delayed feedback and multiple independent audio-render sources have landed; see [signals](PHASE-2-SIGNALS.md). Remaining extensions include:
-  - Arbitrary pattern triggers and overlapping polyphonic envelopes (currently periodic sequence trigger arcs).
+- **Phase 2 routing extensions.** Modulation nodes, 64-frame control ramps, named sockets, delayed feedback, multiple independent audio-render sources, and arbitrary pattern triggers/polyphonic envelopes have landed; see [signals](PHASE-2-SIGNALS.md). Remaining:
   - Reconstruction of historical echoes/filter state for late joins and graph edits.
 - **No tempo automation, seeking, or non-integer-cycle start.** Dynamic tempo changes at runtime exist via `/groove tempo`, but score/pattern-side tempo curves and timeline seeking do not.
 

@@ -13,19 +13,40 @@ public final class LiveRenderer {
         private final java.util.Map<groove.engine.samples.AssetRef, groove.engine.samples.SampleData> samples;
         private final LookaheadScheduler scheduler;
         private final Program[] sources;
+        private final Program[] triggers;
+        /** True for a trigger child specifically; the single source of truth VoiceProgram reads
+         *  to derive its own needsVoicePool, instead of taking a second, separately-threaded flag
+         *  that could drift out of sync with this one. */
+        private final boolean isTriggerSource;
         public Program(SessionState state, LoopPlan plan) { this(state, plan, java.util.Map.of()); }
         public Program(SessionState state, LoopPlan plan, java.util.Map<groove.engine.samples.AssetRef, groove.engine.samples.SampleData> samples) {
+            this(state, plan, samples, false);
+        }
+        /** isTriggerSource picks the scheduler's lookback strategy: a trigger source needs a
+         *  fixed cycle-bounded lookback (so a still-releasing ENVELOPE voice's onset stays
+         *  visible) rather than the sample-duration-based history an audio source uses. */
+        private Program(SessionState state, LoopPlan plan, java.util.Map<groove.engine.samples.AssetRef, groove.engine.samples.SampleData> samples, boolean isTriggerSource) {
             this.state = state; this.plan = plan; this.samples = java.util.Map.copyOf(samples);
+            this.isTriggerSource = isTriggerSource;
             SignalGraph signals = plan.signals();
             if (signals != null) {
                 sources = new Program[signals.sourceCount()];
-                for (int i = 0; i < sources.length; i++) sources[i] = new Program(state, signals.sourcePlan(i), this.samples);
+                for (int i = 0; i < sources.length; i++) sources[i] = new Program(state, signals.sourcePlan(i), this.samples, false);
+                triggers = new Program[signals.triggerCount()];
+                for (int i = 0; i < triggers.length; i++) triggers[i] = new Program(state, signals.triggerPlan(i), this.samples, true);
                 scheduler = null;
             } else {
                 sources = null;
-                double history = 0;
-                for (var pcm : samples.values()) history = Math.max(history, pcm.duration() / .25);
-                scheduler = plan.pattern() == null ? null : new LookaheadScheduler(plan.pattern(), history, state.bpm());
+                triggers = null;
+                if (plan.pattern() == null) {
+                    scheduler = null;
+                } else if (isTriggerSource) {
+                    scheduler = new LookaheadScheduler(plan.pattern(), SignalGraph.MAX_ENVELOPE_TAIL_CYCLES);
+                } else {
+                    double history = 0;
+                    for (var pcm : samples.values()) history = Math.max(history, pcm.duration() / .25);
+                    scheduler = new LookaheadScheduler(plan.pattern(), history, state.bpm());
+                }
             }
             prepare(state.effectiveNanos());
         }
@@ -34,6 +55,7 @@ public final class LiveRenderer {
         public java.util.Map<groove.engine.samples.AssetRef, groove.engine.samples.SampleData> samples() { return samples; }
         public void prepare(long serverNanos) {
             if (sources != null) for (Program source : sources) source.prepare(serverNanos);
+            if (triggers != null) for (Program trigger : triggers) trigger.prepare(serverNanos);
             if (scheduler != null) scheduler.prepare(state.cycleAt(Math.max(serverNanos, state.effectiveNanos())));
         }
     }
@@ -53,6 +75,8 @@ public final class LiveRenderer {
         final SignalRuntime signals;
         final VoiceProgram[] sources;
         final double[][] sourceStereo;
+        final VoiceProgram[] triggers;
+        final LookaheadScheduler.Window[] triggerWindows;
         LookaheadScheduler.Window window;
         boolean missed;
         final java.util.Map<groove.engine.samples.AssetRef, groove.engine.samples.SampleData> samples;
@@ -63,10 +87,15 @@ public final class LiveRenderer {
         final double[] onsets;
         int count, tailCursor;
         long lastNow = Long.MIN_VALUE, lastResync;
+        /** A voice pool (ActiveVoice[MAX_VOICES]) is only needed by a leaf program that's
+         *  actually mixed as audio; a trigger child is never mixed, only scheduled for onset
+         *  timing, so it's excluded here even though (like any plain pattern Program) its own
+         *  program.sources is null. Derived from Program's own isTriggerSource rather than
+         *  passed as a second, separately-named flag, so the two can't drift out of sync. */
         VoiceProgram(Program program) {
             state = program.state(); plan = program.plan(); samples = program.samples(); scheduler = program.scheduler;
             signals = plan.signals() == null ? null : plan.signals().runtime(state);
-            int capacity = program.sources == null ? MAX_VOICES : 0;
+            int capacity = program.sources == null && !program.isTriggerSource ? MAX_VOICES : 0;
             voices = new ActiveVoice[capacity]; tails = new ActiveVoice[capacity];
             events = new int[capacity]; data = new Event[capacity]; onsets = new double[capacity];
             if (program.sources != null) {
@@ -74,6 +103,11 @@ public final class LiveRenderer {
                 sourceStereo = new double[sources.length][2];
                 for (int i = 0; i < sources.length; i++) sources[i] = new VoiceProgram(program.sources[i]);
             } else { sources = null; sourceStereo = null; }
+            if (program.triggers != null) {
+                triggers = new VoiceProgram[program.triggers.length];
+                triggerWindows = new LookaheadScheduler.Window[triggers.length];
+                for (int i = 0; i < triggers.length; i++) triggers[i] = new VoiceProgram(program.triggers[i]);
+            } else { triggers = null; triggerWindows = null; }
             for (int i = 0; i < capacity; i++) {
                 voices[i] = new ActiveVoice(); tails[i] = new ActiveVoice();
             }
@@ -178,17 +212,20 @@ public final class LiveRenderer {
     private static void capture(VoiceProgram program) {
         if (program.scheduler != null) program.window = program.scheduler.window();
         if (program.sources != null) for (VoiceProgram source : program.sources) capture(source);
+        if (program.triggers != null) for (VoiceProgram trigger : program.triggers) capture(trigger);
     }
 
     private static boolean covered(VoiceProgram program, double cycles) {
         if (program.scheduler != null && (program.window == null || !program.window.contains(cycles))) return false;
         if (program.sources != null) for (VoiceProgram source : program.sources) if (!covered(source, cycles)) return false;
+        if (program.triggers != null) for (VoiceProgram trigger : program.triggers) if (!covered(trigger, cycles)) return false;
         return true;
     }
 
     private static void markMissed(VoiceProgram program) {
         program.missed = true;
         if (program.sources != null) for (VoiceProgram source : program.sources) markMissed(source);
+        if (program.triggers != null) for (VoiceProgram trigger : program.triggers) markMissed(trigger);
     }
 
     private void sampleTimeline(Playback timeline, long now, double[] out) {
@@ -214,6 +251,14 @@ public final class LiveRenderer {
         if (program == null || !program.state.playing() || now < program.state.effectiveNanos()) {
             out[0] = 0; out[1] = 0; return;
         }
+        // Trigger children carry a scheduler/window but no ActiveVoice pool (capacity 0): the
+        // voice-scheduling logic below assumes a real pool and isn't safe to run against a
+        // zero-length voices array. They're only ever read via their own .window field from the
+        // aggregate program's signal routing, never sampled directly, but guard defensively so a
+        // future caller that does call sample() on one degrades to silence instead of crashing.
+        if (program.voices.length == 0 && program.sources == null && program.triggers == null) {
+            out[0] = 0; out[1] = 0; return;
+        }
         double cycles = program.state.cycleAt(now);
         double secondsPerCycle = 240 / program.state.bpm();
         if (!covered(program, cycles)) {
@@ -230,7 +275,8 @@ public final class LiveRenderer {
         program.lastNow = now;
         if (program.sources != null) {
             for (int i = 0; i < program.sources.length; i++) sample(program.sources[i], now, program.sourceStereo[i]);
-            program.signals.process(program.sourceStereo, out, now);
+            for (int i = 0; i < program.triggers.length; i++) program.triggerWindows[i] = program.triggers[i].window;
+            program.signals.process(program.sourceStereo, program.triggerWindows, out, now);
             return;
         }
         program.count = 0;

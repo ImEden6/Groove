@@ -5,24 +5,35 @@ import java.util.*;
 /** Immutable, bounded signal routing compiled on the control worker, with independent pattern sources. */
 public final class SignalGraph {
     public static final int CONTROL_FRAMES = 64, MAX_DELAY_FRAMES = 48000, MAX_TOTAL_DELAY_FRAMES = 192000;
-    public static final int MAX_AUDIO_SOURCES = 8;
+    public static final int MAX_AUDIO_SOURCES = 8, MAX_TRIGGER_SOURCES = 8;
+    /** Longest an ENVELOPE's attack+decay+release can span (each 0-8 cycles); a trigger source's
+     *  scheduler must look back at least this far so a still-releasing voice's onset stays visible. */
+    public static final int MAX_ENVELOPE_TAIL_CYCLES = 24;
     final Graph.Node[] nodes;
     final int[][] audioInputs;
     final int[] controlInput, order;
     final int output;
     private final int[] sourceNodes;
     private final LoopPlan[] sourcePlans;
+    private final int[] triggerNodes;
+    private final LoopPlan[] triggerPlans;
     public int sourceCount() { return sourcePlans.length; }
     public String sourceNodeId(int source) { return nodes[sourceNodes[source]].id(); }
     int sourceNode(int source) { return sourceNodes[source]; }
     LoopPlan sourcePlan(int source) { return sourcePlans[source]; }
+    public int triggerCount() { return triggerPlans.length; }
+    public String triggerNodeId(int trigger) { return nodes[triggerNodes[trigger]].id(); }
+    int triggerNode(int trigger) { return triggerNodes[trigger]; }
+    LoopPlan triggerPlan(int trigger) { return triggerPlans[trigger]; }
 
     private SignalGraph(Graph graph, List<Integer> sorted, Map<String, Integer> ids, int output,
-                        List<Integer> renders, List<LoopPlan> plans) {
+                        List<Integer> renders, List<LoopPlan> plans, List<Integer> triggers, List<LoopPlan> triggerLoopPlans) {
         nodes = graph.nodes().toArray(Graph.Node[]::new);
         this.output = output;
         sourceNodes = renders.stream().mapToInt(Integer::intValue).toArray();
         sourcePlans = plans.toArray(LoopPlan[]::new);
+        triggerNodes = triggers.stream().mapToInt(Integer::intValue).toArray();
+        triggerPlans = triggerLoopPlans.toArray(LoopPlan[]::new);
         order = sorted.stream().mapToInt(Integer::intValue).toArray();
         audioInputs = new int[nodes.length][];
         controlInput = new int[nodes.length];
@@ -44,6 +55,7 @@ public final class SignalGraph {
         Map<String, Integer> ids = new LinkedHashMap<>();
         int output = -1, delayFrames = 0;
         List<Integer> renders = new ArrayList<>();
+        List<Integer> triggers = new ArrayList<>();
         for (int i = 0; i < graph.nodes().size(); i++) {
             Graph.Node n = graph.nodes().get(i);
             require(n.id() != null && n.id().matches("[a-zA-Z0-9_-]{1,32}") && ids.putIfAbsent(n.id(), i) == null, "Invalid or duplicate node id");
@@ -54,10 +66,12 @@ public final class SignalGraph {
             if (n.type().isSignalNode()) validateParams(n);
             if (n.type() == NodeType.OUTPUT) { require(output == -1 && n.params().isEmpty(), "Exactly one output required"); output = i; }
             if (n.type() == NodeType.AUDIO_RENDER) renders.add(i);
+            if (n.type() == NodeType.TRIGGER_RENDER) triggers.add(i);
             if (n.type() == NodeType.DELAY) delayFrames += (int)param(n, NodeParam.FRAMES, 64);
         }
         require(output >= 0 && !renders.isEmpty(), "Audio routing requires output and audio_render");
         require(renders.size() <= MAX_AUDIO_SOURCES, "At most eight audio_render sources supported");
+        require(triggers.size() <= MAX_TRIGGER_SOURCES, "At most eight trigger_render sources supported");
         require(delayFrames <= MAX_TOTAL_DELAY_FRAMES, "Delay memory budget exceeded");
         Set<Graph.Edge> unique = new HashSet<>();
         for (Graph.Edge e : graph.edges()) {
@@ -78,23 +92,38 @@ public final class SignalGraph {
         List<Integer> sorted = new ArrayList<>();
         int[] colors = new int[ids.size()];
         for (int i = 0; i < colors.length; i++) visit(i, graph, ids, colors, sorted, 0);
-        List<LoopPlan> plans = new ArrayList<>();
-        int cost = 0;
-        for (int render : renders) {
-            LoopPlan plan = compileSource(graph, graph.nodes().get(render).id());
-            cost += plan.eventCost();
-            require(cost <= GraphCompiler.MAX_EVENTS, "Audio sources exceed combined event budget");
-            plans.add(plan);
-        }
+        // Trigger sources share the audio sources' event budget, not an independent one, so a
+        // trigger-only patch can't bypass the combined MAX_EVENTS cap; threading cost through
+        // both calls (rather than each starting fresh) is what enforces that.
+        SourceBatch audio = compileSources(graph, renders, 0, "Audio sources exceed combined event budget");
+        SourceBatch triggered = compileSources(graph, triggers, audio.cost(), "Trigger sources exceed combined event budget");
+        List<LoopPlan> plans = audio.plans(), triggerPlans = triggered.plans();
+        List<LoopPlan> allPlans = new ArrayList<>(plans); allPlans.addAll(triggerPlans);
+        int cost = triggered.cost();
         // Aggregate preview is for inspection only. Playback schedules each source independently.
-        Pattern preview = Pattern.stack(plans.stream().map(LoopPlan::pattern).toArray(Pattern[]::new));
+        Pattern preview = Pattern.stack(allPlans.stream().map(LoopPlan::pattern).toArray(Pattern[]::new));
         // eventCost() above is GraphCompiler's upper-bound estimate per source (can be loose
         // through STACK/FAST/EUCLID); this checks the real materialized count of the combined
         // preview, which can differ from the summed estimate. Not redundant with the loop above.
         List<Event> events = preview.query(new Arc(0, 1));
         require(events.size() <= GraphCompiler.MAX_EVENTS, "Too many combined source events");
         events.sort(Comparator.comparingDouble(e -> e.whole().start()));
-        return new LoopPlan(events, preview, cost).withSignals(new SignalGraph(graph, sorted, ids, output, renders, plans));
+        return new LoopPlan(events, preview, cost).withSignals(new SignalGraph(graph, sorted, ids, output, renders, plans, triggers, triggerPlans));
+    }
+
+    private record SourceBatch(List<LoopPlan> plans, int cost) {}
+    /** Compiles one root list (audio renders, or trigger renders), enforcing budgetMessage
+     *  against costSoFar as it goes, so callers can chain two calls to share one running budget. */
+    private static SourceBatch compileSources(Graph graph, List<Integer> roots, int costSoFar, String budgetMessage) {
+        List<LoopPlan> plans = new ArrayList<>();
+        int cost = costSoFar;
+        for (int root : roots) {
+            LoopPlan plan = compileSource(graph, graph.nodes().get(root).id());
+            cost += plan.eventCost();
+            require(cost <= GraphCompiler.MAX_EVENTS, budgetMessage);
+            plans.add(plan);
+        }
+        return new SourceBatch(plans, cost);
     }
 
     private static LoopPlan compileSource(Graph graph, String renderId) {
@@ -144,7 +173,7 @@ public final class SignalGraph {
             case FILTER -> Set.of(NodeParam.CUTOFF_HZ, NodeParam.RESONANCE_Q);
             case DELAY -> Set.of(NodeParam.FRAMES);
             case MIX_BUS -> Set.of(NodeParam.GAIN);
-            case AUDIO_RENDER -> Set.of();
+            case AUDIO_RENDER, TRIGGER_RENDER -> Set.of();
             default -> throw new IllegalArgumentException("Invalid signal node");
         };
         require(allowed.containsAll(n.params().keySet()), "Unknown parameter on " + n.id());

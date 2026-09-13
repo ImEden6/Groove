@@ -11,6 +11,7 @@ graphs and their v1/v2 serialization continue to work unchanged.
 | JSON node type | Inputs | Outputs | Parameters and defaults |
 | --- | --- | --- | --- |
 | `audio_render` | `in`: PATTERN | `out`: AUDIO | None |
+| `trigger_render` | `in`: PATTERN | `out`: TRIGGER | None |
 | `lfo` | None | `out`: MOD_FLOAT | `rate=1` (.001–40); `sync=0` (0=Hz, 1=cycles); `wave=0` (sine, triangle, square, saw: 0–3) |
 | `step_sequence` | None | `out`: MOD_FLOAT; `trigger`: TRIGGER | `steps=4` (1–8); `rate=1` (.125–16 sequences/cycle); `gate=.5` (.001–1); `value0` through `value7` (-1–1, engine default 0) |
 | `envelope` | `trigger`: TRIGGER | `out`: MOD_FLOAT | `attack=.01`, `decay=.1`, `release=.1` (0–8 cycles); `sustain=.5` (0–1); `mode=0` (ONE_SHOT=0, GATED=1) |
@@ -47,11 +48,15 @@ immutable sample bank; sample/filter playback state remains private. All sources
 use the same transport and graph revision, including pending tempo changes.
 
 `SignalGraph.sourceNodeId(index)` identifies source order (render nodes in graph
-node order). `SignalRuntime.process(double[][] sources, double[] output, long now)`
-maps each source frame to its render node's position in the DSP arrays before
-evaluating routing. Control indices and audio source ordinals are separate. The
-old in-place `process(double[], long)` remains valid for single-source graphs and
-rejects multi-source graphs instead of broadcasting the same stereo mix to them.
+node order); `SignalGraph.triggerNodeId(index)` does the same for trigger sources.
+`SignalRuntime.process(double[][] sources, LookaheadScheduler.Window[] triggers,
+double[] output, long now)` maps each source frame and each trigger's prepared
+window to its render/trigger node's position in the DSP arrays before evaluating
+routing. Control indices and audio source/trigger ordinals are all separate. Two
+narrower overloads remain: `process(double[][] sources, double[] output, long now)`
+supplies no trigger windows (fine for graphs with none) and the original in-place
+`process(double[], long)` remains valid for single-audio-source, no-trigger graphs;
+both reject a graph shape they don't match instead of silently ignoring it.
 
 `LoopPlan` retains a combined, onset-sorted first-cycle preview for inspection.
 Playback does not use that combined pattern: the control worker prepares every
@@ -62,11 +67,29 @@ Publication, forward/backward seeks and resync apply to every source pipeline.
 
 Every sequence step emits a trigger whole arc with duration `gate/(steps*rate)`
 cycles, independent of its numeric value. These periodic trigger arcs are evaluated
-analytically, without allocating event lists in audio callbacks. Envelopes retrigger
-at each whole-arc start. ONE_SHOT begins release after attack plus decay; GATED
-begins release at the trigger's whole-arc end, including when that end occurs during
-attack or decay. Release starts from the level at that end. Arbitrary pattern-event
-trigger extraction and overlapping polyphonic envelopes are not implemented.
+analytically, without allocating event lists in audio callbacks. ONE_SHOT begins
+release after attack plus decay; GATED begins release at the trigger's whole-arc
+end, including when that end occurs during attack or decay. Release starts from
+the level at that end.
+
+`trigger_render` extends this to arbitrary patterns: any pattern subgraph (Euclid,
+stacked patterns, sample onsets) can drive an `envelope`'s trigger input, not just
+`step_sequence`. Each `trigger_render` compiles and schedules its upstream pattern
+independently, the same way an `audio_render` source does, with its own rolling
+scheduler bounded to a fixed 24-cycle lookback (the longest an envelope's
+attack+decay+release can span) rather than the sample-duration-based history an
+audio source uses. Up to eight `trigger_render` sources are supported per graph,
+sharing the same combined 128-event budget as `audio_render` sources.
+
+Every control-block evaluation scans the trigger source's current window fresh —
+it never carries voice state forward between calls, so it stays a pure function of
+(window, cycle) like the rest of this section's control evaluation, preserving the
+late-join/backward-seek determinism guaranteed below. Overlapping voices (a still-
+releasing earlier trigger and a newer one) combine with **MAX**, not sum: an
+`envelope`'s output stays within its documented 0–1 range regardless of how many
+triggers overlap, so existing cutoff/gain mappings don't silently change meaning
+under dense triggering. `step_sequence`'s own analytic trigger path is unchanged
+and does not go through this window-scan mechanism.
 
 ## Shared time and control buffers
 
@@ -138,8 +161,16 @@ sample-bank playback, scheduler rollover, late joins, missed-window recovery,
 backward seeks, pending tempo revisions and allocation-free multi-source rendering.
 Backend JSON, packet and transactional persistence checks use the two-source demo.
 
-Arbitrary pattern triggers/polyphonic envelopes and historical effect reconstruction
-remain open; this extension changes neither contract.
+`trigger_render` tests cover stable trigger-ordinal mapping independent of node
+order, live-renderer window preparation/coverage/resync propagation matching audio
+sources, the eight-source cap, numeric parity against an equivalent periodic
+`step_sequence` trigger, genuine voice overlap (a still-releasing earlier trigger
+outweighing a newer, quieter one under MAX combine), late-join and backward-seek
+determinism, and allocation-free rendering through the full live renderer.
+
+Historical effect reconstruction (delay/filter state surviving a late join) remains
+open; this extension changes neither that contract nor `step_sequence`'s own
+analytic trigger path.
 
 Command: `./gradlew.bat test :core-engine:check runClient -PaudioSmoke`.
 
