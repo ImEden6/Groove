@@ -17,7 +17,7 @@ Ranked by impact on gameplay, creative expressiveness, and multiplayer usability
 
 | Rank | Item | Value Points | Effort / Complexity | Impact Area | Key Bottleneck Solved | Status |
 |---|---|---|---|---|---|---|
-| **1** | **Headphone Item** | **95** | Medium | Gameplay & Audio | Personal client-side playback (`AL_SOURCE_RELATIVE`) without disturbing multiplayer neighbors; underwater muffling; Curios/Trinkets integration. | Open |
+| **1** | **Headphone Item** | **95** | Medium | Gameplay & Audio | Item, Trinkets equip slot, and priority routing over speaker/positional audio have landed. Remaining: a true `AL_SOURCE_RELATIVE` head-locked sink (currently reuses the non-positional monitor stream) and underwater muffling. | Partial |
 | **2** | **Server Resourcepack Distribution** | **80** | High | Multiplayer UX | Dynamic pack generation/pushing to connecting clients; eliminates manual out-of-band sample installation. | Open |
 | **3** | **Sample Drawer Hierarchy & Favorites** | **75** | Low–Medium | Editor UX | Speeds up browsing large custom sample packs beyond a flat list. | Open |
 | **4** | **Direct Entry & Keyboard Controls for Knobs** | **70** | Low | Accessibility & UX | Precision value entry and arrow-key stepping without pixel-hunting rotary drags. | Open |
@@ -59,7 +59,7 @@ The following items from earlier roadmaps are fully implemented and verified in 
 
 - **Speaker tower advanced routing & occlusion.** The core speaker tower block and positional audio system is functional. Future work includes in-world sound occlusion through intervening solid blocks, per-player bus configuration, and server-side distance validation.
 - **Graceful stream fade-out; no dimension-change handling.** Chunk unload already stops the affected speaker emitters (`MusicClient.removeSpeakers`), but it cuts them immediately rather than fading out. There is also no explicit handler for a dimension change (as opposed to a full disconnect), which can leave stale emitters until the next scan.
-- **No headphone item.** No Curios/Trinkets integration, no `AL_SOURCE_RELATIVE` head-locked audio sink, and no underwater muffling filter.
+- **Headphone item lacks a true head-locked sink and underwater muffling.** A wearable headphone item with a Trinkets equip slot has landed, and wearing it routes personal monitor audio ahead of speaker positional audio (`MusicClient`). It still reuses the existing non-positional monitor stream rather than a true `AL_SOURCE_RELATIVE` head-locked sink, and there is no underwater muffling filter.
 - **No live draft-graph monitoring through headphones.** Sample audition previews one sound at a time; continuously rendering a player's own uncommitted draft graph as a private headphone feed (a DJ-style cue/PFL channel, distinct from the shared session) is not built.
 
 ## Editor UI (Remaining)

@@ -2,7 +2,11 @@
 
 ## Still unimplemented (from this doc)
 
-- No headphone item (Curios/Trinkets integration, `AL_SOURCE_RELATIVE` head-locked sink, underwater muffling).
+- Headphone item, Trinkets equip slot, and priority routing (personal monitor over speaker audio,
+  with sample audition taking priority over both) have landed. Still no underwater muffling filter,
+  and headphone audio reuses the existing non-positional monitor stream rather than a true
+  `AL_SOURCE_RELATIVE` head-locked sink; live draft-graph monitoring through headphones is also
+  unimplemented; see [FUTURE-WORK.md](FUTURE-WORK.md).
 - Phase 2 extensions: multiple independent audio-render sources, arbitrary pattern triggers/polyphonic envelopes, and effect-history reconstruction on late join. Modulation nodes, control buffers, delayed routing and named editor sockets are implemented; see [signals](PHASE-2-SIGNALS.md).
 - No tempo automation, timeline seeking, or non-integer-cycle start (runtime `/groove tempo` exists; score/pattern-side tempo curves do not).
 - No adaptive resync tuning beyond fixed slew/step thresholds under asymmetric/high-jitter conditions.
@@ -25,8 +29,10 @@ WAV/Vorbis decoding, pitched one-shots, auditioning, bounded catalogs/caches, SH
 references, and 48-tap Kaiser-windowed sinc resampling; see [samples and packs](SAMPLES.md)
 and [engine evolution](ENGINE-EVOLUTION.md). Tone and sample nodes feature biquad low-pass
 filtering (`cutoffHz` and `resonanceQ`), with voice-stealing crossfades. V3 adds deterministic
-modulation and delayed audio routing; headphone items and score tempo automation remain future work; see
-[FUTURE-WORK.md](FUTURE-WORK.md) for the full current list.
+modulation and delayed audio routing (see [signals](PHASE-2-SIGNALS.md)). A wearable headphone
+item (Trinkets equip slot) now routes personal monitor audio ahead of speaker positional audio;
+score tempo automation remains future work; see [FUTURE-WORK.md](FUTURE-WORK.md) for the full
+current list.
 
 The milestone descriptions below preserve the longer-term design targets, not a
 claim that every production feature in those sections is already implemented.
@@ -114,4 +120,5 @@ The node editor, physical speaker blocks, and headphones can be layered onto
 these tested interfaces after local playback and synchronization work. The
 node editor has since landed (see [EDITOR-INTEGRATION.md](EDITOR-INTEGRATION.md));
 speaker blocks have also landed with positional audio (see [BACKEND-USAGE.md](BACKEND-USAGE.md));
-headphones have not — see [FUTURE-WORK.md](FUTURE-WORK.md).
+headphones have landed too, with priority routing over speaker/personal audio (see above);
+remaining gaps are tracked in [FUTURE-WORK.md](FUTURE-WORK.md).
