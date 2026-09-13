@@ -2,7 +2,7 @@
 
 ## Still unimplemented (from this doc)
 
-- Multiple independent audio-render sources and effect-history reconstruction remain future work. Typed ports, v3, modulation, delayed routing and named editor sockets have since landed; see [signals](PHASE-2-SIGNALS.md).
+- Arbitrary pattern triggers/polyphonic envelopes and effect-history reconstruction remain future work. Multiple independent audio-render sources, typed ports, v3, modulation, delayed routing and named editor sockets have since landed; see [signals](PHASE-2-SIGNALS.md).
 
 Stage 1 implemented the scheduling foundation while retaining graph v1/v2 and the existing packet format. Later increments add [typed ports/v3](PHASE-2-PORTS.md) and [modulation, feedback and named editor sockets](PHASE-2-SIGNALS.md).
 

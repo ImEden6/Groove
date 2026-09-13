@@ -2,7 +2,7 @@
 
 ## Still unimplemented (from this doc)
 
-- Multiple independent audio-render sources, arbitrary pattern-trigger envelopes and effect-history reconstruction. Control buffers, named ports, modulation and delayed routing have landed; see [signals](PHASE-2-SIGNALS.md).
+- Arbitrary pattern-trigger envelopes and effect-history reconstruction. Multiple independent audio sources, control buffers, named ports, modulation and delayed routing have landed; see [signals](PHASE-2-SIGNALS.md).
 
 Phase 1 retained graph versions 1 and 2, the existing packet format, saved-world format, and the one-cycle `LoopPlan`. Subsequent Phase 2 increments implement [scheduling](PHASE-2-SCHEDULER.md), [ports](PHASE-2-PORTS.md), and [modulation/audio routing](PHASE-2-SIGNALS.md).
 

@@ -310,7 +310,7 @@ public final class BackendTests {
             java.nio.file.Files.writeString(root.resolve("groove-tempo.txt"), "123");
             check(SessionStore.read(root).equals(original), "Legacy patch and tempo load together");
             SessionStore.write(root, original);
-            var next = new SessionStore.Saved(SignalGraph.assignBirths(SignalDemo.graph(), null, 123_456_789), 177);
+            var next = new SessionStore.Saved(SignalGraph.assignBirths(SignalDemo.multipleSources(), null, 123_456_789), 177);
             try {
                 SessionStore.write(root, next, (from, to) -> {
                     throw new java.nio.file.AtomicMoveNotSupportedException(from.toString(), to.toString(), "test failure");
@@ -354,7 +354,7 @@ public final class BackendTests {
             outputEditor.disconnectPort("out", firstPort, false);
             check(outputEditor.connect(secondSource, "out", "out", secondPort), "OUTPUT accepts alternate socket after disconnection");
         }
-        Graph graph = SignalGraph.assignBirths(SignalDemo.graph(), null, 987_654_321);
+        Graph graph = SignalGraph.assignBirths(SignalDemo.multipleSources(), null, 987_654_321);
         check(GraphJson.decode(GraphJson.encode(graph)).equals(graph), "Signal JSON preserves birth stamps and feedback edges");
         var state = new SessionState(2, 1_000_000_000, 0, 120, true, graph);
         var snapshot = new MusicPackets.Snapshot(UUID.randomUUID(), new SessionTimeline.Snapshot(state, null));

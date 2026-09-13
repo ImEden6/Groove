@@ -7,7 +7,7 @@
   and headphone audio reuses the existing non-positional monitor stream rather than a true
   `AL_SOURCE_RELATIVE` head-locked sink; live draft-graph monitoring through headphones is also
   unimplemented; see [FUTURE-WORK.md](FUTURE-WORK.md).
-- Phase 2 extensions: multiple independent audio-render sources, arbitrary pattern triggers/polyphonic envelopes, and effect-history reconstruction on late join. Modulation nodes, control buffers, delayed routing and named editor sockets are implemented; see [signals](PHASE-2-SIGNALS.md).
+- Phase 2 extensions: arbitrary pattern triggers/polyphonic envelopes and effect-history reconstruction on late join. Multiple independent audio-render sources, modulation nodes, control buffers, delayed routing and named editor sockets are implemented; see [signals](PHASE-2-SIGNALS.md).
 - No tempo automation, timeline seeking, or non-integer-cycle start (runtime `/groove tempo` exists; score/pattern-side tempo curves do not).
 - No adaptive resync tuning beyond fixed slew/step thresholds under asymmetric/high-jitter conditions.
 - No server-side chunk-unload or distance culling for audio session state (session is server-wide/persistent).

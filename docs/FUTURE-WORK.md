@@ -24,13 +24,18 @@ Ranked by impact on gameplay, creative expressiveness, and multiplayer usability
 | **5** | **Workstation "In-Use" / Merge UI** | **60** | Medium | Multiplayer UX | Clear player feedback when multiple users attempt simultaneous sequencer edits (exclusive edit lock vs. optimistic conflict resolution). | Open |
 | **6** | **Master Peak Limiter Test Suite** | **50** | Low | Audio Safety | Automated verification that adversarial DSP graphs cannot distort or clip past safety ceilings beyond `tanh`. | Open |
 | **7** | **Cable Pulse Animation Toggle** | **45** | Low | Accessibility | Option to reduce visual motion / flashing during fast BPM sessions. | Open |
-| **8** | **Phase 2 routing extensions** | **35** | Very High | Architecture | Modulation, control buffers, named ports and delayed feedback have landed. Next: independent audio sources, arbitrary pattern triggers and effect-history reconstruction. | Extensions |
+| **8** | **Phase 2 routing extensions** | **35** | Very High | Architecture | Independent audio-render sources have landed (up to eight, shared event budget). Remaining: arbitrary pattern triggers/polyphonic envelopes and effect-history reconstruction. | Partial (1 of 3) |
 
 ---
 
 ## Recently Landed Features
 
 The following items from earlier roadmaps are fully implemented and verified in the codebase:
+
+- **Independent Audio Sources ([PHASE-2-SIGNALS.md](PHASE-2-SIGNALS.md))**:
+  - Up to eight independent pattern-to-audio pipelines with private voice pools and scheduler windows.
+  - Separate filter/delay routes, shared upstream patterns, and a combined 128-event cost budget.
+  - Multi-source sample playback, worker refill, seek/recovery, packet/persistence and allocation checks.
 
 - **Phase 1 DSP Primitives ([ENGINE-EVOLUTION.md](ENGINE-EVOLUTION.md))**:
   - Filter on `sample` nodes (`cutoffHz` 20–20000 Hz, `resonanceQ` 0.1–20).
@@ -49,8 +54,7 @@ The following items from earlier roadmaps are fully implemented and verified in 
 
 ## DSP / Engine (Remaining)
 
-- **Phase 2 routing extensions.** Modulation nodes, 64-frame control ramps, named sockets and delayed feedback have landed; see [signals](PHASE-2-SIGNALS.md). Remaining extensions include:
-  - Multiple independent audio-render sources (currently stack patterns before one stereo source).
+- **Phase 2 routing extensions.** Modulation nodes, 64-frame control ramps, named sockets, delayed feedback and multiple independent audio-render sources have landed; see [signals](PHASE-2-SIGNALS.md). Remaining extensions include:
   - Arbitrary pattern triggers and overlapping polyphonic envelopes (currently periodic sequence trigger arcs).
   - Reconstruction of historical echoes/filter state for late joins and graph edits.
 - **No tempo automation, seeking, or non-integer-cycle start.** Dynamic tempo changes at runtime exist via `/groove tempo`, but score/pattern-side tempo curves and timeline seeking do not.

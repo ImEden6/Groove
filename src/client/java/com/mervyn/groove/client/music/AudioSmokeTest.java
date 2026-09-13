@@ -52,10 +52,10 @@ public final class AudioSmokeTest {
             }
             if (stream != null && stream.reads() >= 128 && !signals) {
                 long now = System.nanoTime();
-                Graph graph = SignalGraph.assignBirths(SignalDemo.graph(),null,now);
+                Graph graph = SignalGraph.assignBirths(SignalDemo.multipleSources(),null,now);
                 timeline = LiveRenderer.Timeline.compile(new SessionTimeline.Snapshot(new SessionState(2,now,0,128,true,graph),null));
                 timeline.prepare(now); renderer.publish(timeline); signals = true;
-                GrooveMod.LOGGER.info("Groove audio smoke switched to modulation and feedback routing");
+                GrooveMod.LOGGER.info("Groove audio smoke switched to two independent sources with modulation and feedback routing");
             }
             if (stream != null && stream.reads() >= 256 && !stopping) {
                 if (stream.maxQueuedFrames() == 0 || stream.peak() < .01 || stream.closed())

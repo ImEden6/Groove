@@ -12,18 +12,28 @@ public final class LiveRenderer {
         private final LoopPlan plan;
         private final java.util.Map<groove.engine.samples.AssetRef, groove.engine.samples.SampleData> samples;
         private final LookaheadScheduler scheduler;
+        private final Program[] sources;
         public Program(SessionState state, LoopPlan plan) { this(state, plan, java.util.Map.of()); }
         public Program(SessionState state, LoopPlan plan, java.util.Map<groove.engine.samples.AssetRef, groove.engine.samples.SampleData> samples) {
             this.state = state; this.plan = plan; this.samples = java.util.Map.copyOf(samples);
-            double history = 0;
-            for (var pcm : samples.values()) history = Math.max(history, pcm.duration() / .25);
-            scheduler = plan.pattern() == null ? null : new LookaheadScheduler(plan.pattern(), history, state.bpm());
+            SignalGraph signals = plan.signals();
+            if (signals != null) {
+                sources = new Program[signals.sourceCount()];
+                for (int i = 0; i < sources.length; i++) sources[i] = new Program(state, signals.sourcePlan(i), this.samples);
+                scheduler = null;
+            } else {
+                sources = null;
+                double history = 0;
+                for (var pcm : samples.values()) history = Math.max(history, pcm.duration() / .25);
+                scheduler = plan.pattern() == null ? null : new LookaheadScheduler(plan.pattern(), history, state.bpm());
+            }
             prepare(state.effectiveNanos());
         }
         public SessionState state() { return state; }
         public LoopPlan plan() { return plan; }
         public java.util.Map<groove.engine.samples.AssetRef, groove.engine.samples.SampleData> samples() { return samples; }
         public void prepare(long serverNanos) {
+            if (sources != null) for (Program source : sources) source.prepare(serverNanos);
             if (scheduler != null) scheduler.prepare(state.cycleAt(Math.max(serverNanos, state.effectiveNanos())));
         }
     }
@@ -41,20 +51,30 @@ public final class LiveRenderer {
         final LoopPlan plan;
         final LookaheadScheduler scheduler;
         final SignalRuntime signals;
+        final VoiceProgram[] sources;
+        final double[][] sourceStereo;
         LookaheadScheduler.Window window;
         boolean missed;
         final java.util.Map<groove.engine.samples.AssetRef, groove.engine.samples.SampleData> samples;
-        final ActiveVoice[] voices = new ActiveVoice[MAX_VOICES];
-        final ActiveVoice[] tails = new ActiveVoice[MAX_VOICES];
-        final int[] events = new int[MAX_VOICES];
-        final Event[] data = new Event[MAX_VOICES];
-        final double[] onsets = new double[MAX_VOICES];
+        final ActiveVoice[] voices;
+        final ActiveVoice[] tails;
+        final int[] events;
+        final Event[] data;
+        final double[] onsets;
         int count, tailCursor;
         long lastNow = Long.MIN_VALUE, lastResync;
         VoiceProgram(Program program) {
             state = program.state(); plan = program.plan(); samples = program.samples(); scheduler = program.scheduler;
             signals = plan.signals() == null ? null : plan.signals().runtime(state);
-            for (int i = 0; i < MAX_VOICES; i++) {
+            int capacity = program.sources == null ? MAX_VOICES : 0;
+            voices = new ActiveVoice[capacity]; tails = new ActiveVoice[capacity];
+            events = new int[capacity]; data = new Event[capacity]; onsets = new double[capacity];
+            if (program.sources != null) {
+                sources = new VoiceProgram[program.sources.length];
+                sourceStereo = new double[sources.length][2];
+                for (int i = 0; i < sources.length; i++) sources[i] = new VoiceProgram(program.sources[i]);
+            } else { sources = null; sourceStereo = null; }
+            for (int i = 0; i < capacity; i++) {
                 voices[i] = new ActiveVoice(); tails[i] = new ActiveVoice();
             }
         }
@@ -151,8 +171,24 @@ public final class LiveRenderer {
 
     private static void capture(Playback playback) {
         if (playback == null) return;
-        if (playback.current.scheduler != null) playback.current.window = playback.current.scheduler.window();
-        if (playback.pending != null && playback.pending.scheduler != null) playback.pending.window = playback.pending.scheduler.window();
+        capture(playback.current);
+        if (playback.pending != null) capture(playback.pending);
+    }
+
+    private static void capture(VoiceProgram program) {
+        if (program.scheduler != null) program.window = program.scheduler.window();
+        if (program.sources != null) for (VoiceProgram source : program.sources) capture(source);
+    }
+
+    private static boolean covered(VoiceProgram program, double cycles) {
+        if (program.scheduler != null && (program.window == null || !program.window.contains(cycles))) return false;
+        if (program.sources != null) for (VoiceProgram source : program.sources) if (!covered(source, cycles)) return false;
+        return true;
+    }
+
+    private static void markMissed(VoiceProgram program) {
+        program.missed = true;
+        if (program.sources != null) for (VoiceProgram source : program.sources) markMissed(source);
     }
 
     private void sampleTimeline(Playback timeline, long now, double[] out) {
@@ -180,8 +216,8 @@ public final class LiveRenderer {
         }
         double cycles = program.state.cycleAt(now);
         double secondsPerCycle = 240 / program.state.bpm();
-        if (program.scheduler != null && (program.window == null || !program.window.contains(cycles))) {
-            scheduleMisses++; program.missed = true; out[0] = 0; out[1] = 0; return;
+        if (!covered(program, cycles)) {
+            scheduleMisses++; markMissed(program); out[0] = 0; out[1] = 0; return;
         }
         // A seek discards historical filter/tail state, just like a fresh late join.
         if (program.missed || program.lastResync != resyncs || (program.lastNow != Long.MIN_VALUE && (now < program.lastNow || now - program.lastNow > 250_000_000L))) {
@@ -192,6 +228,11 @@ public final class LiveRenderer {
         program.missed = false;
         program.lastResync = resyncs;
         program.lastNow = now;
+        if (program.sources != null) {
+            for (int i = 0; i < program.sources.length; i++) sample(program.sources[i], now, program.sourceStereo[i]);
+            program.signals.process(program.sourceStereo, out, now);
+            return;
+        }
         program.count = 0;
         if (program.scheduler != null) {
             for (int i = 0; i < program.window.size(); i++) {
@@ -244,7 +285,6 @@ public final class LiveRenderer {
             addVoice(program, v, cycles, secondsPerCycle, STEAL_FADE[v.fadeFrame++], out);
             if (v.fadeFrame == STEAL_FRAMES) v.event = -1;
         }
-        if (program.signals != null) program.signals.process(out, now);
     }
 
     private static double eventDuration(VoiceProgram program, Event event, double secondsPerCycle) {

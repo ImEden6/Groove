@@ -4,7 +4,7 @@ import java.util.*;
 
 final class SignalTests {
     static void run() {
-        validation(); modulation(); feedback(); filter(); live(); allocation();
+        validation(); modulation(); feedback(); filter(); live(); multipleSources(); multipleSourceLifecycle(); allocation();
         System.out.println("Signal graph modulation, feedback, live and allocation checks passed.");
     }
     private static Graph.Node n(String id,NodeType type,Map<String,Double> params) { return new Graph.Node(id,type,params); }
@@ -121,6 +121,142 @@ final class SignalTests {
         float[] one=new float[512],two=new float[512]; whole.render(one,256,1_000_000_000); chunked.render(two,256,1_000_000_000);
         check(Arrays.equals(one,two),"Resync resets private effect state");
     }
+    private static Graph multipleGraph() {
+        // Intentionally interleave sources, effects and controls: source ordinals are not node indices.
+        return new Graph(3,List.of(n("out",NodeType.OUTPUT,Map.of()),n("right",NodeType.TONE,Map.of("frequency",660.0,"pan",1.0)),
+                n("renderL",NodeType.AUDIO_RENDER,Map.of()),n("lfo",NodeType.LFO,Map.of()),
+                n("left",NodeType.TONE,Map.of("frequency",110.0,"pan",-1.0)),n("delay",NodeType.DELAY,Map.of("frames",64.0)),
+                n("renderR",NodeType.AUDIO_RENDER,Map.of()),n("filter",NodeType.FILTER,Map.of("cutoffHz",2000.0)),
+                n("speed",NodeType.FAST,Map.of("factor",1.5)),n("mix",NodeType.MIX_BUS,Map.of())),
+                List.of(Graph.edge("left","speed"),Graph.edge("speed","renderL"),Graph.edge("right","renderR"),
+                        Graph.edge("renderL","delay"),Graph.edge("renderR","filter"),Graph.edge("delay","mix"),Graph.edge("filter","mix"),
+                        new Graph.Edge("lfo","out","mix","gain"),out("mix")));
+    }
+    private static void multipleSources() {
+        Graph graph=multipleGraph(); LoopPlan plan=GraphCompiler.compile(graph);
+        SignalGraph signals=plan.signals();
+        check(signals.sourceCount()==2 && signals.sourceNodeId(0).equals("renderL") && signals.sourceNodeId(1).equals("renderR"),"Stable source mapping");
+        SignalRuntime multiDsp=signals.runtime(state(graph,0,0,120));
+        double[][] inputs={{1,0},{0,.25}}; double[] output=new double[2];
+        invalid(() -> multiDsp.process(new double[2],0));
+        invalid(() -> multiDsp.process(new double[][]{{1,0}},output,0));
+        // Use a static mix for a directly measurable impulse and no control-array cross-talk.
+        var plainNodes=graph.nodes().stream().filter(n -> !n.id().equals("lfo")).toList();
+        var plainEdges=graph.edges().stream().filter(e -> !e.fromNode().equals("lfo")).toList();
+        Graph plain=new Graph(3,plainNodes,plainEdges);
+        SignalRuntime dsp=runtime(plain,state(plain,0,0,120));
+        Biquad reference=new Biquad(); reference.setLowPass(2000,Biquad.DEFAULT_Q,48000);
+        for(int f=0;f<128;f++) {
+            inputs[0][0]=f==0?1:0; inputs[1][1]=f==0?.25:0;
+            dsp.process(inputs,output,Math.round(f*1e9/48000));
+            close(output[0],f==64?1:0,1e-12,"Independent source delay");
+            close(output[1],reference.process(f==0?.25:0),1e-12,"Independent source filter");
+        }
+        // Feeding one shared pattern into two AUDIO_RENDER nodes must double its audio, not deduplicate it.
+        Graph shared=base(List.of(n("render2",NodeType.AUDIO_RENDER,Map.of()),n("mix",NodeType.MIX_BUS,Map.of())),
+                List.of(Graph.edge("tone","render2"),Graph.edge("render","mix"),Graph.edge("render2","mix"),out("mix")));
+        Graph single=base(List.of(),List.of(out("render")));
+        float[] both=renderFrames(shared,5000,137),one=renderFrames(single,5000,137);
+        for(int i=500;i<both.length;i++) {
+            double raw=Math.log((1+one[i])/(1-one[i]))/2;
+            close(both[i],Math.tanh(2*raw),2e-7,"Shared patterns retain independent voices");
+        }
+        float[] whole=renderFrames(graph,12000,12000),chunked=renderFrames(graph,12000,137);
+        for(int i=0;i<whole.length;i++) close(chunked[i],whole[i],1e-4,"Multiple-source chunk independence");
+        Graph onlyLeft=without(graph,Set.of("right","renderR","filter"));
+        Graph onlyRight=without(graph,Set.of("left","speed","renderL","delay"));
+        float[] leftReference=renderFrames(onlyLeft,12000,12000),rightReference=renderFrames(onlyRight,12000,12000);
+        for(int i=0;i<whole.length;i+=2) {
+            close(whole[i],leftReference[i],1e-7,"Left pipeline matches isolated renderer");
+            close(whole[i+1],rightReference[i+1],1e-7,"Right pipeline matches isolated renderer");
+        }
+        var crowdedNodes=new ArrayList<>(replace(graph,"left",Map.of()).nodes());
+        crowdedNodes.replaceAll(n -> n.id().equals("left") ? n("left",NodeType.STACK,Map.of()) : n);
+        var crowdedEdges=new ArrayList<>(graph.edges());
+        for(int i=0;i<40;i++) {
+            String id="crowd"+i;
+            String group="group"+(i/8);
+            if(i%8==0) {
+                crowdedNodes.add(n(group,NodeType.STACK,Map.of()));
+                crowdedEdges.add(Graph.edge(group,"left"));
+            }
+            crowdedNodes.add(n(id,NodeType.TONE,Map.of("frequency",110.0,"gain",.02,"pan",-1.0)));
+            crowdedEdges.add(Graph.edge(id,group));
+        }
+        float[] crowded=renderFrames(new Graph(3,crowdedNodes,crowdedEdges),12000,12000);
+        for(int i=1;i<crowded.length;i+=2) close(crowded[i],rightReference[i],1e-7,"Voice stealing stays within its source");
+        var reversed=new ArrayList<>(graph.nodes()); Collections.reverse(reversed);
+        float[] reordered=renderFrames(new Graph(3,reversed,graph.edges()),12000,12000);
+        for(int i=0;i<whole.length;i++) close(reordered[i],whole[i],1e-7,"Node order does not swap source audio");
+        var tooManyNodes=new ArrayList<Graph.Node>(); var tooManyEdges=new ArrayList<Graph.Edge>();
+        for(int i=0;i<SignalGraph.MAX_AUDIO_SOURCES;i++) {
+            String id="renderExtra"+i; tooManyNodes.add(n(id,NodeType.AUDIO_RENDER,Map.of()));
+            tooManyEdges.add(Graph.edge("tone",id)); tooManyEdges.add(Graph.edge(id,"mix"));
+        }
+        tooManyNodes.add(n("mix",NodeType.MIX_BUS,Map.of())); tooManyEdges.add(Graph.edge("render","mix")); tooManyEdges.add(out("mix"));
+        invalid(() -> GraphCompiler.compile(base(tooManyNodes,tooManyEdges)));
+        Graph maxSources=without(base(tooManyNodes,tooManyEdges),Set.of("renderExtra0"));
+        check(GraphCompiler.compile(maxSources).size()==SignalGraph.MAX_AUDIO_SOURCES,"Maximum source count retains all duplicate preview events");
+        Graph costly=replace(shared,"tone",Map.of());
+        var costlyNodes=new ArrayList<>(costly.nodes()); costlyNodes.add(n("dense",NodeType.EUCLID,Map.of("steps",64.0,"pulses",64.0)));
+        costlyNodes.add(n("fast",NodeType.FAST,Map.of("factor",2.0)));
+        var costlyEdges=costly.edges().stream().map(e -> e.fromNode().equals("tone") ? new Graph.Edge("fast",e.fromPort(),e.toNode(),e.toPort()) : e).collect(java.util.stream.Collectors.toCollection(ArrayList::new));
+        costlyEdges.add(Graph.edge("tone","dense")); costlyEdges.add(Graph.edge("dense","fast"));
+        invalid(() -> GraphCompiler.compile(new Graph(3,costlyNodes,costlyEdges)));
+    }
+    private static Graph without(Graph graph,Set<String> removed) {
+        return new Graph(3,graph.nodes().stream().filter(n -> !removed.contains(n.id())).toList(),
+                graph.edges().stream().filter(e -> !removed.contains(e.fromNode()) && !removed.contains(e.toNode())).toList());
+    }
+    private static void multipleSourceLifecycle() {
+        var ref=groove.engine.samples.FactorySamples.ref("factory:basic/kick.wav");
+        Graph graph=multipleGraph();
+        graph=new Graph(3,graph.nodes().stream().map(n -> n.id().equals("right")
+                ? new Graph.Node("right",NodeType.GENERATOR_SAMPLE,Map.of("pitchRatio",.25,"pan",1.0),ref) : n).toList(),graph.edges());
+        float[] pcm=new float[48000]; Arrays.fill(pcm,.1f);
+        var bank=Map.of(ref,new groove.engine.samples.SampleData(48000,1,pcm));
+        var program=new LiveRenderer.Program(state(graph,0,0,120),GraphCompiler.compile(graph),bank);
+        var timeline=new LiveRenderer.Timeline(program,null);
+        LiveRenderer a=new LiveRenderer(),b=new LiveRenderer(); a.publish(timeline); b.publish(timeline);
+        float[] x=new float[256],y=new float[256];
+        // Both late joins must reconstruct sample tails and fractional tone arcs in all source windows.
+        timeline.prepare(10_250_000_000L);
+        a.render(x,128,10_250_000_000L); b.render(y,128,10_250_000_000L);
+        check(Arrays.equals(x,y) && x[255]>0,"Independent sources resolve sample bank and late-join tails");
+        for(int block=1;block<900;block++) {
+            long now=10_250_000_000L+Math.round(block*128*1e9/48000);
+            timeline.prepare(now); a.render(x,128,now); b.render(y,128,now);
+            check(Arrays.equals(x,y),"Shared programs retain private source voices/effects");
+        }
+        check(a.scheduleMisses()==0 && b.scheduleMisses()==0,"Worker refills every source across cycle rollover");
+        a.render(x,128,40_000_000_000L);
+        check(Arrays.equals(x,new float[256]) && a.scheduleMisses()>0,"Missing source coverage silences the whole route");
+        timeline.prepare(40_000_000_000L); a.resynchronize();
+        LiveRenderer fresh=new LiveRenderer(); fresh.publish(timeline);
+        a.render(x,128,40_000_000_000L); fresh.render(y,128,40_000_000_000L);
+        check(Arrays.equals(x,y),"Recovery resets every source and its routing state");
+        timeline.prepare(2_000_000_000L); a.resynchronize(); fresh.resynchronize();
+        a.render(x,128,2_000_000_000L); fresh.render(y,128,2_000_000_000L);
+        check(Arrays.equals(x,y),"Backward seek prepares every independent source");
+        var changed=state(graph,3_000_000_000L,1.5,180);
+        var pending=new LiveRenderer.Program(changed,GraphCompiler.compile(graph),bank);
+        var revised=new LiveRenderer.Timeline(program,pending); revised.prepare(3_000_000_000L);
+        a.publish(revised); fresh.publish(revised);
+        a.render(x,128,3_000_000_000L); fresh.render(y,128,3_000_000_000L);
+        check(Arrays.equals(x,y),"Pending tempo revision includes all independent sources");
+    }
+    private static float[] renderFrames(Graph graph,int frames,int chunk) {
+        var timeline=new LiveRenderer.Timeline(new LiveRenderer.Program(state(graph,0,0,120),GraphCompiler.compile(graph)),null);
+        LiveRenderer renderer=new LiveRenderer(); renderer.publish(timeline);
+        float[] output=new float[frames*2];
+        for(int at=0;at<frames;at+=chunk) {
+            int size=Math.min(chunk,frames-at); float[] buffer=new float[size*2];
+            long now=Math.round(at*1e9/48000); timeline.prepare(now); renderer.render(buffer,size,now);
+            System.arraycopy(buffer,0,output,at*2,buffer.length);
+        }
+        check(renderer.scheduleMisses()==0,"All source schedulers prepared");
+        return output;
+    }
     private static void allocation() {
         var bean = java.lang.management.ManagementFactory.getThreadMXBean();
         if (!(bean instanceof com.sun.management.ThreadMXBean allocation) || !allocation.isThreadAllocatedMemorySupported()) return;
@@ -131,7 +267,8 @@ final class SignalTests {
         for (int i=200_000;i<328_000;i++) { frame[0]=.1; frame[1]=.2; dsp.process(frame,Math.round(i*1e9/48000)); }
         long bytes=allocation.getThreadAllocatedBytes(id)-before;
         check(bytes==0,"Signal render allocated "+bytes+" bytes");
-        var program = new LiveRenderer.Program(state(g,0,0,120),GraphCompiler.compile(g));
+        Graph multi=multipleGraph();
+        var program = new LiveRenderer.Program(state(multi,0,0,120),GraphCompiler.compile(multi));
         var renderer = new LiveRenderer(); renderer.publish(new LiveRenderer.Timeline(program,null));
         float[] block = new float[128];
         for (int i=0;i<2000;i++) renderer.render(block,64,Math.round(i*64*1e9/48000));

@@ -2,7 +2,7 @@
 
 ## Still unimplemented (from this doc)
 
-- Multiple independent audio-render sources and reconstruction of effect history on late join remain future work. Modulation, mix buses and delayed feedback are implemented in v3.
+- Arbitrary pattern triggers/polyphonic envelopes and reconstruction of effect history on late join remain future work. Independent audio-render sources, modulation, mix buses and delayed feedback are implemented in v3.
 - Headphone items remain future work — monitor audio mutes for in-world speaker streams instead.
 
 Target: Minecraft 1.21.1, Fabric Loader, Fabric API, Java 21. Install the built mod
@@ -22,7 +22,7 @@ Enable cheats in a test single-player world, or use an operator account on a ser
 | `/groove tempo 140` | Change tempo while preserving cycle position |
 | `/groove demo` | Replace the patch with the built-in demo |
 | `/groove sample-demo` | Load the factory sample-based drum demo |
-| `/groove signal-demo` | Load the v3 filter sweep and feedback echo demo |
+| `/groove signal-demo` | Load the v3 filter sweep/feedback bass and independent dry lead demo |
 | `/groove save` | Save the accepted patch and tempo in the world folder |
 | `/groove load` | Validate and load graph and BPM from `groove-session.json` (legacy two-file saves remain readable) |
 
@@ -62,11 +62,12 @@ every node must reach it. There are no feedback cycles in v1/v2.
 
 Validation caps graphs at 64 nodes, 128 edges, 16 levels of nesting, and a conservative
 128 events per cycle before evaluating them. File inputs are capped at 32 KiB.
-The renderer plays at most 32 simultaneously active notes in stable graph order.
+The renderer plays at most 32 simultaneously active notes per audio-render source
+(one source for legacy graphs); sources share the conservative 128-event cost budget.
 The rolling lookahead scheduler evaluates fractional speed transforms continuously
 without restarting every cycle. V3 adds LFO/envelope/sequence controls, filters,
 multiple mix buses and delayed feedback; see [signal graph usage](PHASE-2-SIGNALS.md)
-for sockets, parameter units, server phase rules and the single audio-source limit.
+for sockets, parameter units, server phase rules and the eight-source limit.
 
 ## Session persistence and transactional saves
 

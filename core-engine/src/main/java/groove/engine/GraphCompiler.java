@@ -50,7 +50,7 @@ public final class GraphCompiler {
         List<Event> events = result.pattern.query(new Arc(0, 1));
         require(events.size() <= MAX_EVENTS, "Too many events");
         events.sort(Comparator.comparingDouble(e -> e.whole().start()));
-        return new LoopPlan(events, result.pattern);
+        return new LoopPlan(events, result.pattern, result.cost);
     }
 
     private Compiled visit(String id, int depth) {

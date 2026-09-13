@@ -190,7 +190,7 @@ public final class MusicServer {
             var loaded = action.equals("load") ? SessionStore.read(active.saveRoot) : null;
             Graph graph = loaded != null ? loaded.graph()
                     : action.equals("demo") ? Graph.demo()
-                            : action.equals("signal-demo") ? groove.engine.SignalDemo.graph()
+                            : action.equals("signal-demo") ? groove.engine.SignalDemo.multipleSources()
                             : action.equals("sample-demo") ? groove.engine.samples.FactorySamples.demo()
                                     : state.graph();
             boolean playing = action.equals("play") || (!action.equals("stop") && state.playing());

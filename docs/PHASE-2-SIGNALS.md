@@ -2,7 +2,8 @@
 
 V3 now supports live signal graphs with typed modulation, trigger and stereo audio
 connections. Run `/groove signal-demo`, then `/groove play` after the queued change
-applies, to hear a shared-clock filter sweep with feedback echoes. Existing pattern
+applies, to hear a shared-clock filter sweep with feedback echoes and an independent
+dry lead. Existing pattern
 graphs and their v1/v2 serialization continue to work unchanged.
 
 ## Nodes and sockets
@@ -19,13 +20,45 @@ graphs and their v1/v2 serialization continue to work unchanged.
 | `mix_bus` | `in`: AUDIO, 1–16 sources; optional `gain`: MOD_FLOAT | `out`: AUDIO | `gain=1` (0–1) |
 | `output` | Either `in`: PATTERN or `audio`: AUDIO | None | Exactly one input across both sockets |
 
-This implementation supports one `audio_render` source per graph. Stack independent
-patterns upstream, then fan its stereo audio out to multiple filters, buses and
-delays. A connected control replaces the corresponding static cutoff/gain value;
+Graphs support one through eight independent `audio_render` sources. Connect each
+source's pattern to its own render node, then route its stereo audio through separate
+filters/delays or combine it with other sources at a mix bus. Shared upstream patterns
+are allowed: two render nodes fed by the same pattern produce independent voices,
+while one render node fanned out to several effects produces its audio once.
+A connected control replaces the corresponding static cutoff/gain value;
 values clamp to that parameter's range. Use an attenuverter to map bipolar LFO
 output to cutoff Hz or a unipolar gain. Audio processing happens before the existing
 final tanh limiter. Legacy offline `Score`/`Renderer` APIs remain pattern renderers;
 signal graphs execute through `LiveRenderer`.
+
+## Independent source pipelines
+
+Each render node compiles its complete upstream pattern subgraph independently.
+The compiler validates connectivity and delay-cut cycles across the entire graph
+before splitting sources. The existing conservative 128-event budget applies to
+the **sum** of source costs, including repeated rendering of shared patterns; the
+64-node, 128-edge and nesting limits still apply. The eight-source cap bounds the
+additional scheduler and voice storage rather than multiplying the event budget.
+
+Each source owns a rolling scheduler, up to 32 active voices and 32 stealing tails,
+and a reusable stereo frame in each renderer. Thus a dense source can steal its own
+voices without silencing a different source. Sample data is shared through the
+immutable sample bank; sample/filter playback state remains private. All sources
+use the same transport and graph revision, including pending tempo changes.
+
+`SignalGraph.sourceNodeId(index)` identifies source order (render nodes in graph
+node order). `SignalRuntime.process(double[][] sources, double[] output, long now)`
+maps each source frame to its render node's position in the DSP arrays before
+evaluating routing. Control indices and audio source ordinals are separate. The
+old in-place `process(double[], long)` remains valid for single-source graphs and
+rejects multi-source graphs instead of broadcasting the same stereo mix to them.
+
+`LoopPlan` retains a combined, onset-sorted first-cycle preview for inspection.
+Playback does not use that combined pattern: the control worker prepares every
+source scheduler, and the audio callback captures all source windows once per block.
+If any source lacks coverage, the entire route is silent and records a schedule
+miss; refill resets source voices and effect state together before recovery.
+Publication, forward/backward seeks and resync apply to every source pipeline.
 
 Every sequence step emits a trigger whole arc with duration `gate/(steps*rate)`
 cycles, independent of its numeric value. These periodic trigger arcs are evaluated
@@ -94,13 +127,24 @@ Backend checks round-trip signal graphs through JSON, snapshots, submissions and
 transactional persistence; they also exercise named-port editor connections,
 disconnection, pointer targeting, feedback validation and undo metadata.
 The audio smoke test switches from samples to modulation/feedback after 128 reads
-and continues through at least 256 reads, with worker preparation and an induced
+using two independent render sources, and continues through at least 256 reads,
+with worker preparation and an induced
 underrun followed by explicit stream closure.
+
+Multi-source tests additionally cover interleaved source/control node positions,
+node-order reversal, isolated delay/filter branch references, duplicated shared
+patterns, per-source voice stealing, source-count and combined event budgets,
+sample-bank playback, scheduler rollover, late joins, missed-window recovery,
+backward seeks, pending tempo revisions and allocation-free multi-source rendering.
+Backend JSON, packet and transactional persistence checks use the two-source demo.
+
+Arbitrary pattern triggers/polyphonic envelopes and historical effect reconstruction
+remain open; this extension changes neither contract.
 
 Command: `./gradlew.bat test :core-engine:check runClient -PaudioSmoke`.
 
 Validation on 2026-09-13 passed the engine and backend suites. The final Minecraft
-smoke test completed 260 reads, zero scheduler misses, one deliberately induced
+two-source smoke test completed 261 reads, zero scheduler misses, one deliberately induced
 underrun recovery, and explicit stream closure. The warmed signal and live
 render allocation checks each measured zero bytes over 128000 frames. These tests
 do not establish a worst-case CPU budget for every allowed graph or speaker count.

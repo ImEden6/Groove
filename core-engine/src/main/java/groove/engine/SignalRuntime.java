@@ -41,6 +41,24 @@ public final class SignalRuntime {
 
     /** In-place stereo frame; call sequentially at 48 kHz. No graph queries or allocation. */
     public void process(double[] stereo, long serverNanos) {
+        if (graph.sourceCount() != 1) throw new IllegalArgumentException("Use independent stereo inputs for multiple audio sources");
+        int source = graph.sourceNode(0);
+        left[source] = stereo[0]; right[source] = stereo[1];
+        processRouting(stereo, serverNanos);
+    }
+
+    /** Inputs follow SignalGraph.sourceNodeId order, not node-array positions. Buffers belong to the caller. */
+    public void process(double[][] sources, double[] stereo, long serverNanos) {
+        if (sources.length != graph.sourceCount() || stereo.length < 2) throw new IllegalArgumentException("Wrong source/output buffer count");
+        for (int s = 0; s < sources.length; s++) {
+            if (sources[s] == null || sources[s].length < 2) throw new IllegalArgumentException("Source requires a stereo frame");
+            int node = graph.sourceNode(s);
+            left[node] = sources[s][0]; right[node] = sources[s][1];
+        }
+        processRouting(stereo, serverNanos);
+    }
+
+    private void processRouting(double[] stereo, long serverNanos) {
         int frame = prepareControls(serverNanos);
         // Read all old delay cells before evaluating or writing any feedback input.
         for (int i=0;i<graph.nodes.length;i++) if (delayLeft[i] != null) {
@@ -51,7 +69,7 @@ public final class SignalRuntime {
             int[] inputs = graph.audioInputs[i];
             int mod = graph.controlInput[i];
             switch (n.type()) {
-                case AUDIO_RENDER -> { left[i] = stereo[0]; right[i] = stereo[1]; }
+                case AUDIO_RENDER -> { /* Filled by source-to-node mapping before routing. */ }
                 case MIX_BUS -> {
                     double gain = mod < 0 ? p(n,NodeParam.GAIN,1) : clamp(controls[mod][frame],0,1);
                     double l=0,r=0;

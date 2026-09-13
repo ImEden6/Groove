@@ -6,6 +6,21 @@ import java.util.Map;
 /** Slow shared-clock filter sweep with quiet, 250 ms feedback echoes. */
 public final class SignalDemo {
     private SignalDemo() {}
+    /** Independent dry lead alongside the filtered bass/feedback source. */
+    public static Graph multipleSources() {
+        Graph bass = graph();
+        var nodes = new java.util.ArrayList<>(bass.nodes());
+        nodes.add(new Graph.Node("lead", NodeType.TONE, Map.of(NodeParam.FREQUENCY,330.0,NodeParam.GAIN,.08,NodeParam.PAN,.7)));
+        nodes.add(new Graph.Node("leadRhythm", NodeType.EUCLID, Map.of(NodeParam.STEPS,8.0,NodeParam.PULSES,5.0)));
+        nodes.add(new Graph.Node("leadRender", NodeType.AUDIO_RENDER, Map.of()));
+        nodes.add(new Graph.Node("master", NodeType.MIX_BUS, Map.of(NodeParam.GAIN,.8)));
+        var edges = new java.util.ArrayList<>(bass.edges());
+        edges.remove(new Graph.Edge("mix","out","out","audio"));
+        edges.add(Graph.edge("lead","leadRhythm")); edges.add(Graph.edge("leadRhythm","leadRender"));
+        edges.add(Graph.edge("mix","master")); edges.add(Graph.edge("leadRender","master"));
+        edges.add(new Graph.Edge("master","out","out","audio"));
+        return new Graph(3,nodes,edges);
+    }
     public static Graph graph() {
         return new Graph(3, List.of(
                 new Graph.Node("tone",NodeType.TONE,Map.of("frequency",110.0,"gain",.15,"wave",1.0)),
