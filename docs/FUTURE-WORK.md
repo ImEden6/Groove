@@ -60,6 +60,7 @@ The following items from earlier roadmaps are fully implemented and verified in 
 - **Speaker tower advanced routing & occlusion.** The core speaker tower block and positional audio system is functional. Future work includes in-world sound occlusion through intervening solid blocks, per-player bus configuration, and server-side distance validation.
 - **Graceful stream fade-out; no dimension-change handling.** Chunk unload already stops the affected speaker emitters (`MusicClient.removeSpeakers`), but it cuts them immediately rather than fading out. There is also no explicit handler for a dimension change (as opposed to a full disconnect), which can leave stale emitters until the next scan.
 - **No headphone item.** No Curios/Trinkets integration, no `AL_SOURCE_RELATIVE` head-locked audio sink, and no underwater muffling filter.
+- **No live draft-graph monitoring through headphones.** Sample audition previews one sound at a time; continuously rendering a player's own uncommitted draft graph as a private headphone feed (a DJ-style cue/PFL channel, distinct from the shared session) is not built.
 
 ## Editor UI (Remaining)
 
@@ -73,6 +74,7 @@ The following items from earlier roadmaps are fully implemented and verified in 
 - **No automatic resync tuning beyond fixed thresholds.** Transport clock synchronization operates via documented slew and step thresholds ([BACKEND-USAGE.md](BACKEND-USAGE.md)), but adaptive PID/slew tuning under asymmetric or high-jitter network conditions has not been implemented.
 - **No server-side chunk-unload or distance culling for audio state.** The session is server-wide and persistent, decoupled from individual chunk lifecycles or entity unload events.
 - **GC pressure reduction.** The DSP mixer avoids per-render allocations, but pattern queries and the Minecraft audio stream adapter still allocate temporary buffers per tick/block.
+- **No per-player editors/sessions.** There is one server-wide shared session and patch; giving each player their own independent editor/draft graph is a future architecture change, not just a routing tweak.
 
 ## Distribution & Custom Samples (Remaining)
 
