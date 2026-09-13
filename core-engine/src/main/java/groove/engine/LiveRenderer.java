@@ -256,11 +256,11 @@ public final class LiveRenderer {
         }
         double timeBlend = Math.min(1, (now - timeline.pending.state.effectiveNanos()) / 5_000_000.0);
         sample(timeline.pending, now, out);
-        // sample() already scaled out[] by the pending program's own recoveryGain; applying that
-        // same factor again below (via the old-program weight) would square it mid-fade instead
-        // of multiplying, producing a real dip in combined energy rather than a linear crossfade.
+        // sample() already applies recoveryGain, so the incoming weight is the product
+        // of both fades. Use its complement for the outgoing program to preserve level
+        // even when a short recovery finishes during the scheduled fade.
         double pendL = out[0] * timeBlend, pendR = out[1] * timeBlend;
-        double oldWeight = 1 - Math.min(timeBlend, timeline.pending.recoveryGain);
+        double oldWeight = 1 - timeBlend * timeline.pending.recoveryGain;
         if (oldWeight > 0) {
             sample(timeline.current, now, tempStereo);
             out[0] = pendL + tempStereo[0] * oldWeight;

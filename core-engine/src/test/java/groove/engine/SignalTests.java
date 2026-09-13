@@ -4,7 +4,7 @@ import java.util.*;
 
 final class SignalTests {
     static void run() {
-        validation(); modulation(); feedback(); filter(); live(); historyRecovery(); constantSampleRecovery(); multipleSources(); multipleSourceLifecycle(); triggerRenderPlumbing(); arbitraryTriggerEnvelope(); allocation();
+        validation(); modulation(); feedback(); filter(); live(); historyRecovery(); constantSampleRecovery(); overlappingRecoveryFade(); multipleSources(); multipleSourceLifecycle(); triggerRenderPlumbing(); arbitraryTriggerEnvelope(); allocation();
         System.out.println("Signal graph modulation, feedback, live and allocation checks passed.");
     }
     private static Graph.Node n(String id,NodeType type,Map<String,Double> params) { return new Graph.Node(id,type,params); }
@@ -473,6 +473,32 @@ final class SignalTests {
         double pendingEnergy=0;
         for(float value:block) pendingEnergy+=value*value;
         check(pendingEnergy>0 && pendingJoin.historyRecoveries()==1,"Late pending revision retains current audio while recovering");
+    }
+
+    private static void overlappingRecoveryFade() {
+        var ref=groove.engine.samples.FactorySamples.ref("factory:basic/kick.wav");
+        float[] pcm=new float[48000]; Arrays.fill(pcm,.2f);
+        var bank=Map.of(ref,new groove.engine.samples.SampleData(48000,1,pcm));
+        Graph dry=new Graph(3,List.of(new Graph.Node("sample",NodeType.GENERATOR_SAMPLE,Map.of(),ref),
+                n("render",NodeType.AUDIO_RENDER,Map.of()),n("out",NodeType.OUTPUT,Map.of())),
+                List.of(Graph.edge("sample","render"),out("render")));
+        var nodes=new ArrayList<>(dry.nodes()); nodes.add(n("filter",NodeType.FILTER,Map.of("cutoffHz",20000.0)));
+        Graph wet=new Graph(3,nodes,List.of(Graph.edge("sample","render"),Graph.edge("render","filter"),out("filter")));
+        var current=new LiveRenderer.Program(state(dry,0,0,120),GraphCompiler.compile(dry),bank);
+        var pending=new LiveRenderer.Program(state(wet,0,0,120),GraphCompiler.compile(wet),bank);
+        var mixed=new LiveRenderer(); mixed.publish(new LiveRenderer.Timeline(current,pending));
+        var reference=new LiveRenderer(); reference.publish(new LiveRenderer.Timeline(current,null));
+        float[] actual=new float[2],expected=new float[2];
+        // A 1 ms late join finishes replay while the 5 ms scheduled fade is still active.
+        // Both sources settle to the same DC level; overlapping fades must preserve it.
+        for(int frame=0;frame<384;frame++) {
+            long now=1_000_000L+Math.round(frame*1e9/48000);
+            mixed.render(actual,1,now); reference.render(expected,1,now);
+            if(frame>=48) for(int channel=0;channel<2;channel++)
+                close(actual[channel],expected[channel],1e-6,"Overlapping recovery and scheduled fades preserve constant level");
+        }
+        check(mixed.historyRecoveries()==1 && mixed.historyFrames()>0 && mixed.scheduleMisses()==0,
+                "Short recovery exercises both fades without missed coverage");
     }
 
     private static void constantSampleRecovery() {
