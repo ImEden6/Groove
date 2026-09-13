@@ -16,6 +16,7 @@ public final class LookaheadScheduler {
         private final Entry[] entries;
         private Window(double start, double end, Entry[] entries) { this.start = start; this.end = end; this.entries = entries; }
         public boolean contains(double cycle) { return cycle >= start && cycle < end; }
+        double startCycle() { return start; }
         public int size() { return entries.length; }
         public Entry entry(int index) { return entries[index]; }
     }
@@ -32,7 +33,9 @@ public final class LookaheadScheduler {
         retainAllEvents = false;
     }
     /** Cycle-bounded lookback, independent of tempo/sample duration, that retains every event
-     *  (not just sample onsets) back to historyCycles. Used by trigger sources, where a consumer
+     *  (not just sample onsets) back to historyCycles before the earliest covered cycle.
+     *  One extra bucket covers the published base-1 position; the maximum requested history
+     *  is therefore 59 cycles in the 64-slot ring. Used by trigger sources, where a consumer
      *  (e.g. ENVELOPE) needs to see a non-sample onset up to a fixed number of cycles back
      *  regardless of bpm; the seconds-based constructor's "discard ended tone events past one
      *  cycle back" rule (correct for audio sources, where a finished tone's pattern event stops
@@ -40,8 +43,10 @@ public final class LookaheadScheduler {
      *  multi-cycle envelope release needs to stay visible. */
     public LookaheadScheduler(Pattern pattern, int historyCycles) {
         this.pattern = Objects.requireNonNull(pattern);
-        if (historyCycles < 0 || historyCycles > RING_SIZE - LOOKAHEAD_CYCLES) throw new IllegalArgumentException("Invalid scheduler horizon");
-        this.historyCycles = historyCycles;
+        if (historyCycles < 0 || historyCycles > RING_SIZE - LOOKAHEAD_CYCLES - 1) throw new IllegalArgumentException("Invalid scheduler horizon");
+        // Published coverage starts at base-1, so its earliest position needs one extra
+        // bucket of history as well. Include that bucket in the ring capacity check above.
+        this.historyCycles = historyCycles + 1;
         retainAllEvents = true;
     }
     public Window window() { return window; }

@@ -45,6 +45,7 @@ public final class SignalRuntime {
     /** In-place stereo frame; call sequentially at 48 kHz. No graph queries or allocation. */
     public void process(double[] stereo, long serverNanos) {
         if (graph.sourceCount() != 1) throw new IllegalArgumentException("Use independent stereo inputs for multiple audio sources");
+        if (graph.triggerCount() != 0) throw new IllegalArgumentException("Prepared trigger windows required");
         int source = graph.sourceNode(0);
         left[source] = stereo[0]; right[source] = stereo[1];
         processRouting(stereo, serverNanos);
@@ -169,9 +170,8 @@ public final class SignalRuntime {
                     double attack = p(n,NodeParam.ATTACK,.01), decay = p(n,NodeParam.DECAY,.1), sustain = p(n,NodeParam.SUSTAIN,.5);
                     double release = p(n,NodeParam.RELEASE,.1), mode = p(n,NodeParam.MODE,0);
                     double width = 1/(p(trigger,NodeParam.STEPS,4)*p(trigger,NodeParam.RATE,1));
-                    double wholeStart = Math.floor(cycle/width)*width;
                     double releaseAt = mode == 0 ? attack+decay : width*p(trigger,NodeParam.GATE,.5);
-                    values[i] = envelopeValueAt(cycle, wholeStart, releaseAt, attack, decay, sustain, release);
+                    values[i] = periodicEnvelopeValue(cycle, width, releaseAt, attack, decay, sustain, release);
                 }
                 default -> values[i] = 0;
             }
@@ -209,6 +209,18 @@ public final class SignalRuntime {
         if (age < attack) return age/attack;
         if (age < attack+decay) return 1+(sustain-1)*(age-attack)/decay;
         return sustain;
+    }
+
+    /** The envelope rises to min(attack, gate end), then never increases. Among periodic
+     *  voice ages, MAX must therefore occur at one of the two ages bracketing that peak.
+     *  This includes older releasing voices without scanning thousands of periodic onsets. */
+    private static double periodicEnvelopeValue(double cycle, double width, double releaseAt,
+                                                 double attack, double decay, double sustain, double release) {
+        double latest = Math.floor(cycle / width);
+        double age = cycle - latest * width;
+        double older = Math.max(0, Math.floor((Math.min(attack, releaseAt) - age) / width));
+        return Math.max(envelopeValueAt(cycle, (latest - older) * width, releaseAt, attack, decay, sustain, release),
+                envelopeValueAt(cycle, (latest - older - 1) * width, releaseAt, attack, decay, sustain, release));
     }
 
     /** Overlapping voices combine with MAX, not SUM: existing patches assume a single ENVELOPE's

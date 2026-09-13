@@ -332,6 +332,61 @@ final class SignalTests {
                 n("env",NodeType.ENVELOPE,envParams),n("mix",NodeType.MIX_BUS,Map.of())),
                 List.of(new Graph.Edge("seq","trigger","env","trigger"),
                         Graph.edge("render","mix"),new Graph.Edge("env","out","mix","gain"),out("mix")));
+        var missingWindows = GraphCompiler.compile(arbitrary).signals().runtime(state(arbitrary,0,0,120));
+        invalid(() -> missingWindows.process(new double[2],0));
+        invalid(() -> missingWindows.process(new double[][]{{0,0}},new double[2],0));
+        // Compare both source kinds over repeated onsets, including long tails, dense
+        // attacks, zero-duration stages and release during attack/decay in GATED mode.
+        for (Map<String,Double> params : List.of(
+                Map.of("attack",.02,"decay",.05,"sustain",.4,"release",.3),
+                Map.of("attack",8.0,"decay",8.0,"sustain",.4,"release",8.0),
+                Map.of("attack",.4,"decay",.1,"sustain",.4,"release",.8,"mode",1.0),
+                Map.of("attack",.1,"decay",.4,"sustain",.4,"release",.8,"mode",1.0),
+                Map.of("attack",0.0,"decay",0.0,"sustain",1.0,"release",.8),
+                Map.of("attack",0.0,"decay",0.0,"sustain",0.0,"release",0.0))) {
+            Graph patternGraph=replace(arbitrary,"env",params);
+            Graph sequenceGraph=replace(replace(reference,"env",params),"seq",Map.of("steps",1.0,"rate",4.0,"gate",1.0));
+            SignalGraph signal=GraphCompiler.compile(patternGraph).signals();
+            var patternDsp=signal.runtime(state(patternGraph,0,0,120));
+            var sequenceDsp=runtime(sequenceGraph,state(sequenceGraph,0,0,120));
+            var history=new LookaheadScheduler(signal.triggerPlan(0).pattern(),SignalGraph.MAX_ENVELOPE_TAIL_CYCLES);
+            double[][] audio={{0,0}}; double[] output=new double[2];
+            var windows=new LookaheadScheduler.Window[1];
+            for(int step=-8;step<80;step++) {
+                double at=step*.03125+.001;
+                history.prepare(at); windows[0]=history.window();
+                long now=cycleNanos(at,120);
+                patternDsp.process(audio,windows,output,now);
+                close(sequenceDsp.control("env",now),patternDsp.control("env",now),1e-10,"Periodic and arbitrary polyphonic envelopes agree");
+            }
+        }
+        Graph overlapSequence=replace(reference,"env",Map.of("attack",.02,"decay",.05,"sustain",.4,"release",.3));
+        close(runtime(overlapSequence,state(overlapSequence,0,0,120)).control("env",cycleNanos(.251,120)),
+                .15866666666666665,1e-10,"Previous release survives a new sequence onset");
+        // A sparse legal pattern: one short trigger at .25 every 64 cycles. Preparing
+        // at cycle 25 must retain that trigger for the advertised [24,29) coverage.
+        var sparseNodes=new ArrayList<>(sparse.nodes());
+        sparseNodes.replaceAll(node -> node.id().equals("euclid") ? n("euclid",NodeType.EUCLID,Map.of("steps",64.0,"pulses",1.0,"rotation",16.0)) : node);
+        sparseNodes.add(n("outer",NodeType.EUCLID,Map.of("steps",64.0,"pulses",1.0)));
+        var sparseEdges=new ArrayList<>(sparse.edges()); sparseEdges.remove(Graph.edge("euclid","trig"));
+        sparseEdges.add(Graph.edge("euclid","outer")); String last="outer";
+        for(int i=0;i<3;i++) {
+            String id="slow"+i; sparseNodes.add(n(id,NodeType.FAST,Map.of("factor",.25)));
+            sparseEdges.add(Graph.edge(last,id)); last=id;
+        }
+        sparseEdges.add(Graph.edge(last,"trig"));
+        Graph longTail=replace(new Graph(3,sparseNodes,sparseEdges),"env",Map.of("attack",8.0,"decay",8.0,"sustain",1.0,"release",8.0));
+        var longSignals=GraphCompiler.compile(longTail).signals();
+        var cached=new LookaheadScheduler(longSignals.triggerPlan(0).pattern(),24);
+        cached.prepare(25);
+        check(cached.window().contains(24.125),"Backward position remains inside published coverage");
+        var cachedDsp=longSignals.runtime(state(longTail,0,0,120));
+        cachedDsp.process(new double[][]{{0,0}},new LookaheadScheduler.Window[]{cached.window()},new double[2],cycleNanos(24.125,120));
+        var freshHistoryDsp=longSignals.runtime(state(longTail,0,0,120)); primeTrigger(freshHistoryDsp,longSignals,24.125,120);
+        close(cachedDsp.control("env",cycleNanos(24.125,120)),.015625,1e-12,"Advertised backward coverage includes oldest releasing trigger");
+        close(cachedDsp.control("env",cycleNanos(24.125,120)),freshHistoryDsp.control("env",cycleNanos(24.125,120)),0,"Cached and fresh backward evaluation agree");
+        new LookaheadScheduler(longSignals.triggerPlan(0).pattern(),59).prepare(25);
+        invalid(() -> new LookaheadScheduler(longSignals.triggerPlan(0).pattern(),60));
         float[] fromTrigger = renderFrames(arbitrary,4000,137), fromSequence = renderFrames(reference,4000,137);
         for (int i=0;i<fromTrigger.length;i++) close(fromTrigger[i],fromSequence[i],1e-6,"Arbitrary pattern trigger matches an equivalent periodic step sequence");
         // Overlap: a still-releasing earlier voice must not be clobbered by a fresh, quieter
