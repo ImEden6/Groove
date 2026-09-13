@@ -1,5 +1,10 @@
 # Live editor integration
 
+## Still unimplemented (from this doc)
+
+- Sample drawer favorites, animated/resizable drawers, vanilla-sound indexing, pack-tree navigation.
+- No automatic merge of concurrent drafts.
+
 Open `/groove-editor` (or specify tactical, clockwork, crt, vanilla). The default is now the visible vanilla theme. The editor waits for a server snapshot rather than opening a disconnected demo.
 
 - **Apply** validates and submits the working graph and BPM. **Play/Stop** submits the draft and toggles shared playback. BPM accepts 30–300.

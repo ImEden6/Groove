@@ -1,5 +1,12 @@
 # Sequencer UI: client rendering architecture
 
+## Still unimplemented (from this doc)
+
+- Rotary knob keyboard focus navigation, arrow-key stepping, and direct numeric text entry.
+- Sample drawer favorites, animated/resizable drawer panel, vanilla sound-event indexing, hierarchical pack-tree navigation.
+- No concurrent-draft merging: no "workstation in use by [Player]" indicator or optimistic merge UI.
+- No hazard-stripe overlay rendered on the node card body for missing/mismatched samples (only the theme's fallback texture is substituted).
+
 Originally design-only; the editor screen, all 4 themes, and graph submission
 described here are now implemented (see the update note in §1 and the build
 order in §6). What's still missing is tracked in [FUTURE-WORK.md](FUTURE-WORK.md),

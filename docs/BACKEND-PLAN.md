@@ -1,5 +1,17 @@
 # Groove backend plan
 
+## Still unimplemented (from this doc)
+
+- No headphone item (Curios/Trinkets integration, `AL_SOURCE_RELATIVE` head-locked sink, underwater muffling).
+- Phase 2 next stages: typed `PATTERN`/`MOD_FLOAT`/`TRIGGER`/`AUDIO` ports, v3 graph schema migration, deterministic LFO/envelope/attenuverter/step-sequence nodes, delayed feedback audio routing.
+- No tempo automation, timeline seeking, or non-integer-cycle start (runtime `/groove tempo` exists; score/pattern-side tempo curves do not).
+- No adaptive resync tuning beyond fixed slew/step thresholds under asymmetric/high-jitter conditions.
+- No server-side chunk-unload or distance culling for audio session state (session is server-wide/persistent).
+- Pattern queries and the Minecraft audio stream adapter still allocate per tick/block (the mixer itself does not).
+- No automated server-to-client resourcepack distribution for custom samples.
+
+See [FUTURE-WORK.md](FUTURE-WORK.md) for the full ranked list.
+
 ## Current implementation
 
 Milestones 2, 3, 4, and 5 have landed alongside the core engine. See [backend usage](BACKEND-USAGE.md)

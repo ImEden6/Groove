@@ -1,5 +1,9 @@
 # Performance hardening
 
+## Still unimplemented (from this doc)
+
+- Startup and explicit load reads have not been moved off-thread.
+
 - Snapshot codecs read bounded JSON strings only. The compiler worker decodes and
   validates the timeline, prepares samples, then hands results to the client thread.
   The existing generation guard rejects work superseded by another snapshot,

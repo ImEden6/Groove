@@ -1,5 +1,15 @@
 # Unified Technical Specification Sheet: Modular Audio Workstation Mod
 
+## Still unimplemented (from this doc)
+
+The Strudel-comparison gap analysis at the bottom of this file (§"Inception Gap Analysis") is entirely unimplemented in the current codebase:
+
+- Rhythm combinators: `Alternate`/`CycleStep` (slow-cat `< >`), `Probability`/`Degrade` node, first-class `Polymeter` node.
+- Pitch: `ScaleQuantizer` and `ChordGen` nodes (pitch model is currently raw Hz / pitch ratio only).
+- Sampling: `Slice`/`Chop` node and start-offset DSP parameter (samples currently always play start-to-end).
+- Environmental modulator nodes: Day/Night cycle, Weather/Rain intensity, Proximity, Biome/Altitude.
+- Physical pattern-archiving item (Vinyl/Punch Card disc) for burning/loading patches in survival.
+
 This specification freezes all technical, algorithmic, architectural, and visual requirements for the mod.
 
 ---

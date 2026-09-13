@@ -1,5 +1,10 @@
 # Running the Groove backend
 
+## Still unimplemented (from this doc)
+
+- Parameter automation over time, multiple mix buses, and feedback DSP remain staged for future Phase 2 work.
+- Headphone items remain future work — monitor audio mutes for in-world speaker streams instead.
+
 Target: Minecraft 1.21.1, Fabric Loader, Fabric API, Java 21. Install the built mod
 and Fabric API on both server and clients. This version has one shared session
 for the whole server, played as a stereo monitor through the Jukebox/Note Blocks

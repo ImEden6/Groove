@@ -1,5 +1,12 @@
 # Phase 1 DSP implementation and Phase 2 handoff
 
+## Still unimplemented (from this doc)
+
+- Typed `PATTERN`/`MOD_FLOAT`/`TRIGGER`/`AUDIO` ports and reusable 64-frame control buffers with slewing.
+- The v3 graph/serialization/editor migration.
+- LFO, envelope, attenuverter, filter, delay, step sequence, and mix-bus nodes.
+- Delayed feedback routing (zero-delay loop rejection, diamond-bypass cycle checks).
+
 Phase 1 retains graph versions 1 and 2, the existing packet format, saved-world format, and the one-cycle `LoopPlan`. Phase 2 scheduling is now implemented in a subsequent increment; see [PHASE-2-SCHEDULER.md](PHASE-2-SCHEDULER.md). Its schema and automation changes remain staged.
 
 ## Implemented

@@ -1,5 +1,9 @@
 # Samples and packs
 
+## Still unimplemented (from this doc)
+
+- The `/groove-samples list` command does not browse the server's whole catalog (only assets already referenced by the shared graph).
+
 The backend supports pitched WAV/OGG sample graphs, local auditioning, content
 hashes, hot-reloaded catalogs, and restricted server-to-client asset transfer.
 These command controls are independent of the editor UI.
@@ -99,8 +103,9 @@ Received assets stay in memory; they are not installed into local folders.
 Disconnect clears transfer state and the received encoded cache. Decoded PCM
 may remain in the bounded LRU. Active banks, crossfades, and decoder scratch
 space also consume memory, so the cache budget is not a total JVM heap guarantee.
-Sample pitching uses linear interpolation and short edge fades. Higher-quality
-anti-aliasing resampling remains future DSP work — see [FUTURE-WORK.md](FUTURE-WORK.md).
+Sample pitching uses a bandlimited 48-tap Kaiser-windowed sinc resampler with
+four prefiltered octave levels (68.21 dB minimum stopband rejection); see
+[engine evolution](ENGINE-EVOLUTION.md).
 
 Minecraft owns OpenAL and buffer cleanup. An underrun recovery hook restarts only
 live Groove streams after refill and rebases subsequent rendering to playback

@@ -1,5 +1,12 @@
 # Phase 2, stage 1: rolling pattern scheduling
 
+## Still unimplemented (from this doc)
+
+- Typed ports and v3 graph/serialization migration.
+- Deterministic LFO/envelope evaluation nodes.
+- Delayed feedback/audio routing.
+- Editor integration for the above.
+
 Implemented the scheduling foundation while retaining graph v1/v2 and the existing packet format. Typed ports, v3 migration, modulation nodes, feedback routing, and the port editor remain later stages.
 
 ## Behavior
