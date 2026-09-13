@@ -1,0 +1,83 @@
+{
+	"format_version": "1.21.11",
+	"credit": "Made with Blockbench",
+	"parent": "minecraft:block/block",
+	"textures": {
+		"particle": "modid:item/headphones_3d",
+		"texture": "modid:item/headphones_3d"
+	},
+	"elements": [
+		{
+			"name": "left_earcup",
+			"from": [2, 4, 6],
+			"to": [5, 10, 10],
+			"faces": {
+				"north": {"uv": [0, 0, 8, 8], "texture": "#texture"},
+				"east": {"uv": [0, 0, 8, 8], "texture": "#texture"},
+				"south": {"uv": [0, 0, 8, 8], "texture": "#texture"},
+				"west": {"uv": [0, 8, 8, 16], "texture": "#texture"},
+				"up": {"uv": [0, 0, 8, 8], "texture": "#texture"},
+				"down": {"uv": [0, 0, 8, 8], "texture": "#texture"}
+			}
+		},
+		{
+			"name": "right_earcup",
+			"from": [11, 4, 6],
+			"to": [14, 10, 10],
+			"faces": {
+				"north": {"uv": [0, 0, 8, 8], "texture": "#texture"},
+				"east": {"uv": [0, 8, 8, 16], "texture": "#texture"},
+				"south": {"uv": [0, 0, 8, 8], "texture": "#texture"},
+				"west": {"uv": [0, 0, 8, 8], "texture": "#texture"},
+				"up": {"uv": [0, 0, 8, 8], "texture": "#texture"},
+				"down": {"uv": [0, 0, 8, 8], "texture": "#texture"}
+			}
+		},
+		{
+			"name": "left_strut",
+			"from": [3, 10, 7],
+			"to": [5, 12, 9],
+			"faces": {
+				"north": {"uv": [8, 0, 16, 8], "texture": "#texture"},
+				"east": {"uv": [8, 0, 16, 8], "texture": "#texture"},
+				"south": {"uv": [8, 0, 16, 8], "texture": "#texture"},
+				"west": {"uv": [8, 0, 16, 8], "texture": "#texture"},
+				"up": {"uv": [8, 0, 16, 8], "texture": "#texture"},
+				"down": {"uv": [8, 0, 16, 8], "texture": "#texture"}
+			}
+		},
+		{
+			"name": "right_strut",
+			"from": [11, 10, 7],
+			"to": [13, 12, 9],
+			"faces": {
+				"north": {"uv": [8, 0, 16, 8], "texture": "#texture"},
+				"east": {"uv": [8, 0, 16, 8], "texture": "#texture"},
+				"south": {"uv": [8, 0, 16, 8], "texture": "#texture"},
+				"west": {"uv": [8, 0, 16, 8], "texture": "#texture"},
+				"up": {"uv": [8, 0, 16, 8], "texture": "#texture"},
+				"down": {"uv": [8, 0, 16, 8], "texture": "#texture"}
+			}
+		},
+		{
+			"name": "bridge",
+			"from": [5, 12, 7],
+			"to": [11, 14, 9],
+			"faces": {
+				"north": {"uv": [8, 0, 16, 8], "texture": "#texture"},
+				"east": {"uv": [8, 0, 16, 8], "texture": "#texture"},
+				"south": {"uv": [8, 0, 16, 8], "texture": "#texture"},
+				"west": {"uv": [8, 0, 16, 8], "texture": "#texture"},
+				"up": {"uv": [8, 0, 16, 8], "texture": "#texture"},
+				"down": {"uv": [8, 0, 16, 8], "texture": "#texture"}
+			}
+		}
+	],
+	"gui_light": "front",
+	"display": {
+		"head": {
+			"translation": [0, 0.75, 0],
+			"scale": [1.75, 1.75, 1.75]
+		}
+	}
+}
