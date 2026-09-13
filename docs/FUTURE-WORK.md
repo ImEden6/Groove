@@ -24,7 +24,7 @@ Ranked by impact on gameplay, creative expressiveness, and multiplayer usability
 | **5** | **Workstation "In-Use" / Merge UI** | **60** | Medium | Multiplayer UX | Clear player feedback when multiple users attempt simultaneous sequencer edits (exclusive edit lock vs. optimistic conflict resolution). | Open |
 | **6** | **Master Peak Limiter Test Suite** | **50** | Low | Audio Safety | Automated verification that adversarial DSP graphs cannot distort or clip past safety ceilings beyond `tanh`. | Open |
 | **7** | **Cable Pulse Animation Toggle** | **45** | Low | Accessibility | Option to reduce visual motion / flashing during fast BPM sessions. | Open |
-| **8** | **Phase 2 routing extensions** | **35** | Very High | Architecture | Independent audio-render sources and arbitrary pattern triggers/polyphonic envelopes have landed (each up to eight, shared event budget). Remaining: effect-history reconstruction on late join. | Partial (2 of 3) |
+| **8** | **Phase 2 routing extensions** | **35** | Very High | Architecture | Independent audio-render sources and arbitrary pattern triggers/polyphonic envelopes have landed (each up to eight, shared event budget). Late joins/resyncs now approximate effect history with bounded local replay and a fade-in; exact historical state remains a refinement. | Implemented (3 of 3; bounded history) |
 
 ---
 
@@ -58,8 +58,7 @@ The following items from earlier roadmaps are fully implemented and verified in 
 
 ## DSP / Engine (Remaining)
 
-- **Phase 2 routing extensions.** Modulation nodes, 64-frame control ramps, named sockets, delayed feedback, multiple independent audio-render sources, and arbitrary pattern triggers/polyphonic envelopes have landed; see [signals](PHASE-2-SIGNALS.md). Remaining:
-  - Reconstruction of historical echoes/filter state for late joins and graph edits.
+- **Exact effect-history reconstruction.** The three Phase 2 extensions have landed, including up to one second of local delay/filter replay for late joins and resyncs; see [signals](PHASE-2-SIGNALS.md). Recovering older feedback or state across graph/tempo revisions would require a richer history or authoritative snapshots. The current bounded approximation does not provide exact historical equivalence.
 - **No tempo automation, seeking, or non-integer-cycle start.** Dynamic tempo changes at runtime exist via `/groove tempo`, but score/pattern-side tempo curves and timeline seeking do not.
 
 ## Physical Presence in the World (Remaining)

@@ -2,7 +2,7 @@
 
 ## Still unimplemented (from this doc)
 
-- Arbitrary pattern triggers/polyphonic envelopes and reconstruction of effect history on late join remain future work. Independent audio-render sources, modulation, mix buses and delayed feedback are implemented in v3.
+- V3 supports independent audio-render sources, arbitrary pattern triggers/polyphonic envelopes, and bounded local recovery of recent effect history. Exact older/cross-revision history remains future work.
 - Headphone items remain future work — monitor audio mutes for in-world speaker streams instead.
 
 Target: Minecraft 1.21.1, Fabric Loader, Fabric API, Java 21. Install the built mod
@@ -94,6 +94,10 @@ The server shares a session epoch, revision, tempo, cycle anchor, effective time
 and graph. Clients estimate clock offset from ping replies, compile immutable
 programs on a bounded worker queue, and switch at the scheduled audio time.
 Late joins reconstruct the current note phase directly, with a short fade-in.
+Graphs with filters or delays first recover up to one second of prepared history,
+which can take about 333 ms of silent catch-up before a 5 ms fade-in. Replacing a
+program keeps outgoing audio during recovery. Older and cross-revision effect state
+is not recovered; see [signals](PHASE-2-SIGNALS.md).
 Small timing errors slew at up to 0.1%; gaps over 250 ms trigger a faded resync.
 No audio is sent over the network.
 

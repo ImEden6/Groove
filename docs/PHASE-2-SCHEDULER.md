@@ -2,7 +2,7 @@
 
 ## Still unimplemented (from this doc)
 
-- Arbitrary pattern triggers/polyphonic envelopes and effect-history reconstruction remain future work. Multiple independent audio-render sources, typed ports, v3, modulation, delayed routing and named editor sockets have since landed; see [signals](PHASE-2-SIGNALS.md).
+- Independent audio-render sources, arbitrary pattern triggers/polyphonic envelopes and bounded local effect-history recovery have landed; exact older/cross-revision effect state remains future work. See [signals](PHASE-2-SIGNALS.md).
 
 Stage 1 implemented the scheduling foundation while retaining graph v1/v2 and the existing packet format. Later increments add [typed ports/v3](PHASE-2-PORTS.md) and [modulation, feedback and named editor sockets](PHASE-2-SIGNALS.md).
 
@@ -14,7 +14,7 @@ Stage 1 implemented the scheduling foundation while retaining graph v1/v2 and th
 - `LookaheadScheduler` maintains a 64-slot cycle-bucket ring. It prepares four cycles ahead, retains the previous cycle for callbacks in flight at rollover, and retains additional onset history for sample tails (up to 40 seconds for a ten-second sample at 0.25 pitch).
 - Pattern queries, sorting, deduplication, and snapshot allocation happen on the control worker. Audio callbacks capture an immutable window once per render block and reuse preallocated voice storage. Window changes do not republish/reset the audio program.
 - Stable voice matching uses absolute whole arcs, settings, and duplicate occurrence ordinals. Query clipping is not part of voice identity.
-- A missed window produces silence and increments `scheduleMisses()`; the audio callback never queries a pattern or repeats the old first cycle. After worker preparation, playback reconstructs from the current transport position. Seeks do not replay intervening cycles.
+- A missed window produces silence and increments `scheduleMisses()`; the audio callback never queries a pattern or repeats the old first cycle. After worker preparation, playback reconstructs from the current transport position. Signal graphs with filters/delays replay up to one second of available prepared history, with bounded work per output frame; seeks never replay the entire intervening timeline.
 - Tone continuations survive a transport revision whose anchor lies inside their whole arc. Sample history remains gated to the program's anchor, matching the existing new-program sample-onset policy.
 
 ## Integration contract

@@ -4,7 +4,7 @@ import java.util.*;
 
 final class SignalTests {
     static void run() {
-        validation(); modulation(); feedback(); filter(); live(); multipleSources(); multipleSourceLifecycle(); triggerRenderPlumbing(); arbitraryTriggerEnvelope(); allocation();
+        validation(); modulation(); feedback(); filter(); live(); historyRecovery(); constantSampleRecovery(); multipleSources(); multipleSourceLifecycle(); triggerRenderPlumbing(); arbitraryTriggerEnvelope(); allocation();
         System.out.println("Signal graph modulation, feedback, live and allocation checks passed.");
     }
     private static Graph.Node n(String id,NodeType type,Map<String,Double> params) { return new Graph.Node(id,type,params); }
@@ -222,7 +222,7 @@ final class SignalTests {
         // Both late joins must reconstruct sample tails and fractional tone arcs in all source windows.
         timeline.prepare(10_250_000_000L);
         a.render(x,128,10_250_000_000L); b.render(y,128,10_250_000_000L);
-        check(Arrays.equals(x,y) && x[255]>0,"Independent sources resolve sample bank and late-join tails");
+        check(Arrays.equals(x,y) && a.historyRecoveries()==1,"Independent sources start deterministic late-join recovery");
         for(int block=1;block<900;block++) {
             long now=10_250_000_000L+Math.round(block*128*1e9/48000);
             timeline.prepare(now); a.render(x,128,now); b.render(y,128,now);
@@ -419,6 +419,100 @@ final class SignalTests {
         primeTrigger(bothDsp,bothSignals,cycle,120);
         close(bothDsp.control("env",cycleNanos(cycle,120)),bothValue,0,"Backward seek then forward re-evaluation reproduces the same value");
     }
+    private static void historyRecovery() {
+        Graph g = new Graph(3,List.of(n("tone",NodeType.TONE,Map.of()),
+                n("pulse",NodeType.EUCLID,Map.of("steps",16.0,"pulses",1.0)),
+                n("render",NodeType.AUDIO_RENDER,Map.of()),n("mix",NodeType.MIX_BUS,Map.of("gain",.7)),
+                n("delay",NodeType.DELAY,Map.of("frames",12000.0)),
+                n("filter",NodeType.FILTER,Map.of("cutoffHz",800.0)),n("out",NodeType.OUTPUT,Map.of())),
+                List.of(Graph.edge("tone","pulse"),Graph.edge("pulse","render"),Graph.edge("render","mix"),
+                        Graph.edge("mix","delay"),Graph.edge("delay","mix"),Graph.edge("mix","filter"),out("filter")));
+        float[] reference = renderFrames(g,36032,128);
+        var timeline = new LiveRenderer.Timeline(new LiveRenderer.Program(state(g,0,0,120),GraphCompiler.compile(g)),null);
+        LiveRenderer joined = new LiveRenderer(); joined.publish(timeline);
+        float[] block = new float[128]; double energy=0, error=0;
+        // There is no new note between .125 and 2 seconds: this measures historical echoes.
+        for (int at=19200;at<36000;at+=64) {
+            long now=Math.round(at*1e9/48000); timeline.prepare(now);
+            long before=joined.historyFrames(); joined.render(block,64,now);
+            check(joined.historyFrames()-before<=64*4,"Recovery work bounded per callback");
+            if (at>=26400) for(int i=0;i<128;i++) {
+                energy+=block[i]*block[i]; double delta=block[i]-reference[at*2+i]; error+=delta*delta;
+            }
+        }
+        check(energy>.001 && error<energy*.00001,"Recovered delay/filter history matches continuous playback: "+error+" / "+energy);
+        check(joined.historyRecoveries()==1 && joined.scheduleMisses()==0,"One complete recovery without worker starvation");
+        // A much later seek caps the initial history at one second, then catches the moving
+        // clock in about 1/3 second. A rewind during recovery must restart it cleanly.
+        timeline.prepare(20_000_000_000L); joined.resynchronize();
+        long before=joined.historyFrames();
+        for(int i=0;i<260;i++) joined.render(block,64,20_000_000_000L+Math.round(i*64*1e9/48000));
+        long replayed=joined.historyFrames()-before;
+        check(replayed>=48000 && replayed<=64004,"One-second history cap and bounded catch-up: "+replayed);
+        joined.resynchronize(); timeline.prepare(400_000_000L);
+        joined.render(block,64,400_000_000L);
+        joined.resynchronize(); timeline.prepare(200_000_000L);
+        joined.render(block,64,200_000_000L);
+        check(joined.scheduleMisses()==0,"Backward seek restarts recovery using available windows");
+
+        // Publishing a late replacement preserves the outgoing audio during replay.
+        Graph steady=base(List.of(),List.of(out("render")));
+        var old=new LiveRenderer.Timeline(new LiveRenderer.Program(state(steady,0,0,120),GraphCompiler.compile(steady)),null);
+        LiveRenderer replacement=new LiveRenderer(); replacement.publish(old);
+        replacement.render(block,64,300_000_000L);
+        timeline.prepare(400_000_000L); replacement.publish(timeline);
+        double oldEnergy=0;
+        for(int i=0;i<10;i++) {
+            replacement.render(block,64,301_333_333L+Math.round(i*64*1e9/48000));
+            for(float value:block) oldEnergy+=value*value;
+        }
+        check(oldEnergy>.001 && replacement.historyFrames()>0,"Outgoing playback survives replacement warmup");
+        var pending = new LiveRenderer.Timeline(old.current(),timeline.current());
+        LiveRenderer pendingJoin = new LiveRenderer(); pendingJoin.publish(pending);
+        pendingJoin.render(block,64,400_000_000L);
+        double pendingEnergy=0;
+        for(float value:block) pendingEnergy+=value*value;
+        check(pendingEnergy>0 && pendingJoin.historyRecoveries()==1,"Late pending revision retains current audio while recovering");
+    }
+
+    private static void constantSampleRecovery() {
+        var ref=groove.engine.samples.FactorySamples.ref("factory:basic/kick.wav");
+        float[] pcm=new float[10*48000]; Arrays.fill(pcm,.2f);
+        var bank=Map.of(ref,new groove.engine.samples.SampleData(48000,1,pcm));
+        Graph graph=new Graph(3,List.of(new Graph.Node("sample",NodeType.GENERATOR_SAMPLE,
+                Map.of(),ref),n("render",NodeType.AUDIO_RENDER,Map.of()),
+                n("filter",NodeType.FILTER,Map.of("cutoffHz",2000.0)),n("out",NodeType.OUTPUT,Map.of())),
+                List.of(Graph.edge("sample","render"),Graph.edge("render","filter"),out("filter")));
+        for(long epoch:new long[]{0,6_000_000_000L,9_000_000_000_123_456L}) for(double anchor:new double[]{0,.25}) {
+            var timeline=new LiveRenderer.Timeline(new LiveRenderer.Program(state(graph,epoch,anchor,120),GraphCompiler.compile(graph),bank),null);
+            var continuous=new LiveRenderer(); continuous.publish(timeline);
+            var joined=new LiveRenderer(); joined.publish(timeline);
+            var pending=new LiveRenderer(); pending.publish(new LiveRenderer.Timeline(timeline.current(),timeline.current()));
+            float[] a=new float[128],b=new float[128],c=new float[128];
+            String context="Recovered constant sample equals continuous at epoch "+epoch+", anchor "+anchor;
+            for(int at=0;at<256000;at+=64) {
+                long now=epoch+Math.round(at*1e9/48000); timeline.prepare(now);
+                continuous.render(a,64,now);
+                if(at<60032) continue;
+                joined.render(b,64,now); pending.render(c,64,now);
+                if(at>=86400) for(int i=0;i<128;i++) {
+                    close(b[i],a[i],1e-6,context);
+                    close(c[i],a[i],1e-6,"Recovered pending constant sample equals standalone");
+                }
+                if(at==120000 || at==180032 || at==240000) {
+                    // At 120 BPM a ten-second sample fires every two seconds. The same
+                    // graph at transport age 3s has two voices, but at age 5s has three.
+                    // Compare matching transport ages, not just identical graph contents.
+                    int voices=(int)Math.floor(anchor+at/96000.0)-(int)Math.ceil(anchor)+1;
+                    double expected=Math.tanh(.2f*.8/Math.sqrt(2)*voices);
+                    close(b[126],expected,1e-6,"Settled DC level follows active sample voice count");
+                }
+            }
+            check(joined.scheduleMisses()==0 && pending.scheduleMisses()==0 && joined.historyRecoveries()==1,
+                    "Constant sample recovery completes without missed coverage");
+        }
+    }
+
     private static float[] renderFrames(Graph graph,int frames,int chunk) {
         var timeline=new LiveRenderer.Timeline(new LiveRenderer.Program(state(graph,0,0,120),GraphCompiler.compile(graph)),null);
         LiveRenderer renderer=new LiveRenderer(); renderer.publish(timeline);
@@ -450,6 +544,16 @@ final class SignalTests {
         for (int i=2000;i<4000;i++) renderer.render(block,64,Math.round(i*64*1e9/48000));
         bytes=allocation.getThreadAllocatedBytes(id)-before;
         check(bytes==0 && renderer.scheduleMisses()==0,"Live signal renderer allocation/starvation: "+bytes);
+        // Warm the recovery branch, then measure an entire second of history plus catch-up.
+        program.prepare(4_000_000_000L); renderer.resynchronize();
+        for(int i=0;i<300;i++) renderer.render(block,64,4_000_000_000L+Math.round(i*64*1e9/48000));
+        renderer.resynchronize();
+        long recovered=renderer.historyFrames();
+        before=allocation.getThreadAllocatedBytes(id);
+        for(int i=0;i<300;i++) renderer.render(block,64,4_000_000_000L+Math.round(i*64*1e9/48000));
+        bytes=allocation.getThreadAllocatedBytes(id)-before;
+        check(bytes==0 && renderer.historyFrames()>recovered && renderer.scheduleMisses()==0,
+                "Multi-source history recovery allocation/starvation: "+bytes);
         Graph triggered = base(List.of(n("euclid",NodeType.EUCLID,Map.of("steps",4.0,"pulses",4.0)),
                 n("trig",NodeType.TRIGGER_RENDER,Map.of()),n("env",NodeType.ENVELOPE,Map.of()),n("mix",NodeType.MIX_BUS,Map.of())),
                 List.of(Graph.edge("tone","euclid"),Graph.edge("euclid","trig"),new Graph.Edge("trig","out","env","trigger"),

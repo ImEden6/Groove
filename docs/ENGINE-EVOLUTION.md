@@ -2,7 +2,7 @@
 
 ## Still unimplemented (from this doc)
 
-- Arbitrary pattern-trigger envelopes and effect-history reconstruction. Multiple independent audio sources, control buffers, named ports, modulation and delayed routing have landed; see [signals](PHASE-2-SIGNALS.md).
+- Exact older/cross-revision effect-history reconstruction remains future work. Independent audio sources, arbitrary pattern-trigger envelopes and bounded local effect recovery have landed; see [signals](PHASE-2-SIGNALS.md).
 
 Phase 1 retained graph versions 1 and 2, the existing packet format, saved-world format, and the one-cycle `LoopPlan`. Subsequent Phase 2 increments implement [scheduling](PHASE-2-SCHEDULER.md), [ports](PHASE-2-PORTS.md), and [modulation/audio routing](PHASE-2-SIGNALS.md).
 
@@ -14,7 +14,7 @@ Phase 1 retained graph versions 1 and 2, the existing packet format, saved-world
 - Live playback owns 32 persistent active voice slots and 32 fading tail slots per prepared program. Stereo samples use separate left/right filters; event index plus absolute onset distinguishes overlapping copies across cycles. Tones use the same voice ownership model, which also lets their complete filter state survive a steal.
 - Newest onsets take priority at the live voice cap; equal onsets use stable plan order. A displaced voice retains oscillator/sample position and filter history during a 120-frame, 2.5 ms raised-cosine fade. Offline rendering uses a tail ring sized to its configured polyphony and a fade scaled to its output rate.
 - Tail storage is bounded. If more tails are displaced than the ring can hold during one fade interval, the oldest tail is replaced. This overload case is not a universal click-free guarantee. Likewise, the discontinuity threshold in the regression fixtures is not a bound on arbitrary high-frequency audio.
-- Resynchronization discards historical voice/filter/tail state, preserving fresh-join equivalence. Rendering reuses preallocated voice, candidate, and fade storage.
+- Resynchronization resets private state; signal graphs with effects then replay bounded prepared history before fading in. Rendering reuses preallocated voice, candidate, and fade storage; older/cross-revision effect history is not reconstructed.
 - Bandlimited sample playback uses a 48-tap Kaiser-windowed sinc base kernel (beta 6.5), four prefiltered half-rate PCM levels, and precomputed phase/cutoff coefficient tables, replacing the original eight-point design.
 - Dry audition passes its actual 48 kHz output rate into resampling. No editor controls or network fields were added.
 

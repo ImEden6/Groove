@@ -2,11 +2,14 @@ package groove.engine;
 
 /**
  * Bounded rolling scheduler/rendering path. Worker-prepared absolute note intervals
- * make late joins and seeks deterministic without replaying old attacks.
+ * anchor late joins and seeks. Stateful signal graphs silently replay bounded history.
  * Single audio-thread owner; publish immutable programs from a compiler worker.
  */
 public final class LiveRenderer {
     public static final int SAMPLE_RATE = 48000, MAX_VOICES = 32;
+    // Per VoiceProgram: four replay frames for each output frame gain three frames on
+    // the moving clock. One second of history therefore takes about 1/3 second to join.
+    private static final int HISTORY_FRAMES = SAMPLE_RATE, REPLAY_PER_FRAME = 4;
     public static final class Program {
         private final SessionState state;
         private final LoopPlan plan;
@@ -79,6 +82,10 @@ public final class LiveRenderer {
         final LookaheadScheduler.Window[] triggerWindows;
         LookaheadScheduler.Window window;
         boolean missed;
+        final boolean recoverEffects;
+        boolean recovering;
+        long recoveryOrigin, recoveryFrame;
+        double recoveryGain = 1;
         final java.util.Map<groove.engine.samples.AssetRef, groove.engine.samples.SampleData> samples;
         final ActiveVoice[] voices;
         final ActiveVoice[] tails;
@@ -95,6 +102,10 @@ public final class LiveRenderer {
         VoiceProgram(Program program) {
             state = program.state(); plan = program.plan(); samples = program.samples(); scheduler = program.scheduler;
             signals = plan.signals() == null ? null : plan.signals().runtime(state);
+            boolean stateful = false;
+            if (plan.signals() != null) for (Graph.Node node : plan.signals().nodes)
+                if (node.type() == NodeType.DELAY || node.type() == NodeType.FILTER) stateful = true;
+            recoverEffects = stateful;
             int capacity = program.sources == null && !program.isTriggerSource ? MAX_VOICES : 0;
             voices = new ActiveVoice[capacity]; tails = new ActiveVoice[capacity];
             events = new int[capacity]; data = new Event[capacity]; onsets = new double[capacity];
@@ -150,6 +161,7 @@ public final class LiveRenderer {
     private long origin;
     private double elapsed;
     private volatile long resyncs, scheduleMisses;
+    private volatile long historyFrames, historyRecoveries;
     private double fade;
     private Playback observed, previous;
     private double programBlend = 1;
@@ -166,6 +178,8 @@ public final class LiveRenderer {
     }
     public long resyncs() { return resyncs; }
     public long scheduleMisses() { return scheduleMisses; }
+    public long historyFrames() { return historyFrames; }
+    public long historyRecoveries() { return historyRecoveries; }
     /** Audio-owner call after an underrun; the next block rejoins the supplied playback time. */
     public void resynchronize() { initialized = false; elapsed = 0; fade = 0; resyncs++; }
 
@@ -198,7 +212,7 @@ public final class LiveRenderer {
             }
             output[f * 2] = (float) (Math.tanh(left) * fade);
             output[f * 2 + 1] = (float) (Math.tanh(right) * fade);
-            programBlend = Math.min(1, programBlend + 1.0 / 240);
+            if (ready(currentTimeline, now)) programBlend = Math.min(1, programBlend + 1.0 / 240);
             if (programBlend == 1) previous = null;
         }
     }
@@ -210,6 +224,8 @@ public final class LiveRenderer {
     }
 
     private static void capture(VoiceProgram program) {
+        // Keep the immutable history snapshot until replay catches the moving playback clock.
+        if (program.recovering) return;
         if (program.scheduler != null) program.window = program.scheduler.window();
         if (program.sources != null) for (VoiceProgram source : program.sources) capture(source);
         if (program.triggers != null) for (VoiceProgram trigger : program.triggers) capture(trigger);
@@ -224,6 +240,10 @@ public final class LiveRenderer {
 
     private static void markMissed(VoiceProgram program) {
         program.missed = true;
+        program.recovering = false;
+        // Keep recovering==false and recoveryGain==1 as a joint invariant (see ready()) instead
+        // of leaving recoveryGain stale until the next reset() call happens to fix it up.
+        program.recoveryGain = 1;
         if (program.sources != null) for (VoiceProgram source : program.sources) markMissed(source);
         if (program.triggers != null) for (VoiceProgram trigger : program.triggers) markMissed(trigger);
     }
@@ -234,13 +254,17 @@ public final class LiveRenderer {
             sample(timeline.current, now, out);
             return;
         }
-        double blend = Math.min(1, (now - timeline.pending.state.effectiveNanos()) / 5_000_000.0);
+        double timeBlend = Math.min(1, (now - timeline.pending.state.effectiveNanos()) / 5_000_000.0);
         sample(timeline.pending, now, out);
-        double pendL = out[0], pendR = out[1];
-        if (blend < 1) {
+        // sample() already scaled out[] by the pending program's own recoveryGain; applying that
+        // same factor again below (via the old-program weight) would square it mid-fade instead
+        // of multiplying, producing a real dip in combined energy rather than a linear crossfade.
+        double pendL = out[0] * timeBlend, pendR = out[1] * timeBlend;
+        double oldWeight = 1 - Math.min(timeBlend, timeline.pending.recoveryGain);
+        if (oldWeight > 0) {
             sample(timeline.current, now, tempStereo);
-            out[0] = pendL * blend + tempStereo[0] * (1 - blend);
-            out[1] = pendR * blend + tempStereo[1] * (1 - blend);
+            out[0] = pendL + tempStereo[0] * oldWeight;
+            out[1] = pendR + tempStereo[1] * oldWeight;
         } else {
             out[0] = pendL;
             out[1] = pendR;
@@ -264,19 +288,37 @@ public final class LiveRenderer {
         if (!covered(program, cycles)) {
             scheduleMisses++; markMissed(program); out[0] = 0; out[1] = 0; return;
         }
-        // A seek discards historical filter/tail state, just like a fresh late join.
-        if (program.missed || program.lastResync != resyncs || (program.lastNow != Long.MIN_VALUE && (now < program.lastNow || now - program.lastNow > 250_000_000L))) {
-            for (ActiveVoice v : program.voices) v.event = -1;
-            for (ActiveVoice v : program.tails) v.event = -1;
-            if (program.signals != null) program.signals.reset();
+        if (program.missed || program.lastResync != resyncs || program.lastNow == Long.MIN_VALUE
+                || now < program.lastNow || now - program.lastNow > 250_000_000L) {
+            reset(program);
+            if (program.recoverEffects) {
+                double earliest = Math.max(program.state.anchorCycle(), historyStart(program));
+                double availableSeconds = Math.max(0, (cycles - earliest) * secondsPerCycle);
+                long frames = (long)Math.min(HISTORY_FRAMES, Math.floor(availableSeconds * SAMPLE_RATE));
+                if (frames > 0) {
+                    program.recoveryOrigin = now - Math.round(frames * 1e9 / SAMPLE_RATE);
+                    program.recoveryFrame = 0;
+                    program.recovering = true;
+                    program.recoveryGain = 0;
+                    historyRecoveries++;
+                }
+            }
         }
         program.missed = false;
         program.lastResync = resyncs;
         program.lastNow = now;
         if (program.sources != null) {
-            for (int i = 0; i < program.sources.length; i++) sample(program.sources[i], now, program.sourceStereo[i]);
-            for (int i = 0; i < program.triggers.length; i++) program.triggerWindows[i] = program.triggers[i].window;
-            program.signals.process(program.sourceStereo, program.triggerWindows, out, now);
+            int work = 0;
+            while (program.recovering) {
+                long replayNow = program.recoveryOrigin + Math.round(program.recoveryFrame * 1e9 / SAMPLE_RATE);
+                if (replayNow >= now - 1e9 / SAMPLE_RATE / 2) { program.recovering = false; break; }
+                if (work == REPLAY_PER_FRAME) { out[0] = out[1] = 0; return; }
+                sampleSources(program, replayNow, out);
+                program.recoveryFrame++; work++; historyFrames++;
+            }
+            sampleSources(program, now, out);
+            program.recoveryGain = Math.min(1, program.recoveryGain + 1.0 / 240);
+            out[0] *= program.recoveryGain; out[1] *= program.recoveryGain;
             return;
         }
         program.count = 0;
@@ -331,6 +373,36 @@ public final class LiveRenderer {
             addVoice(program, v, cycles, secondsPerCycle, STEAL_FADE[v.fadeFrame++], out);
             if (v.fadeFrame == STEAL_FRAMES) v.event = -1;
         }
+    }
+
+    private static boolean ready(Playback playback, long now) {
+        if (playback == null) return true;
+        VoiceProgram active = playback.pending != null && now >= playback.pending.state.effectiveNanos()
+                ? playback.pending : playback.current;
+        return !active.recovering && active.recoveryGain == 1;
+    }
+
+    private void reset(VoiceProgram program) {
+        for (ActiveVoice v : program.voices) v.event = -1;
+        for (ActiveVoice v : program.tails) v.event = -1;
+        if (program.signals != null) program.signals.reset();
+        program.lastNow = Long.MIN_VALUE; program.lastResync = resyncs;
+        program.missed = false; program.recovering = false; program.recoveryGain = 1;
+        if (program.sources != null) for (VoiceProgram source : program.sources) reset(source);
+        if (program.triggers != null) for (VoiceProgram trigger : program.triggers) reset(trigger);
+    }
+
+    private static double historyStart(VoiceProgram program) {
+        double start = program.window == null ? Double.NEGATIVE_INFINITY : program.window.startCycle();
+        if (program.sources != null) for (VoiceProgram source : program.sources) start = Math.max(start, historyStart(source));
+        if (program.triggers != null) for (VoiceProgram trigger : program.triggers) start = Math.max(start, historyStart(trigger));
+        return start;
+    }
+
+    private void sampleSources(VoiceProgram program, long now, double[] out) {
+        for (int i = 0; i < program.sources.length; i++) sample(program.sources[i], now, program.sourceStereo[i]);
+        for (int i = 0; i < program.triggers.length; i++) program.triggerWindows[i] = program.triggers[i].window;
+        program.signals.process(program.sourceStereo, program.triggerWindows, out, now);
     }
 
     private static double eventDuration(VoiceProgram program, Event event, double secondsPerCycle) {

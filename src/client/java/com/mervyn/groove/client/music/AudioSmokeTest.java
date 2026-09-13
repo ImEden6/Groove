@@ -14,7 +14,7 @@ public final class AudioSmokeTest {
     private static long began;
     private static boolean complete;
     private static boolean stalled, stopping;
-    private static boolean signals;
+    private static boolean signals, effectStalled;
     private static long stoppedAt;
     public static void register() {
         if (!FabricLoader.getInstance().isDevelopmentEnvironment() || !Boolean.getBoolean("groove.audioSmoke")) return;
@@ -52,22 +52,29 @@ public final class AudioSmokeTest {
             }
             if (stream != null && stream.reads() >= 128 && !signals) {
                 long now = System.nanoTime();
-                Graph graph = SignalGraph.assignBirths(SignalDemo.multipleSources(),null,now);
-                timeline = LiveRenderer.Timeline.compile(new SessionTimeline.Snapshot(new SessionState(2,now,0,128,true,graph),null));
+                long effective = now - 1_000_000_000L;
+                Graph graph = SignalGraph.assignBirths(SignalDemo.multipleSources(),null,effective);
+                timeline = LiveRenderer.Timeline.compile(new SessionTimeline.Snapshot(new SessionState(2,effective,0,128,true,graph),null));
                 timeline.prepare(now); renderer.publish(timeline); signals = true;
                 GrooveMod.LOGGER.info("Groove audio smoke switched to two independent sources with modulation and feedback routing");
+            }
+            if (stream != null && stream.reads() >= 160 && !effectStalled) {
+                effectStalled = true;
+                stream.stallNextReadForTest();
             }
             if (stream != null && stream.reads() >= 256 && !stopping) {
                 if (stream.maxQueuedFrames() == 0 || stream.peak() < .01 || stream.closed())
                     throw new IllegalStateException("GROOVE AUDIO SMOKE FAILED: missing queue timing or PCM");
                 if (renderer.scheduleMisses() != 0) throw new IllegalStateException("Lookahead starved during smoke test");
                 if (stream.recoveries() == 0) throw new IllegalStateException("Underrun recovery was not exercised");
+                if (renderer.historyRecoveries() < 2 || renderer.historyFrames() < 48000)
+                    throw new IllegalStateException("Effect history recovery was not exercised on join and underrun");
                 client.getSoundManager().stop(sound);
                 stopping = true; stoppedAt = System.nanoTime();
             }
             if (stopping && stream.closed()) {
-                GrooveMod.LOGGER.info("GROOVE AUDIO SMOKE PASSED: {} reads, {} underrun recoveries; explicit stop closed the stream",
-                        stream.reads(), stream.recoveries());
+                GrooveMod.LOGGER.info("GROOVE AUDIO SMOKE PASSED: {} reads, {} underrun recoveries, {} effect recoveries ({} replay frames); explicit stop closed the stream",
+                        stream.reads(), stream.recoveries(), renderer.historyRecoveries(), renderer.historyFrames());
                 complete = true;
                 client.stop();
             }

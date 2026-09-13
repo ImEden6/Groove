@@ -76,8 +76,9 @@ the level at that end.
 stacked patterns, sample onsets) can drive an `envelope`'s trigger input, not just
 `step_sequence`. Each `trigger_render` compiles and schedules its upstream pattern
 independently, the same way an `audio_render` source does, with its own rolling
-scheduler bounded to a fixed 24-cycle lookback (the longest an envelope's
-attack+decay+release can span) rather than the sample-duration-based history an
+scheduler bounded to a 24-cycle envelope lookback (the longest an envelope's
+attack+decay+release can span), plus one extra history bucket for its advertised
+previous-cycle coverage, rather than the sample-duration-based history an
 audio source uses. Up to eight `trigger_render` sources are supported per graph,
 sharing the same combined 128-event budget as `audio_render` sources.
 
@@ -88,8 +89,11 @@ late-join/backward-seek determinism guaranteed below. Overlapping voices (a stil
 releasing earlier trigger and a newer one) combine with **MAX**, not sum: an
 `envelope`'s output stays within its documented 0–1 range regardless of how many
 triggers overlap, so existing cutoff/gain mappings don't silently change meaning
-under dense triggering. `step_sequence`'s own analytic trigger path is unchanged
-and does not go through this window-scan mechanism.
+under dense triggering. `step_sequence` uses the same MAX-overlapping-voices
+semantics without scanning a window. Its envelope rises to a single peak and then
+never increases, so only the two periodic voice ages bracketing that peak need
+evaluation. Older releases therefore survive new onsets with constant-time work,
+including in GATED mode and when attack, decay or release has zero duration.
 
 ## Shared time and control buffers
 
@@ -121,9 +125,28 @@ Each frame first reads all delay cells, evaluates the remaining routing in depen
 order, then writes all delay inputs. Delays therefore retain their exact sample count
 across callback sizes. Programs can be shared by monitor and speaker renderers;
 mutable filters, delay memory, cursors and control buffers are renderer-private.
-Publication, resync and seek start fresh effect state. They do not reconstruct the
-feedback history of a continuously running client; late-join equivalence applies
-to modulation phase, not historical echoes or filter transients.
+Publication, resync, seek and recovery after a missed schedule rebuild an approximation
+of recent effect state locally. For graphs containing a FILTER or DELAY, LiveRenderer
+starts from cleared state and silently replays up to one second before the requested
+position through all audio sources, trigger windows and routing. Replay is clipped to
+the current revision's effective time and the common prepared-window coverage. The
+immutable windows are retained during recovery; no pattern queries, allocations or
+network snapshots are needed in the audio callback.
+
+For each active program, an output frame performs at most four historical frames, catching a moving clock
+in roughly one third of the initial lookback duration (up to about 333 ms at normal
+playback speed), then fades in over 5 ms. The completion frame can also render one
+current frame. An outgoing program continues during replacement recovery; a fresh
+join or seek with no usable outgoing audio is silent until recovery completes.
+`historyRecoveries()` and `historyFrames()` expose recovery starts and replay work.
+Plain pattern and stateless signal graphs keep their immediate join behavior.
+
+This is bounded approximation, not exact late-join equivalence: echoes older than
+the available lookback, long delay chains, persistent feedback and previous graph or
+tempo revisions are not reconstructed. A graph edit never replays the previous graph
+through the new one. Exact authoritative snapshots remain a possible future refinement.
+Recovery has a fixed extra-work bound, not a guarantee that every maximum-size graph
+or number of simultaneous speakers meets the audio deadline.
 
 ## Editor and compatibility
 
@@ -168,9 +191,23 @@ sources, the eight-source cap, numeric parity against an equivalent periodic
 outweighing a newer, quieter one under MAX combine), late-join and backward-seek
 determinism, and allocation-free rendering through the full live renderer.
 
-Historical effect reconstruction (delay/filter state surviving a late join) remains
-open; this extension changes neither that contract nor `step_sequence`'s own
-analytic trigger path.
+Regressions also compare overlapping periodic and arbitrary triggers in ONE_SHOT
+and GATED modes, including zero-duration stages and negative cycles; check the
+oldest releasing trigger within cached backward coverage; enforce the ring's
+history capacity; and reject missing trigger windows in both narrow overloads.
+
+Effect-history regressions compare a late join against continuous playback during
+a note-free echo tail through delay feedback and filtering. They also cover the
+one-second cap, per-callback replay budget, repeated resync/backward seeks, outgoing
+audio during publication and pending-revision recovery, deterministic multiple-source
+lifecycle behavior, and zero warmed audio-thread allocations during recovery.
+
+The 2026-09-14 trigger fixes and bounded effect recovery passed
+`./gradlew.bat test :core-engine:check`, including warmed allocation checks during
+recovery. The smoke fixture now checks effect recovery after both late publication
+and an induced underrun. The attempted Minecraft run exited before its completion
+marker, so that extended integration scenario is not yet validated; a successful
+Gradle exit alone is not a smoke pass. The earlier result below is historical evidence.
 
 Command: `./gradlew.bat test :core-engine:check runClient -PaudioSmoke`.
 
