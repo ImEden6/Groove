@@ -2,8 +2,10 @@ package com.mervyn.groove.client.music;
 
 import com.mervyn.groove.GrooveMod;
 import com.mervyn.groove.block.GrooveBlocks;
+import com.mervyn.groove.block.GrooveItems;
 import com.mervyn.groove.block.SpeakerBlockEntity;
 import com.mervyn.groove.music.MusicPackets;
+import dev.emi.trinkets.api.TrinketsApi;
 import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientChunkEvents;
 import groove.engine.ClockSync;
 import groove.engine.LiveRenderer;
@@ -97,10 +99,22 @@ public final class MusicClient {
                 stopEmitters(client);
                 return;
             }
-            updateEmitters(client);
-            if (!emitters.isEmpty()) {
+            if (SampleCommands.auditioning()) {
+                stopEmitters(client);
                 stopMonitor(client);
                 return;
+            }
+            boolean headphones = TrinketsApi.getTrinketComponent(client.player)
+                    .map(component -> component.isEquipped(GrooveItems.HEADPHONES))
+                    .orElse(false);
+            if (headphones) {
+                if (!emitters.isEmpty()) stopEmitters(client);
+            } else {
+                updateEmitters(client);
+                if (!emitters.isEmpty()) {
+                    stopMonitor(client);
+                    return;
+                }
             }
             if (retryTicks > 0) { retryTicks--; return; }
             if (sound == null || stream.closed() || !client.getSoundManager().isActive(sound)) {
