@@ -75,11 +75,25 @@ public final class HeadphoneServer {
         var level = player.serverLevel();
         boolean inRange = HeadphoneLinks.inRange(link.get(), level.dimension().location(), player.position());
         if (inRange && !level.hasChunk(link.get().pos().getX() >> 4, link.get().pos().getZ() >> 4)) return null;
-        if (inRange && level.getBlockEntity(link.get().pos()) instanceof EditorBlockEntity editor && editor.sessionId().equals(link.get().session()))
-            return player.isSpectator() ? null : editor;
+        EditorBlockEntity editor = inRange ? linkedEditor(level, link.get()) : null;
+        if (editor != null) return player.isSpectator() ? null : editor;
         HeadphoneLinks.clear(worn.get());
         player.inventoryMenu.broadcastChanges();
         return null;
+    }
+    private static EditorBlockEntity linkedEditor(net.minecraft.server.level.ServerLevel level, HeadphoneLinks.Link link) {
+        return level.getBlockEntity(link.pos()) instanceof EditorBlockEntity editor && editor.sessionId().equals(link.session())
+                ? editor : null;
+    }
+    /** Position-agnostic existence check for a link's target, used to clean up stale links on
+     *  headphones that are stored rather than worn (see {@link com.mervyn.groove.item.HeadphonesItem}).
+     *  Unlike {@link #previewEditor}, this never clears a link just because it can't be reached
+     *  or confirmed right now; it only reports a link as gone when the target chunk is loaded
+     *  and demonstrably no longer holds a matching editor. */
+    public static boolean linkedEditorExists(HeadphoneLinks.Link link, net.minecraft.server.MinecraftServer server) {
+        var level = server.getLevel(net.minecraft.resources.ResourceKey.create(net.minecraft.core.registries.Registries.DIMENSION, link.dimension()));
+        if (level == null || !level.hasChunk(link.pos().getX() >> 4, link.pos().getZ() >> 4)) return true;
+        return linkedEditor(level, link) != null;
     }
     static boolean allowsAsset(net.minecraft.server.level.ServerPlayer player, groove.engine.samples.AssetRef ref) {
         var editor = previewEditor(player);

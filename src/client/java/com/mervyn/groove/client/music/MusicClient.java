@@ -65,6 +65,7 @@ public final class MusicClient {
     private static GrooveAudioStream previewStream;
     private static int previewRetryTicks;
     private static final Set<BlockPos> speakerSegments = new HashSet<>();
+    private static final Map<Emitter, Long> fadingEmitters = new java.util.IdentityHashMap<>();
     private static final Map<BlockPos, Emitter> emitters = new HashMap<>();
     private static final Map<BlockPos, SpeakerLink> speakerLinks = new ConcurrentHashMap<>();
     private static final int MAX_EMITTERS = 8;
@@ -147,6 +148,7 @@ public final class MusicClient {
         ClientChunkEvents.CHUNK_UNLOAD.register((level, chunk) -> removeSpeakers(level, chunk));
         ClientLifecycleEvents.CLIENT_STOPPING.register(client -> { reset(client); COMPILER.shutdownNow(); PREVIEW_COMPILER.shutdownNow(); SPEAKER_COMPILER.shutdownNow(); SCHEDULER.shutdownNow(); });
         ClientTickEvents.END_CLIENT_TICK.register(client -> {
+            reapFadingEmitters(client);
             if (client.getConnection() == null || !ClientPlayNetworking.canSend(MusicPackets.Ping.TYPE)) return;
             if (speakerLevel != client.level) {
                 stopEmitters(client);
@@ -175,7 +177,7 @@ public final class MusicClient {
                     .map(component -> component.isEquipped(GrooveItems.HEADPHONES))
                     .orElse(false);
             if (headphones) {
-                if (!emitters.isEmpty()) stopEmitters(client);
+                stopEmitters(client);
                 clearSpeakerLinks();
                 updateHeadphonePreview(client);
             } else {
@@ -246,7 +248,7 @@ public final class MusicClient {
     private static void invalidateSpeaker(BlockPos pos, SpeakerLink link) {
         link.generation++; link.wire = null; link.program = null; link.refreshAgain = false;
         var emitter = emitters.remove(pos);
-        if (emitter != null) stopEmitter(Minecraft.getInstance(), emitter);
+        if (emitter != null) stopEmitter(emitter);
         SampleLibrary.removeSpeaker(pos);
     }
     private static void clearSpeakerLinks() {
@@ -313,7 +315,7 @@ public final class MusicClient {
         emitters.entrySet().removeIf(entry -> {
             if (entry.getKey().getX() >> 4 != chunk.getPos().x || entry.getKey().getZ() >> 4 != chunk.getPos().z)
                 return false;
-            stopEmitter(Minecraft.getInstance(), entry.getValue());
+            stopEmitter(entry.getValue());
             return true;
         });
         speakerLinks.entrySet().removeIf(entry -> {
@@ -353,7 +355,7 @@ public final class MusicClient {
                     Emitter emitter = emitters.get(pos);
                     if (emitter != null && emitter.height == height && !emitter.stream.closed()
                             && client.getSoundManager().isActive(emitter.sound)) return;
-                    if (emitter != null) stopEmitter(client, emitter);
+                    if (emitter != null) stopEmitter(emitter);
                     LiveRenderer sourceRenderer = new LiveRenderer();
                     sourceRenderer.publish(speakerLinks.get(pos).program);
                     GrooveAudioStream sourceStream = new GrooveAudioStream(sourceRenderer, clock, true);
@@ -364,7 +366,7 @@ public final class MusicClient {
         emitters.entrySet().removeIf(entry -> {
             SpeakerLink link = speakerLinks.get(entry.getKey());
             if (selected.contains(entry.getKey()) && link != null && link.program != null) return false;
-            stopEmitter(client, entry.getValue());
+            stopEmitter(entry.getValue());
             return true;
         });
 
@@ -448,13 +450,35 @@ public final class MusicClient {
     }
 
     private static void stopEmitters(Minecraft client) {
-        for (Emitter emitter : emitters.values()) stopEmitter(client, emitter);
-        emitters.clear();
+        // Pause, disconnect, audition and headphones require immediate silence, including
+        // streams already removed from the active map while fading out.
+        for (Emitter emitter : emitters.values()) closeEmitter(client, emitter);
+        for (Emitter emitter : fadingEmitters.keySet()) closeEmitter(client, emitter);
+        emitters.clear(); fadingEmitters.clear();
     }
-
-    private static void stopEmitter(Minecraft client, Emitter emitter) {
+    private static void closeEmitter(Minecraft client, Emitter emitter) {
         client.getSoundManager().stop(emitter.sound);
         emitter.stream.close();
+    }
+    private static void stopEmitter(Emitter emitter) {
+        emitter.stream.fadeOut(GrooveAudioStream.FADE_FRAMES);
+        fadingEmitters.putIfAbsent(emitter, System.nanoTime());
+        // Bound retired streams even during rapid relinks or tower changes.
+        if (fadingEmitters.size() > MAX_EMITTERS * 2) {
+            var oldest = fadingEmitters.entrySet().stream().min(Map.Entry.comparingByValue()).orElseThrow().getKey();
+            closeEmitter(Minecraft.getInstance(), oldest); fadingEmitters.remove(oldest);
+        }
+    }
+    private static void reapFadingEmitters(Minecraft client) {
+        long now = System.nanoTime();
+        fadingEmitters.entrySet().removeIf(entry -> {
+            var emitter = entry.getKey();
+            // A paused/stalled sound channel may never consume the fade; retain a bounded
+            // fallback deadline. Do not cut queued PCM merely because EOF was generated.
+            if (now - entry.getValue() < 2_000_000_000L
+                    && !(emitter.stream.closed() && !client.getSoundManager().isActive(emitter.sound))) return false;
+            closeEmitter(client, emitter); return true;
+        });
     }
 
     private record Emitter(GrooveSound sound, GrooveAudioStream stream, int height, LiveRenderer renderer) {}

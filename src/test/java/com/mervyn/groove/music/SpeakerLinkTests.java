@@ -93,6 +93,71 @@ final class SpeakerLinkTests {
         reject(() -> new SpeakerPackets.ListState(UUID.randomUUID(), true, "",
                 java.util.Collections.nCopies(SpeakerPackets.MAX_LISTED + 1, BlockPos.ZERO),
                 java.util.Collections.nCopies(SpeakerPackets.MAX_LISTED + 1, false)), "Oversized speaker list is rejected");
+
+        fadeOutChecks();
+        for (boolean mono : new boolean[] {false, true})
+            for (int frames : new int[] {1, 2048, 4096}) exactFadeChecks(mono, frames);
+    }
+    private static void exactFadeChecks(boolean mono, int frames) {
+        long now = System.nanoTime();
+        var clock = new groove.engine.ClockSync(); clock.observe(now, now, now);
+        var renderer = new groove.engine.LiveRenderer();
+        var timeline = groove.engine.LiveRenderer.Timeline.compile(new groove.engine.SessionTimeline.Snapshot(
+                new groove.engine.SessionState(1, now, 0, 128, true, groove.engine.Graph.demo()), null));
+        timeline.prepare(now); renderer.publish(timeline);
+        var stream = new com.mervyn.groove.client.music.GrooveAudioStream(renderer, clock, mono);
+        try {
+            reject(() -> stream.fadeOut(0), "Zero-length fade rejected");
+            reject(() -> stream.fadeOut(-1), "Negative fade rejected");
+            stream.fadeOut(frames);
+            stream.fadeOut(1); // A repeated teardown must not shorten an in-progress fade.
+            int remaining = frames, bytesPerFrame = mono ? 2 : 4;
+            while (remaining > 0) {
+                int count = Math.min(2048, remaining);
+                check(!stream.closed(), "Fade stays open until the exact frame count");
+                var pcm = stream.readQueued(count * bytesPerFrame, 0);
+                check(pcm != null, "Fade produces requested mono/stereo data");
+                try {
+                    check(pcm.remaining() == count * bytesPerFrame, "Fade buffer has the requested length");
+                    remaining -= count;
+                    if (remaining == 0) {
+                        check(stream.closed(), "Fade closes on its final frame, without an extra read");
+                        check(pcm.getShort(pcm.limit() - bytesPerFrame) == 0, "Last mono/left sample reaches zero");
+                        if (!mono) check(pcm.getShort(pcm.limit() - 2) == 0, "Last right sample reaches zero");
+                    }
+                } finally { org.lwjgl.system.MemoryUtil.memFree(pcm); }
+            }
+            check(stream.readQueued(bytesPerFrame, 0) == null, "Completed fade returns EOF");
+        } finally { stream.close(); }
+    }
+    private static void fadeOutChecks() {
+        long now = System.nanoTime();
+        var clock = new groove.engine.ClockSync();
+        clock.observe(now, now, now);
+        var renderer = new groove.engine.LiveRenderer();
+        var timeline = groove.engine.LiveRenderer.Timeline.compile(new groove.engine.SessionTimeline.Snapshot(
+                new groove.engine.SessionState(1, now - 100_000_000L, 0, 128, true, groove.engine.Graph.demo()), null));
+        timeline.prepare(now);
+        renderer.publish(timeline);
+        var stream = new com.mervyn.groove.client.music.GrooveAudioStream(renderer, clock);
+        int fadeFrames = com.mervyn.groove.client.music.GrooveAudioStream.CHUNK_FRAMES + 100;
+        stream.fadeOut(fadeFrames);
+        int totalFrames = 0, safety = 0;
+        java.nio.ByteBuffer last = null;
+        while (safety++ < 8) {
+            var buf = stream.readQueued(com.mervyn.groove.client.music.GrooveAudioStream.CHUNK_FRAMES * 4, 0);
+            if (buf == null) break;
+            totalFrames += buf.remaining() / 4;
+            if (last != null) org.lwjgl.system.MemoryUtil.memFree(last);
+            last = buf;
+        }
+        check(stream.closed(), "Fading out the full window closes the stream");
+        check(totalFrames >= fadeFrames, "The armed fade window is fully consumed before closing");
+        check(last != null, "At least one buffer is produced while fading");
+        int lastFrameOffset = last.remaining() - 4;
+        check(last.getShort(lastFrameOffset) == 0 && last.getShort(lastFrameOffset + 2) == 0, "Fully faded tail is silent");
+        org.lwjgl.system.MemoryUtil.memFree(last);
+        check(stream.readQueued(com.mervyn.groove.client.music.GrooveAudioStream.CHUNK_FRAMES * 4, 0) == null, "A closed stream reads no further data");
     }
     private static void check(boolean condition, String message) { if (!condition) throw new AssertionError(message); }
     private static void reject(Runnable action, String message) {

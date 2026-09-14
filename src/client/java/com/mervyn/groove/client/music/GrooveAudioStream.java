@@ -12,6 +12,8 @@ import java.nio.ByteOrder;
 /** PCM ownership transfers to Minecraft SoundBuffer, which frees the native allocation. */
 public final class GrooveAudioStream implements AudioStream {
     public static final int CHUNK_FRAMES = 2048;
+    /** ~300ms linear fade window used when a speaker emitter stops instead of cutting instantly. */
+    public static final int FADE_FRAMES = LiveRenderer.SAMPLE_RATE * 3 / 10;
     private static final AudioFormat STEREO_FORMAT = new AudioFormat(LiveRenderer.SAMPLE_RATE, 16, 2, true, false);
     private static final AudioFormat MONO_FORMAT = new AudioFormat(LiveRenderer.SAMPLE_RATE, 16, 1, true, false);
     private final LiveRenderer renderer;
@@ -23,6 +25,9 @@ public final class GrooveAudioStream implements AudioStream {
     private volatile double peak;
     private volatile long recoveries;
     private volatile boolean stallNextRead;
+    // The control thread publishes one request; only the audio thread owns progress.
+    private final java.util.concurrent.atomic.AtomicInteger fadeRequest = new java.util.concurrent.atomic.AtomicInteger(-1);
+    private int fadeFrames = -1, fadeRemaining;
     public GrooveAudioStream(LiveRenderer renderer, ClockSync clock) { this(renderer, clock, false); }
     public GrooveAudioStream(LiveRenderer renderer, ClockSync clock, boolean mono) {
         this.renderer = renderer; this.clock = clock; this.mono = mono;
@@ -35,9 +40,15 @@ public final class GrooveAudioStream implements AudioStream {
     public long recoveries() { return recoveries; }
     public void recoveredUnderrun() { recoveries++; renderer.resynchronize(); }
     void stallNextReadForTest() { stallNextRead = true; }
+    /** Arms a linear fade to silence over the next {@code frames} frames, then closes the
+     *  stream so playback ends naturally instead of being cut instantly. Idempotent. */
+    public void fadeOut(int frames) {
+        if (frames < 1) throw new IllegalArgumentException("Fade must contain at least one frame");
+        fadeRequest.compareAndSet(-1, frames);
+    }
     public ByteBuffer read(int bytes) { return readQueued(bytes, 0); }
     public ByteBuffer readQueued(int bytes, long queuedFrames) {
-        if (closed || bytes < 4) return null;
+        if (closed || bytes < (mono ? 2 : 4)) return null;
         if (stallNextRead) {
             stallNextRead = false;
             // The sound executor can unpark its worker; a single park may return
@@ -53,8 +64,16 @@ public final class GrooveAudioStream implements AudioStream {
         maxQueuedFrames = Math.max(maxQueuedFrames, queuedFrames);
         ByteBuffer pcm = MemoryUtil.memAlloc(frames * (mono ? 2 : 4)).order(ByteOrder.LITTLE_ENDIAN);
         double blockPeak = peak;
+        int requestedFade = fadeRequest.get();
+        if (fadeFrames < 0 && requestedFade > 0) { fadeFrames = requestedFade; fadeRemaining = requestedFade; }
         for (int frame = 0; frame < frames; frame++) {
             float left = samples[frame * 2], right = samples[frame * 2 + 1];
+            if (fadeFrames > 0) {
+                float gain = fadeFrames == 1 ? 0 : Math.max(0f, (float) (fadeRemaining - 1) / (fadeFrames - 1));
+                left *= gain; right *= gain;
+                if (fadeRemaining > 0) fadeRemaining--;
+                if (fadeRemaining == 0) closed = true;
+            }
             if (mono) {
                 float mixed = (left + right) * .5f;
                 blockPeak = Math.max(blockPeak, Math.abs(mixed));
