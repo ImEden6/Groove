@@ -51,14 +51,43 @@ final class SpeakerLinkTests {
             var committedRequest = new SpeakerPackets.CommittedRequest(speakerPos, UUID.randomUUID());
             SpeakerPackets.CommittedRequest.CODEC.encode(wire, committedRequest);
             check(SpeakerPackets.CommittedRequest.CODEC.decode(wire).equals(committedRequest), "Speaker committed request round trip");
+            var timeline = new groove.engine.SessionTimeline(groove.engine.Graph.demo(), 140, 0);
+            timeline.schedule(groove.engine.Graph.demo(), 150, true, 0, 0);
             var committedState = new SpeakerPackets.CommittedState(speakerPos, committedRequest.request(), true,
-                    GraphJson.encode(groove.engine.Graph.demo()), 140, true, 3, 12345, 2.5);
+                    new MusicPackets.Snapshot(session, timeline.snapshot(0)));
             SpeakerPackets.CommittedState.CODEC.encode(wire, committedState);
-            check(SpeakerPackets.CommittedState.CODEC.decode(wire).equals(committedState), "Speaker committed state round trip");
-            var unavailable = new SpeakerPackets.CommittedState(speakerPos, UUID.randomUUID(), false, "", 128, false, 0, 0, 0);
+            var decoded = SpeakerPackets.CommittedState.CODEC.decode(wire);
+            check(decoded.equals(committedState), "Speaker committed state round trip");
+            check(decoded.timeline().snapshot().at(999_999_999L).bpm() == 140 && decoded.timeline().snapshot().at(1_000_000_000L).bpm() == 150,
+                    "Speaker switches at the pending downbeat without another poll");
+            var relinked = new SpeakerPackets.CommittedState(speakerPos, UUID.randomUUID(), true,
+                    new MusicPackets.Snapshot(UUID.randomUUID(), timeline.snapshot(0)));
+            check(!relinked.samePublication(committedState), "Equal revisions on different editors are different publications");
+            var repeat = new SpeakerPackets.CommittedState(speakerPos, UUID.randomUUID(), true, committedState.timeline());
+            check(repeat.samePublication(committedState), "Request IDs do not force recompilation of identical publications");
+            var unavailable = new SpeakerPackets.CommittedState(speakerPos, UUID.randomUUID(), false, null);
             SpeakerPackets.CommittedState.CODEC.encode(wire, unavailable);
             check(SpeakerPackets.CommittedState.CODEC.decode(wire).equals(unavailable), "Unavailable committed state round trip");
         } finally { wire.release(); }
+        var candidates = new java.util.ArrayList<BlockPos>();
+        for (int i = 0; i < 12; i++) candidates.add(new BlockPos(i, 0, 0));
+        var selected = com.mervyn.groove.client.music.MusicClient.nearestSpeakers(candidates, new BlockPos(0, 0, 0).getCenter());
+        check(selected.size() == 8 && selected.contains(new BlockPos(7, 0, 0)) && !selected.contains(new BlockPos(8, 0, 0)), "Exactly eight nearest towers are selected");
+        var moved = com.mervyn.groove.client.music.MusicClient.nearestSpeakers(candidates, new BlockPos(11, 0, 0).getCenter());
+        check(moved.size() == 8 && !moved.contains(BlockPos.ZERO), "Moving retires formerly nearest towers");
+        var sampleGraph = groove.engine.samples.FactorySamples.demo();
+        var sampleRef = sampleGraph.nodes().stream().filter(n -> n.sample() != null).findFirst().orElseThrow().sample();
+        var sampleTimeline = new groove.engine.SessionTimeline(groove.engine.Graph.demo(), 120, 0);
+        sampleTimeline.schedule(sampleGraph, 120, true, 0, 0);
+        check(SpeakerServer.references(sampleTimeline.snapshot(0), sampleRef), "Pending publication authorizes sample prefetch before downbeat");
+        check(!SpeakerServer.references(new groove.engine.SessionTimeline(groove.engine.Graph.demo(), 120, 0).snapshot(0), sampleRef), "Unreferenced samples are not authorized by speaker state");
+        var pollPlayer = UUID.randomUUID();
+        for (int i = 0; i < 32; i++) check(SpeakerServer.allowPoll(pollPlayer, new BlockPos(i, 0, 0), 0), "Poll table accepts bounded distinct positions");
+        check(!SpeakerServer.allowPoll(pollPlayer, new BlockPos(33, 0, 0), 0), "Poll table cannot grow without bound");
+        check(!SpeakerServer.allowPoll(pollPlayer, BlockPos.ZERO, 1), "Repeated polls are throttled");
+        check(SpeakerServer.allowPoll(pollPlayer, new BlockPos(33, 0, 0), 6_000_000_000L), "Expired poll entries release capacity");
+        var badTag = new CompoundTag(); badTag.putString("EditorPos", "invalid"); badTag.putUUID("EditorSession", session);
+        check(SpeakerLinks.read(badTag).isEmpty(), "Malformed position cannot silently link to world origin");
         reject(() -> new SpeakerPackets.ListState(UUID.randomUUID(), true, "", List.of(new BlockPos(0, 0, 0)), List.of()),
                 "Mismatched speaker/linked list lengths are rejected");
         reject(() -> new SpeakerPackets.ListState(UUID.randomUUID(), true, "",

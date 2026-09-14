@@ -69,3 +69,12 @@ This is functional integration, not completion of all proposed drawer polish: fa
 ## Verification
 
 `gradlew build` runs packet round-trip and editor-state regressions alongside engine tests. Block-session checks cover draft isolation, last-write-wins updates, stale/pending/invalid commit rejection, incomplete-draft persistence, saved publication and transport, ownership/allowlist persistence, replacement identity, and packet round trips. The editor regressions cover sample creation, swap parameter/cable preservation, undo/redo, and stale/pending session rejection. These tests do not substitute for interactive two-player acceptance testing.
+
+Speaker playback snapshots include editor identity and the pending publication, so
+relinking to a session with a lower revision takes effect and downbeat changes do
+not wait for the next poll. Polling, compilation and playback share the same eight
+nearest tower bases within 64 blocks; an unlinked selected tower is silent. Each
+speaker keeps its own sample requests, and downloaded samples rebuild its timeline.
+The Speakers panel refreshes every two seconds and recovers timed-out bind requests.
+Server requests validate distance and loaded chunks before accessing blocks. Stale
+links in unloaded speaker chunks are cleared when resolved after loading.

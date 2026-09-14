@@ -18,7 +18,7 @@ public final class SpeakerLinks {
     }
 
     public static Optional<Link> read(CompoundTag tag) {
-        if (!tag.contains(POS_KEY) || !tag.hasUUID(SESSION_KEY)) return Optional.empty();
+        if (!tag.contains(POS_KEY, net.minecraft.nbt.Tag.TAG_LONG) || !tag.hasUUID(SESSION_KEY)) return Optional.empty();
         return Optional.of(new Link(BlockPos.of(tag.getLong(POS_KEY)), tag.getUUID(SESSION_KEY)));
     }
 

@@ -53,6 +53,7 @@ public final class GrooveEditorScreen extends Screen {
     private UUID speakerListRequest;
     private long speakerListSent;
     private UUID speakerBindRequest;
+    private long speakerBindSent;
     private int speakerScroll;
     private List<net.minecraft.core.BlockPos> speakerPositions = List.of();
     private List<Boolean> speakerLinked = List.of();
@@ -177,8 +178,9 @@ public final class GrooveEditorScreen extends Screen {
         speakerScroll = Math.min(speakerScroll, Math.max(0, speakerPositions.size() - accessRows()));
     }
     private void sendSpeakerBind(int row) {
-        if (blockSession == null || speakerBindRequest != null || row < 0 || row >= speakerPositions.size()) return;
+        if (blockSession == null || speakerBindRequest != null || speakerListRequest != null || row < 0 || row >= speakerPositions.size()) return;
         speakerBindRequest = UUID.randomUUID();
+        speakerBindSent = System.nanoTime();
         boolean link = !speakerLinked.get(row);
         ClientPlayNetworking.send(new com.mervyn.groove.music.SpeakerPackets.BindRequest(blockSession.pos(), blockSession.session(),
                 speakerPositions.get(row), link, speakerBindRequest));
@@ -187,7 +189,7 @@ public final class GrooveEditorScreen extends Screen {
         if (!packet.request().equals(speakerBindRequest)) return;
         speakerBindRequest = null;
         message = packet.message();
-        if (packet.accepted()) fetchSpeakers();
+        if (packet.accepted()) { speakerListRequest = null; fetchSpeakers(); }
     }
     @Override
     protected void init() {
@@ -231,6 +233,10 @@ public final class GrooveEditorScreen extends Screen {
     @Override
     public void render(GuiGraphics graphics, int mouseX, int mouseY, float partialTick) {
         state.tick();
+        if (speakerBindRequest != null && System.nanoTime() - speakerBindSent > 5_000_000_000L) {
+            speakerBindRequest = null; message = "Speaker request timed out; refresh before retrying";
+        }
+        if (speakersOpen && speakerBindRequest == null && System.nanoTime() - speakerListSent > 2_000_000_000L) fetchSpeakers();
         if (blockSession != null) {
             long elapsed = System.nanoTime() - blockSent;
             if (blockRequest != null && elapsed > 5_000_000_000L) { blockRequest = null; commitAfterSave = false; message = "Editor request timed out"; }
@@ -616,9 +622,9 @@ public final class GrooveEditorScreen extends Screen {
         int textX = x + 4;
         graphics.drawString(font, "Speakers", textX, 34, textColor, false);
         graphics.drawString(font, "x", inspectorCloseX(), 34, textColor, false);
-        graphics.drawString(font, "Nearby speakers (click to link/unlink)", textX, 48, textColor, false);
+        graphics.drawString(font, font.plainSubstrByWidth("Click to link/unlink", width - textX - 8), textX, 48, textColor, false);
         int y = 60;
-        if (speakerListRequest != null) graphics.drawString(font, "Searching...", textX, y, textColor, false);
+        if (speakerListRequest != null && speakerPositions.isEmpty()) graphics.drawString(font, "Searching...", textX, y, textColor, false);
         else if (speakerPositions.isEmpty()) graphics.drawString(font, "No speakers within reach", textX, y, textColor, false);
         for (int i = speakerScroll; i < Math.min(speakerPositions.size(), speakerScroll + accessRows()); i++) {
             var pos = speakerPositions.get(i);
@@ -626,7 +632,7 @@ public final class GrooveEditorScreen extends Screen {
             int color = speakerLinked.get(i) ? 0x55ff55 : textColor;
             graphics.drawString(font, font.plainSubstrByWidth(label, width - textX - 8), textX, y, color, false); y += 11;
         }
-        graphics.drawString(font, "Click a row; scroll for more", textX, bottom - 54, 0xffcc66, false);
+        graphics.drawString(font, font.plainSubstrByWidth("Click a row; scroll for more", width - textX - 8), textX, bottom - 54, 0xffcc66, false);
     }
     /** Same live-session check render() uses for the "Cycle .. Playing/Stopped" readout,
      *  so the Play/Stop button's icon actually reflects transport state rather than always

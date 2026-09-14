@@ -73,17 +73,23 @@ public final class SpeakerPackets {
         };
         public Type<? extends CustomPacketPayload> type() { return TYPE; }
     }
-    public record CommittedState(BlockPos pos, UUID request, boolean available, String graph, double bpm,
-                                 boolean playing, long revision, long at, double cycle) implements CustomPacketPayload {
+    public record CommittedState(BlockPos pos, UUID request, boolean available, MusicPackets.Snapshot timeline) implements CustomPacketPayload {
+        public CommittedState {
+            if (available != (timeline != null)) throw new IllegalArgumentException("Invalid speaker timeline availability");
+        }
+        /** Epoch identifies the editor session; revisions alone cannot identify a relink. */
+        public boolean samePublication(CommittedState other) {
+            return other != null && available == other.available && java.util.Objects.equals(timeline, other.timeline);
+        }
         public static final Type<CommittedState> TYPE = new Type<>(GrooveMod.id("speaker_committed_state"));
         public static final StreamCodec<RegistryFriendlyByteBuf, CommittedState> CODEC = new StreamCodec<>() {
             public CommittedState decode(RegistryFriendlyByteBuf b) {
-                return new CommittedState(b.readBlockPos(), b.readUUID(), b.readBoolean(), b.readUtf(GraphJson.MAX_LENGTH),
-                        b.readDouble(), b.readBoolean(), b.readVarLong(), b.readLong(), b.readDouble());
+                var pos = b.readBlockPos(); var request = b.readUUID(); boolean available = b.readBoolean();
+                return new CommittedState(pos, request, available, available ? MusicPackets.Snapshot.CODEC.decode(b) : null);
             }
             public void encode(RegistryFriendlyByteBuf b, CommittedState p) {
-                b.writeBlockPos(p.pos); b.writeUUID(p.request); b.writeBoolean(p.available); b.writeUtf(p.graph, GraphJson.MAX_LENGTH);
-                b.writeDouble(p.bpm); b.writeBoolean(p.playing); b.writeVarLong(p.revision); b.writeLong(p.at); b.writeDouble(p.cycle);
+                b.writeBlockPos(p.pos); b.writeUUID(p.request); b.writeBoolean(p.available);
+                if (p.available) MusicPackets.Snapshot.CODEC.encode(b, p.timeline);
             }
         };
         public Type<? extends CustomPacketPayload> type() { return TYPE; }

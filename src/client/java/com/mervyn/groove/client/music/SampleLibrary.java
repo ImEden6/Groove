@@ -47,6 +47,7 @@ public final class SampleLibrary {
         IO.scheduleWithFixedDelay(SampleLibrary::reload, 0, 5, TimeUnit.SECONDS);
         ClientLifecycleEvents.CLIENT_STOPPING.register(client -> IO.shutdownNow());
         ClientPlayConnectionEvents.DISCONNECT.register((handler, client) -> {
+            speakerAssets.clear();
             globalNeeded = List.of(); previewNeeded = List.of(); globalRefs = Set.of(); previewRefs = Set.of();
             installSession.cancel(); installSession = new SampleInstallStore.Session();
             session++; queued.clear(); failed.clear(); errors = Map.of();
@@ -152,6 +153,14 @@ public final class SampleLibrary {
         var pending = bare.pending() == null ? null : new LiveRenderer.Program(bare.pending().state(), bare.pending().plan(), bank);
         return new Prepared(new LiveRenderer.Timeline(current, pending), Map.copyOf(status), List.copyOf(needed));
     }
+    private record SpeakerAssets(List<AssetRef> needed, Set<AssetRef> refs) {}
+    private static final Map<net.minecraft.core.BlockPos, SpeakerAssets> speakerAssets = new HashMap<>();
+    public static void requestSpeaker(net.minecraft.core.BlockPos pos, List<AssetRef> needed, Set<AssetRef> refs) {
+        speakerAssets.put(pos, new SpeakerAssets(List.copyOf(needed), Set.copyOf(refs))); updateRequests();
+    }
+    public static void removeSpeaker(net.minecraft.core.BlockPos pos) {
+        if (speakerAssets.remove(pos) != null) updateRequests();
+    }
     private static List<AssetRef> globalNeeded = List.of(), previewNeeded = List.of();
     private static Set<AssetRef> globalRefs = Set.of(), previewRefs = Set.of();
     public static void request(List<AssetRef> needed, Set<AssetRef> referenced) {
@@ -161,8 +170,11 @@ public final class SampleLibrary {
         previewNeeded = List.copyOf(needed); previewRefs = Set.copyOf(referenced); updateRequests();
     }
     private static void updateRequests() {
-        var refs = new HashSet<>(globalRefs); refs.addAll(previewRefs); graphReferenced = Set.copyOf(refs);
+        var refs = new HashSet<>(globalRefs); refs.addAll(previewRefs);
+        for (var assets : speakerAssets.values()) refs.addAll(assets.refs());
+        graphReferenced = Set.copyOf(refs);
         var needed = new java.util.LinkedHashSet<>(globalNeeded); needed.addAll(previewNeeded);
+        for (var assets : speakerAssets.values()) needed.addAll(assets.needed());
         queued.retainGraph(List.copyOf(needed));
         long now = System.nanoTime();
         for (AssetRef ref : needed) if (!ref.equals(flight) && now - failed.getOrDefault(ref, now - 31_000_000_000L) > 30_000_000_000L) queued.add(ref, false);

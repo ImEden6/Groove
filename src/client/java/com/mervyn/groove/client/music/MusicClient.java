@@ -38,6 +38,10 @@ public final class MusicClient {
     private static final ThreadPoolExecutor PREVIEW_COMPILER = new ThreadPoolExecutor(1, 1, 0, TimeUnit.SECONDS,
             new ArrayBlockingQueue<>(1), task -> { Thread thread = new Thread(task, "Groove preview compiler"); thread.setDaemon(true); return thread; },
             new ThreadPoolExecutor.DiscardOldestPolicy());
+    private static final ThreadPoolExecutor SPEAKER_COMPILER = new ThreadPoolExecutor(1, 1, 0, TimeUnit.SECONDS,
+            new ArrayBlockingQueue<>(32), task -> { Thread thread = new Thread(task, "Groove speaker compiler"); thread.setDaemon(true); return thread; },
+            new ThreadPoolExecutor.AbortPolicy());
+    private static net.minecraft.client.multiplayer.ClientLevel speakerLevel;
     private static final ScheduledExecutorService SCHEDULER = Executors.newSingleThreadScheduledExecutor(task -> {
         Thread thread = new Thread(task, "Groove lookahead"); thread.setDaemon(true); return thread;
     });
@@ -62,7 +66,7 @@ public final class MusicClient {
     private static int previewRetryTicks;
     private static final Set<BlockPos> speakerSegments = new HashSet<>();
     private static final Map<BlockPos, Emitter> emitters = new HashMap<>();
-    private static final Map<BlockPos, SpeakerLink> speakerLinks = new HashMap<>();
+    private static final Map<BlockPos, SpeakerLink> speakerLinks = new ConcurrentHashMap<>();
     private static final int MAX_EMITTERS = 8;
     private static final double MAX_AUDIBLE_DIST_SQR = 64.0 * 64.0;
     private static int emitterScanCooldown;
@@ -82,9 +86,9 @@ public final class MusicClient {
             long now = serverNow();
             for (SpeakerLink link : speakerLinks.values()) {
                 var speakerProg = link.program;
-                if (speakerProg != null) {
+                if (speakerProg != null && speakerProg != link.failedSchedule) {
                     try { speakerProg.prepare(now); }
-                    catch (RuntimeException error) { GrooveMod.LOGGER.error("Speaker lookahead preparation failed", error); }
+                    catch (RuntimeException error) { link.failedSchedule = speakerProg; GrooveMod.LOGGER.error("Speaker lookahead preparation failed", error); }
                 }
             }
         }, 0, 50, TimeUnit.MILLISECONDS);
@@ -127,39 +131,30 @@ public final class MusicClient {
             var link = speakerLinks.get(packet.pos());
             if (link == null || !packet.request().equals(link.request)) return;
             link.request = null;
-            if (!packet.available()) { link.program = null; link.revision = -1; return; }
-            if (packet.revision() <= link.revision) return;
-            link.revision = packet.revision();
-            try {
-                var graph = GraphJson.decode(packet.graph());
-                var state = new SessionState(packet.revision(), packet.at(), packet.cycle(), packet.bpm(), packet.playing(), graph);
-                var snapshot = new SessionTimeline.Snapshot(state, null);
-                long ticket = ++link.generation;
-                COMPILER.execute(() -> {
-                    try {
-                        var prepared = SampleLibrary.prepare(snapshot);
-                        prepared.timeline().prepare(serverNow());
-                        Minecraft.getInstance().execute(() -> {
-                            if (ticket != link.generation) return;
-                            link.program = prepared.timeline();
-                            var emitter = emitters.get(packet.pos());
-                            if (emitter != null) emitter.renderer.publish(link.program);
-                            SampleLibrary.request(prepared.needed(), prepared.status().keySet());
-                        });
-                    } catch (RuntimeException error) {
-                        GrooveMod.LOGGER.error("Rejected speaker committed patch", error);
-                    }
-                });
-            } catch (RuntimeException error) {
-                // Leave whatever this speaker was already playing; retry on the next poll.
+            if (!packet.available()) { invalidateSpeaker(packet.pos(), link); return; }
+            if (packet.samePublication(link.wire)) {
+                if (link.program == null) compileSpeaker(packet.pos(), link);
+                return;
             }
+            if (link.wire != null && !link.wire.timeline().epoch().equals(packet.timeline().epoch()))
+                invalidateSpeaker(packet.pos(), link);
+            link.wire = packet;
+            link.generation++;
+            compileSpeaker(packet.pos(), link);
         }));
         ClientPlayConnectionEvents.DISCONNECT.register((handler, client) -> reset(client));
         ClientChunkEvents.CHUNK_LOAD.register((level, chunk) -> addSpeakers(chunk));
         ClientChunkEvents.CHUNK_UNLOAD.register((level, chunk) -> removeSpeakers(level, chunk));
-        ClientLifecycleEvents.CLIENT_STOPPING.register(client -> { reset(client); COMPILER.shutdownNow(); PREVIEW_COMPILER.shutdownNow(); SCHEDULER.shutdownNow(); });
+        ClientLifecycleEvents.CLIENT_STOPPING.register(client -> { reset(client); COMPILER.shutdownNow(); PREVIEW_COMPILER.shutdownNow(); SPEAKER_COMPILER.shutdownNow(); SCHEDULER.shutdownNow(); });
         ClientTickEvents.END_CLIENT_TICK.register(client -> {
             if (client.getConnection() == null || !ClientPlayNetworking.canSend(MusicPackets.Ping.TYPE)) return;
+            if (speakerLevel != client.level) {
+                stopEmitters(client);
+                clearSpeakerLinks();
+                speakerSegments.clear(); emitterScanCooldown = 0;
+                speakerLevel = client.level;
+                // Chunk load callbacks populate the new level's segments.
+            }
             long now = System.nanoTime();
             if (lastPing == 0 || now - lastPing >= 1_000_000_000L) {
                 lastPing = now;
@@ -168,11 +163,11 @@ public final class MusicClient {
             }
             if (client.level == null || client.player == null || !clock.ready() || client.isPaused()
                     || client.getOverlay() != null || !client.getSoundManager().getAvailableSounds().contains(GrooveMod.id("session"))) {
-                stopEmitters(client); stopHeadphonePreview(client);
+                stopEmitters(client); clearSpeakerLinks(); stopHeadphonePreview(client);
                 return;
             }
             if (SampleCommands.auditioning()) {
-                stopEmitters(client);
+                stopEmitters(client); clearSpeakerLinks();
                 stopHeadphonePreview(client);
                 return;
             }
@@ -181,6 +176,7 @@ public final class MusicClient {
                     .orElse(false);
             if (headphones) {
                 if (!emitters.isEmpty()) stopEmitters(client);
+                clearSpeakerLinks();
                 updateHeadphonePreview(client);
             } else {
                 stopHeadphonePreview(client);
@@ -197,6 +193,7 @@ public final class MusicClient {
     }
     public static void refreshSamples() {
         refreshPreview();
+        speakerLinks.forEach(MusicClient::compileSpeaker);
         var wire = latestWire;
         if (wire == null || COMPILER.isShutdown()) return;
         long ticket = ++generation;
@@ -216,6 +213,46 @@ public final class MusicClient {
                 GrooveMod.LOGGER.error("Rejected Groove session", error);
             }
         });
+    }
+    private static void compileSpeaker(BlockPos pos, SpeakerLink link) {
+        var wire = link.wire;
+        if (wire == null || SPEAKER_COMPILER.isShutdown()) return;
+        if (link.compiling) { link.refreshAgain = true; return; }
+        link.compiling = true;
+        long ticket = link.generation;
+        try {
+            SPEAKER_COMPILER.execute(() -> {
+                SampleLibrary.Prepared prepared = null;
+                try {
+                    prepared = SampleLibrary.prepare(wire.timeline().snapshot());
+                    prepared.timeline().prepare(serverNow());
+                } catch (RuntimeException error) { GrooveMod.LOGGER.error("Rejected speaker committed patch", error); }
+                var result = prepared;
+                Minecraft.getInstance().execute(() -> {
+                    link.compiling = false;
+                    if (speakerLinks.get(pos) != link) return;
+                    if (ticket == link.generation && result == null) { invalidateSpeaker(pos, link); return; }
+                    if (ticket == link.generation && result != null) {
+                        link.program = result.timeline();
+                        var emitter = emitters.get(pos);
+                        if (emitter != null) emitter.renderer.publish(link.program);
+                        SampleLibrary.requestSpeaker(pos, result.needed(), result.status().keySet());
+                    }
+                    if (link.refreshAgain) { link.refreshAgain = false; compileSpeaker(pos, link); }
+                });
+            });
+        } catch (RejectedExecutionException busy) { link.compiling = false; }
+    }
+    private static void invalidateSpeaker(BlockPos pos, SpeakerLink link) {
+        link.generation++; link.wire = null; link.program = null; link.refreshAgain = false;
+        var emitter = emitters.remove(pos);
+        if (emitter != null) stopEmitter(Minecraft.getInstance(), emitter);
+        SampleLibrary.removeSpeaker(pos);
+    }
+    private static void clearSpeakerLinks() {
+        speakerLinks.forEach(MusicClient::invalidateSpeaker);
+        speakerLinks.clear();
+        emitterScanCooldown = 0;
     }
     private static void refreshPreview() {
         var packet = previewWire;
@@ -249,13 +286,17 @@ public final class MusicClient {
         stopEmitters(client);
         stopHeadphonePreview(client);
         speakerSegments.clear();
-        speakerLinks.clear();
+        clearSpeakerLinks();
         emitterScanCooldown = 0;
         clock = new ClockSync();
         COMPILER.getQueue().clear();
     }
 
     private static void addSpeakers(LevelChunk chunk) {
+        var level = Minecraft.getInstance().level;
+        if (speakerLevel != level) {
+            stopEmitters(Minecraft.getInstance()); clearSpeakerLinks(); speakerSegments.clear(); speakerLevel = level;
+        }
         boolean added = false;
         for (var entry : chunk.getBlockEntities().entrySet()) {
             if (entry.getValue() instanceof SpeakerBlockEntity) {
@@ -267,6 +308,7 @@ public final class MusicClient {
     }
 
     private static void removeSpeakers(net.minecraft.client.multiplayer.ClientLevel level, LevelChunk chunk) {
+        if (level != speakerLevel) return;
         boolean removed = speakerSegments.removeIf(pos -> pos.getX() >> 4 == chunk.getPos().x && pos.getZ() >> 4 == chunk.getPos().z);
         emitters.entrySet().removeIf(entry -> {
             if (entry.getKey().getX() >> 4 != chunk.getPos().x || entry.getKey().getZ() >> 4 != chunk.getPos().z)
@@ -274,7 +316,11 @@ public final class MusicClient {
             stopEmitter(Minecraft.getInstance(), entry.getValue());
             return true;
         });
-        speakerLinks.keySet().removeIf(pos -> pos.getX() >> 4 == chunk.getPos().x && pos.getZ() >> 4 == chunk.getPos().z);
+        speakerLinks.entrySet().removeIf(entry -> {
+            var pos = entry.getKey();
+            if (pos.getX() >> 4 != chunk.getPos().x || pos.getZ() >> 4 != chunk.getPos().z) return false;
+            invalidateSpeaker(pos, entry.getValue()); return true;
+        });
         if (removed) emitterScanCooldown = 0;
     }
 
@@ -287,14 +333,19 @@ public final class MusicClient {
         BlockPos playerPos = client.player.blockPosition();
         Set<BlockPos> bases = new HashSet<>();
         for (BlockPos pos : speakerSegments) {
-            if (pos.distSqr(playerPos) > MAX_AUDIBLE_DIST_SQR) continue;
+            if (client.player.position().distanceToSqr(pos.getCenter()) > MAX_AUDIBLE_DIST_SQR) continue;
             if (!client.level.getBlockState(pos).is(GrooveBlocks.SPEAKER)
                     || client.level.getBlockState(pos.below()).is(GrooveBlocks.SPEAKER)) continue;
             bases.add(pos);
         }
-        // Poll every nearby base, not just already-linked ones, so a fresh bind picks up automatically.
-        for (BlockPos pos : bases) pollSpeakerLink(pos);
-        bases.stream()
+        // One bounded selected set controls polling, compilation and audible emitters.
+        Set<BlockPos> selected = nearestSpeakers(bases, client.player.position());
+        speakerLinks.entrySet().removeIf(entry -> {
+            if (selected.contains(entry.getKey())) return false;
+            invalidateSpeaker(entry.getKey(), entry.getValue()); return true;
+        });
+        for (BlockPos pos : selected) pollSpeakerLink(pos);
+        selected.stream()
                 .filter(pos -> { SpeakerLink link = speakerLinks.get(pos); return link != null && link.program != null; })
                 .sorted(java.util.Comparator.comparingDouble(pos -> pos.distSqr(playerPos)))
                 .limit(MAX_EMITTERS).forEach(pos -> {
@@ -312,14 +363,18 @@ public final class MusicClient {
                 });
         emitters.entrySet().removeIf(entry -> {
             SpeakerLink link = speakerLinks.get(entry.getKey());
-            if (bases.contains(entry.getKey()) && link != null && link.program != null) return false;
+            if (selected.contains(entry.getKey()) && link != null && link.program != null) return false;
             stopEmitter(client, entry.getValue());
             return true;
         });
-        // Cached link state for bases no longer nearby is dropped so re-entering range re-polls fresh.
-        speakerLinks.keySet().removeIf(pos -> !bases.contains(pos));
+
     }
 
+    public static Set<BlockPos> nearestSpeakers(java.util.Collection<BlockPos> candidates, net.minecraft.world.phys.Vec3 player) {
+        return candidates.stream().filter(pos -> player.distanceToSqr(pos.getCenter()) <= MAX_AUDIBLE_DIST_SQR)
+                .sorted(java.util.Comparator.<BlockPos>comparingDouble(pos -> player.distanceToSqr(pos.getCenter())).thenComparingLong(BlockPos::asLong))
+                .limit(MAX_EMITTERS).collect(java.util.stream.Collectors.toSet());
+    }
     private static void pollSpeakerLink(BlockPos pos) {
         SpeakerLink link = speakerLinks.computeIfAbsent(pos, p -> new SpeakerLink());
         long now = System.nanoTime();
@@ -409,8 +464,9 @@ public final class MusicClient {
     private static final class SpeakerLink {
         UUID request;
         long sent;
-        long revision = -1;
         long generation;
-        volatile LiveRenderer.Timeline program;
+        boolean compiling, refreshAgain;
+        SpeakerPackets.CommittedState wire;
+        volatile LiveRenderer.Timeline program, failedSchedule;
     }
 }

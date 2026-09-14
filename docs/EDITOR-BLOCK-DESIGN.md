@@ -156,3 +156,12 @@ specific editor.
   mechanic) — a separate, larger feature if ever pursued.
 - Any occlusion, world-protection/claims integration, or per-player audio bus
   configuration beyond what speakers already do.
+
+### Speaker review follow-up
+
+Playback includes both current and queued committed state with the editor session
+identity. The selected eight nearest towers bound polling and compilation as well
+as audio. Server polling is range-checked, uses loaded chunks only, and retains a
+bounded, expiring request history. Speaker links missed during editor destruction
+because their chunk was unloaded are cleared lazily when the linked editor can
+next be checked. Until then the speaker remains silent when its editor is unavailable.

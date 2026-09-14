@@ -54,6 +54,7 @@ public final class SpeakerServer {
                 for (BlockPos pos : speakers) {
                     positions.add(pos);
                     var speaker = (SpeakerBlockEntity) player.serverLevel().getBlockEntity(pos);
+                    if (speaker != null) linkedEditor(player.serverLevel(), speaker);
                     linked.add(speaker != null && speaker.linkedTo(packet.editorPos(), packet.session()));
                 }
                 ServerPlayNetworking.send(player, new SpeakerPackets.ListState(packet.request(), true, "", positions, linked));
@@ -70,13 +71,19 @@ public final class SpeakerServer {
                 requireEditor(player, packet.editorPos(), packet.session());
                 // Resolve to the tower base so the base segment holds the link, matching client audio polling.
                 BlockPos target = packet.speakerPos();
+                if (!player.serverLevel().hasChunk(target.getX() >> 4, target.getZ() >> 4) || target.distSqr(packet.editorPos()) > (long) SEARCH_RADIUS * SEARCH_RADIUS)
+                    throw new IllegalArgumentException("Speaker is out of reach");
+                if (!player.serverLevel().getBlockState(target).is(GrooveBlocks.SPEAKER))
+                    throw new IllegalArgumentException("Not a speaker block");
                 while (player.serverLevel().getBlockState(target.below()).is(GrooveBlocks.SPEAKER))
                     target = target.below();
                 if (target.distSqr(packet.editorPos()) > (long) SEARCH_RADIUS * SEARCH_RADIUS)
                     throw new IllegalArgumentException("Speaker is too far from the editor");
                 if (!(player.serverLevel().getBlockEntity(target) instanceof SpeakerBlockEntity speaker))
                     throw new IllegalArgumentException("Not a speaker block");
-                if (packet.link()) speaker.bind(packet.editorPos(), packet.session()); else speaker.unlink();
+                if (packet.link()) speaker.bind(packet.editorPos(), packet.session());
+                else if (speaker.linkedTo(packet.editorPos(), packet.session())) speaker.unlink();
+                else throw new IllegalArgumentException("Speaker was relinked; refresh the list");
                 accepted = true;
                 message = packet.link() ? "Speaker linked" : "Speaker unlinked";
             } catch (IllegalArgumentException error) { message = error.getMessage(); }
@@ -85,27 +92,38 @@ public final class SpeakerServer {
         ServerPlayNetworking.registerGlobalReceiver(SpeakerPackets.CommittedRequest.TYPE, (packet, context) -> context.server().execute(() -> {
             var player = context.player();
             long now = System.nanoTime();
-            PollKey pollKey = new PollKey(player.getUUID(), packet.pos());
-            Long last = committedPolls.get(pollKey);
-            if (last != null && now - last < 250_000_000L) return;
-            committedPolls.put(pollKey, now);
-            EditorBlockEntity editor = null;
-            if (player.serverLevel().getBlockEntity(packet.pos()) instanceof SpeakerBlockEntity speaker && speaker.linked()
-                    && player.serverLevel().getBlockEntity(speaker.editorPos()) instanceof EditorBlockEntity found
-                    && found.sessionId().equals(speaker.editorSession())) {
-                editor = found;
-            }
-            if (editor == null) {
-                ServerPlayNetworking.send(player, new SpeakerPackets.CommittedState(packet.pos(), packet.request(), false, "", 128, false, 0, 0, 0));
+            // Bound both read access and bookkeeping before touching world state.
+            if (player.distanceToSqr(packet.pos().getCenter()) > (long) SEARCH_RADIUS * SEARCH_RADIUS
+                    || !player.serverLevel().hasChunk(packet.pos().getX() >> 4, packet.pos().getZ() >> 4)) {
+                ServerPlayNetworking.send(player, new SpeakerPackets.CommittedState(packet.pos(), packet.request(), false, null));
                 return;
             }
-            long nowNanos = System.nanoTime();
-            var state = editor.session().committed(nowNanos).at(nowNanos);
-            ServerPlayNetworking.send(player, new SpeakerPackets.CommittedState(packet.pos(), packet.request(), true,
-                    GraphJson.encode(state.graph()), state.bpm(), state.playing(), state.revision(), state.effectiveNanos(), state.anchorCycle()));
+            if (!allowPoll(player.getUUID(), packet.pos(), now)) return;
+            EditorBlockEntity editor = null;
+            if (player.serverLevel().getBlockEntity(packet.pos()) instanceof SpeakerBlockEntity speaker
+                    && !player.serverLevel().getBlockState(packet.pos().below()).is(GrooveBlocks.SPEAKER))
+                editor = linkedEditor(player.serverLevel(), speaker);
+            ServerPlayNetworking.send(player, new SpeakerPackets.CommittedState(packet.pos(), packet.request(), editor != null,
+                    editor == null ? null : new MusicPackets.Snapshot(editor.sessionId(), editor.session().committed(now))));
         }));
     }
 
+    static boolean allowPoll(UUID player, BlockPos pos, long now) {
+        committedPolls.entrySet().removeIf(entry -> now - entry.getValue() > 5_000_000_000L);
+        PollKey key = new PollKey(player, pos.immutable());
+        Long last = committedPolls.get(key);
+        if (last != null && now - last < 250_000_000L) return false;
+        if (last == null && committedPolls.keySet().stream().filter(k -> k.player().equals(player)).count() >= 32) return false;
+        committedPolls.put(key, now);
+        return true;
+    }
+    private static EditorBlockEntity linkedEditor(ServerLevel level, SpeakerBlockEntity speaker) {
+        if (!speaker.linked() || !level.hasChunk(speaker.editorPos().getX() >> 4, speaker.editorPos().getZ() >> 4)) return null;
+        if (level.getBlockEntity(speaker.editorPos()) instanceof EditorBlockEntity editor && editor.sessionId().equals(speaker.editorSession())) return editor;
+        // Catch stale links whose speaker chunk was unloaded when the editor was broken.
+        speaker.unlink();
+        return null;
+    }
     private static boolean throttleList(ServerPlayer player) {
         long now = System.nanoTime();
         Long last = listRequests.get(player.getUUID());
@@ -123,6 +141,7 @@ public final class SpeakerServer {
     }
 
     private static void requireEditor(ServerPlayer player, BlockPos pos, UUID session) {
+        if (player.isSpectator()) throw new IllegalArgumentException("Spectators cannot bind speakers");
         if (!player.serverLevel().hasChunk(pos.getX() >> 4, pos.getZ() >> 4) || player.distanceToSqr(pos.getCenter()) > 64)
             throw new IllegalArgumentException("Editor is out of reach");
         if (!(player.serverLevel().getBlockEntity(pos) instanceof EditorBlockEntity editor) || !editor.sessionId().equals(session))
@@ -158,29 +177,25 @@ public final class SpeakerServer {
     /** Returns whether a nearby linked speaker is currently playing a committed patch referencing this asset. */
     static boolean allowsAsset(ServerPlayer player, AssetRef ref) {
         var level = player.serverLevel();
-        BlockPos playerPos = player.blockPosition();
-        int chunkRadius = (SEARCH_RADIUS >> 4) + 1;
-        ChunkPos centerChunk = new ChunkPos(playerPos);
-        long nowNanos = System.nanoTime();
-        for (int dz = -chunkRadius; dz <= chunkRadius; dz++) {
-            for (int dx = -chunkRadius; dx <= chunkRadius; dx++) {
-                int chunkX = centerChunk.x + dx, chunkZ = centerChunk.z + dz;
-                if (!level.hasChunk(chunkX, chunkZ)) continue;
-                for (var entry : level.getChunk(chunkX, chunkZ).getBlockEntities().entrySet()) {
-                    if (entry.getValue() instanceof SpeakerBlockEntity speaker
-                            && entry.getKey().distSqr(playerPos) <= (long) SEARCH_RADIUS * SEARCH_RADIUS
-                            && speaker.linked()) {
-                        if (level.getBlockEntity(speaker.editorPos()) instanceof EditorBlockEntity editor
-                                && editor.sessionId().equals(speaker.editorSession())) {
-                            var state = editor.session().committed(nowNanos).at(nowNanos);
-                            if (state.graph().nodes().stream().anyMatch(n -> ref.equals(n.sample())))
-                                return true;
-                        }
-                    }
-                }
-            }
+        long now = System.nanoTime();
+        // Audio clients poll before downloading. Revalidate those bounded recent
+        // positions instead of scanning 121 chunks for every 16 KiB asset chunk.
+        for (var entry : committedPolls.entrySet()) {
+            BlockPos pos = entry.getKey().pos();
+            if (!entry.getKey().player().equals(player.getUUID()) || now - entry.getValue() > 5_000_000_000L
+                    || player.distanceToSqr(pos.getCenter()) > (long) SEARCH_RADIUS * SEARCH_RADIUS || !level.hasChunk(pos.getX() >> 4, pos.getZ() >> 4)) continue;
+            if (!(level.getBlockEntity(pos) instanceof SpeakerBlockEntity speaker)
+                    || level.getBlockState(pos.below()).is(GrooveBlocks.SPEAKER)) continue;
+            var editor = linkedEditor(level, speaker);
+            if (editor == null) continue;
+            var snapshot = editor.session().committed(now);
+            if (references(snapshot, ref)) return true;
         }
         return false;
+    }
+    static boolean references(groove.engine.SessionTimeline.Snapshot snapshot, AssetRef ref) {
+        return snapshot.current().graph().nodes().stream().anyMatch(n -> ref.equals(n.sample()))
+                || snapshot.pending() != null && snapshot.pending().graph().nodes().stream().anyMatch(n -> ref.equals(n.sample()));
     }
 
     /** Called when an editor block is actually destroyed so its speaker links don't dangle. */
