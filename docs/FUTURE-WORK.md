@@ -81,7 +81,7 @@ The following items from earlier roadmaps are fully implemented and verified in 
 - **No automatic resync tuning beyond fixed thresholds.** Transport clock synchronization operates via documented slew and step thresholds ([BACKEND-USAGE.md](BACKEND-USAGE.md)), but adaptive PID/slew tuning under asymmetric or high-jitter network conditions has not been implemented.
 - **No server-side chunk-unload or distance culling for audio state.** The session is server-wide and persistent, decoupled from individual chunk lifecycles or entity unload events.
 - **GC pressure reduction.** The DSP mixer avoids per-render allocations, but pattern queries and the Minecraft audio stream adapter still allocate temporary buffers per tick/block.
-- **No per-player editors/sessions.** There is one server-wide shared session and patch; giving each player their own independent editor/draft graph is a future architecture change, not just a routing tweak. See [EDITOR-BLOCK-DESIGN.md](EDITOR-BLOCK-DESIGN.md) for the proposed design (a placeable, owned editor block with its own session).
+- **No per-player editors/sessions.** There is one server-wide shared session and patch; giving each player their own independent editor/draft graph is a future architecture change, not just a routing tweak. A placeable `GrooveBlocks.EDITOR` block now exists and opens the editor GUI on right-click, but it still points at the same single global session — it does not yet own an independent draft/committed graph or permissions. See [EDITOR-BLOCK-DESIGN.md](EDITOR-BLOCK-DESIGN.md) for the proposed design and what remains.
 
 ## Distribution & Custom Samples (Remaining)
 

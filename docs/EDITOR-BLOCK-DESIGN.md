@@ -1,15 +1,24 @@
 # Editor block design (proposed)
 
-Not implemented yet. This is the agreed design for turning the editor from a
+Partially implemented. This is the agreed design for turning the editor from a
 chat-command GUI singleton into a placeable, ownable, multi-session block, and
 for how headphones and speakers connect to it. See [FUTURE-WORK.md](FUTURE-WORK.md)
 for how this relates to the currently-tracked "no live draft-graph monitoring
 through headphones" and "no per-player editors/sessions" gaps, both of which
 this design closes.
 
+**Landed so far:** `GrooveBlocks.EDITOR` is a placeable, silent block
+(`EditorBlock`/`EditorBlockEntity`) with its own textures/model, and
+right-clicking it opens the editor GUI (`EditorBlockInteraction`). Everything
+else below — independent sessions, draft vs. committed, permissions,
+headphone/speaker binding, retiring the monitor stream — is not built yet:
+the block currently just opens the same one global session `/groove-editor`
+already did.
+
 ## Summary of the current state (before this design)
 
-- The editor is opened via `/groove-editor`, not a block; see
+- The editor is opened via `/groove-editor` or by right-clicking a placed
+  `GrooveBlocks.EDITOR` block, but either way it's the same singleton; see
   [EDITOR-INTEGRATION.md](EDITOR-INTEGRATION.md).
 - There is exactly one server-wide shared session/patch. Concurrent edits from
   another player are rejected, not merged.
