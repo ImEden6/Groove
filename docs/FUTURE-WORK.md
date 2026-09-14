@@ -81,7 +81,7 @@ The following items from earlier roadmaps are fully implemented and verified in 
 - **No automatic resync tuning beyond fixed thresholds.** Transport clock synchronization operates via documented slew and step thresholds ([BACKEND-USAGE.md](BACKEND-USAGE.md)), but adaptive PID/slew tuning under asymmetric or high-jitter network conditions has not been implemented.
 - **No server-side chunk-unload or distance culling for audio state.** The session is server-wide and persistent, decoupled from individual chunk lifecycles or entity unload events.
 - **GC pressure reduction.** The DSP mixer avoids per-render allocations, but pattern queries and the Minecraft audio stream adapter still allocate temporary buffers per tick/block.
-- **Block-session audio routing and ACL UI remain.** Placed editors now own independent persistent draft/committed sessions, ownership, and an allowlist API. The allowlist UI, headphone/speaker connections, and retirement of global playback remain. See [EDITOR-BLOCK-DESIGN.md](EDITOR-BLOCK-DESIGN.md).
+- **Block-session audio routing remains.** Placed editors now own independent persistent draft/committed sessions, ownership, and an owner-managed Access UI. Headphone/speaker connections and retirement of global playback remain. See [EDITOR-BLOCK-DESIGN.md](EDITOR-BLOCK-DESIGN.md).
 
 ## Distribution & Custom Samples (Remaining)
 

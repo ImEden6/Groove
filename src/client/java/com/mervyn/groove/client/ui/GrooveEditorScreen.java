@@ -42,6 +42,8 @@ public final class GrooveEditorScreen extends Screen {
     private long blockAnchor;
     private boolean accessOpen;
     private UUID allowlistRequest;
+    private long allowlistSent;
+    private int accessScroll;
     private boolean isOwner;
     private String ownerName = "";
     private List<String> editorNames = List.of();
@@ -135,17 +137,21 @@ public final class GrooveEditorScreen extends Screen {
         }
     }
     public void allowlistState(com.mervyn.groove.music.EditorPackets.AllowlistState packet) {
-        if (blockSession == null || !packet.session().equals(blockSession.session())) return;
-        if (packet.request().equals(allowlistRequest)) allowlistRequest = null;
+        if (blockSession == null || !packet.pos().equals(blockSession.pos()) || !packet.session().equals(blockSession.session())) return;
+        if (packet.request().equals(allowlistRequest)) { allowlistRequest = null; blockSent = System.nanoTime(); }
+        if (!packet.accepted()) { message = packet.message(); return; }
         isOwner = packet.owner(); ownerName = packet.ownerName(); editorNames = packet.editors();
+        accessScroll = Math.min(accessScroll, Math.max(0, editorNames.size() - accessRows()));
         if (allowlistName != null) layoutAllowlist();
         if (!packet.message().isEmpty()) message = packet.message();
     }
     private void sendAllowlist(boolean allow) {
-        if (blockSession == null || allowlistRequest != null) return;
+        if (blockSession == null || allowlistRequest != null || !isOwner) return;
+        if (blockRequest != null || System.nanoTime() - blockSent < 100_000_000L) { message = "Please wait for the current editor request"; return; }
         String name = allowlistName.getValue().trim();
         if (name.isEmpty()) { message = "Enter a player name"; return; }
         allowlistRequest = UUID.randomUUID();
+        allowlistSent = System.nanoTime();
         ClientPlayNetworking.send(new com.mervyn.groove.music.EditorPackets.AllowlistRequest(blockSession.pos(), blockSession.session(), allowlistRequest, name, allow));
     }
     @Override
@@ -170,7 +176,7 @@ public final class GrooveEditorScreen extends Screen {
         int bottom = Math.min(height - 20, 220);
         String name = allowlistName == null ? "" : allowlistName.getValue();
         allowlistName = new EditBox(font, x, bottom - 40, width - x - 8, 18, Component.literal("Player name"));
-        allowlistName.setMaxLength(16); allowlistName.setValue(name); addRenderableWidget(allowlistName);
+        allowlistName.setMaxLength(36); allowlistName.setValue(name); addRenderableWidget(allowlistName);
         allowlistAdd = new ThemedButton(x, bottom - 20, (width - x - 12) / 2, 18, Component.literal("Add"), font, theme, textColor, b -> sendAllowlist(true));
         addRenderableWidget(allowlistAdd);
         allowlistRemove = new ThemedButton(x + (width - x - 12) / 2 + 4, bottom - 20, (width - x - 12) / 2, 18, Component.literal("Remove"), font, theme, textColor, b -> sendAllowlist(false));
@@ -179,7 +185,8 @@ public final class GrooveEditorScreen extends Screen {
     }
     private void layoutAllowlist() {
         boolean visible = accessOpen && blockSession != null;
-        allowlistName.visible = visible; allowlistAdd.visible = visible && isOwner; allowlistRemove.visible = visible && isOwner;
+        allowlistName.visible = visible && isOwner; allowlistAdd.visible = visible && isOwner; allowlistRemove.visible = visible && isOwner;
+        if (!allowlistName.visible && allowlistName.isFocused()) { allowlistName.setFocused(false); setFocused(null); }
     }
 
     @Override
@@ -188,7 +195,10 @@ public final class GrooveEditorScreen extends Screen {
         if (blockSession != null) {
             long elapsed = System.nanoTime() - blockSent;
             if (blockRequest != null && elapsed > 5_000_000_000L) { blockRequest = null; commitAfterSave = false; message = "Editor request timed out"; }
-            if (blockRequest == null && elapsed > 400_000_000L) {
+            if (allowlistRequest != null && System.nanoTime() - allowlistSent > 15_000_000_000L) {
+                allowlistRequest = null; message = "Allowlist request timed out; try again";
+            }
+            if (blockRequest == null && allowlistRequest == null && elapsed > 400_000_000L) {
                 if (blockDirty()) sendBlock(1, false);
                 else if (commitAfterSave) { commitAfterSave = false; sendBlock(2, false); }
                 else if (elapsed > 1_000_000_000L) sendBlock(0, false);
@@ -375,6 +385,10 @@ public final class GrooveEditorScreen extends Screen {
                 if (accessOpen) { accessOpen = false; layoutAllowlist(); } else state.clearSelection();
                 return true;
             }
+            if (accessOpen && button == 0 && isOwner && mouseY >= 60 && mouseY < 60 + accessRows() * 11) {
+                int row = accessScroll + (int) ((mouseY - 60) / 11);
+                if (row < editorNames.size()) allowlistName.setValue(editorNames.get(row));
+            }
             if (!accessOpen) {
                 var node = state.node(state.selection().iterator().next());
                 browsing = false;
@@ -403,7 +417,7 @@ public final class GrooveEditorScreen extends Screen {
     public boolean mouseReleased(double mouseX, double mouseY, int button) {
         if (draggedSample != null) {
             if (sampleDragging && (!drawer || mouseX >= DRAWER_WIDTH) && mouseY >= 24 && mouseY < height - 20
-                    && (state.selection().isEmpty() || !insideInspector(mouseX, mouseY))) {
+                    && (!rightPanelActive() || !insideInspector(mouseX, mouseY))) {
                 Vec2 world = state.toWorld(mouseX, mouseY);
                 String target = state.nodes().stream().filter(n -> state.layout().get(n.id()) != null && NodeGeometry.containsBody(state.layout().get(n.id()), world)).map(Graph.Node::id).findFirst().orElse(null);
                 try { state.dropSample(draggedSample, world, target); message = "Draft changed. Connect new nodes, then Apply."; }
@@ -417,6 +431,10 @@ public final class GrooveEditorScreen extends Screen {
 
     @Override
     public boolean mouseScrolled(double mouseX, double mouseY, double scrollX, double scrollY) {
+        if (accessOpen && insideInspector(mouseX, mouseY)) {
+            accessScroll = Math.max(0, Math.min(Math.max(0, editorNames.size() - accessRows()), accessScroll - (int) Math.signum(scrollY)));
+            return true;
+        }
         if (!state.selection().isEmpty() && insideInspector(mouseX, mouseY)) {
             if (!state.isValueDragging()) {
                 var node = state.node(state.selection().iterator().next());
@@ -439,6 +457,12 @@ public final class GrooveEditorScreen extends Screen {
 
     @Override
     public boolean keyPressed(int keyCode, int scanCode, int modifiers) {
+        // A focused name field owns editing keys; canvas shortcuts must not consume
+        // Backspace, Delete, arrows, or undo while the user edits a player name.
+        if (allowlistName != null && allowlistName.visible && allowlistName.isFocused()) {
+            if (keyCode == GLFW.GLFW_KEY_ESCAPE) { allowlistName.setFocused(false); setFocused(null); return true; }
+            return super.keyPressed(keyCode, scanCode, modifiers);
+        }
         if (keyCode == GLFW.GLFW_KEY_B && hasControlDown()) { drawer = !drawer; search.visible = drawer; search.setFocused(false); return true; }
         if (state.isQuickSpawnOpen()) {
             if (keyCode == GLFW.GLFW_KEY_UP) { quickSpawnSelected = Math.max(0, quickSpawnSelected - 1); return true; }
@@ -517,6 +541,7 @@ public final class GrooveEditorScreen extends Screen {
     }
     private int inspectorCloseX() { return width - 14; }
     private boolean rightPanelActive() { return accessOpen || !state.selection().isEmpty(); }
+    private int accessRows() { return Math.max(0, (Math.min(height - 20, 220) - 60 - 60) / 11); }
     private void renderAccessPanel(GuiGraphics graphics, int textColor) {
         int x = Math.max(DRAWER_WIDTH + 10, width - 150);
         int bottom = Math.min(height - 20, 220);
@@ -524,11 +549,14 @@ public final class GrooveEditorScreen extends Screen {
         int textX = x + 4;
         graphics.drawString(font, "Access", textX, 34, textColor, false);
         graphics.drawString(font, "x", inspectorCloseX(), 34, textColor, false);
-        graphics.drawString(font, "Owner: " + (ownerName.isEmpty() ? "(unclaimed)" : ownerName), textX, 48, textColor, false);
+        graphics.drawString(font, font.plainSubstrByWidth("Owner: " + (ownerName.isEmpty() ? "(unclaimed)" : ownerName), width - textX - 8), textX, 48, textColor, false);
         int y = 60;
         if (editorNames.isEmpty()) graphics.drawString(font, "No editors added", textX, y, textColor, false);
-        for (String name : editorNames) { graphics.drawString(font, name, textX, y, textColor, false); y += 11; }
-        if (!isOwner) graphics.drawString(font, "Only the owner can edit this list", textX, bottom - 54, 0xffcc66, false);
+        for (int i = accessScroll; i < Math.min(editorNames.size(), accessScroll + accessRows()); i++) {
+            graphics.drawString(font, font.plainSubstrByWidth(editorNames.get(i), width - textX - 8), textX, y, textColor, false); y += 11;
+        }
+        String hint = isOwner ? "Click a name; scroll for more" : "Only owner can change access";
+        graphics.drawString(font, font.plainSubstrByWidth(hint, width - textX - 8), textX, bottom - 54, 0xffcc66, false);
     }
     /** Same live-session check render() uses for the "Cycle .. Playing/Stopped" readout,
      *  so the Play/Stop button's icon actually reflects transport state rather than always

@@ -11,10 +11,11 @@ import java.util.*;
 
 public final class EditorServer {
     private static final Map<UUID, Long> requests = new HashMap<>();
+    private static final Map<UUID, UUID> pendingLookups = new HashMap<>();
     public static void register() {
         EditorPackets.register();
-        ServerPlayConnectionEvents.DISCONNECT.register((handler, server) -> requests.remove(handler.player.getUUID()));
-        net.fabricmc.fabric.api.event.lifecycle.v1.ServerLifecycleEvents.SERVER_STOPPED.register(server -> requests.clear());
+        ServerPlayConnectionEvents.DISCONNECT.register((handler, server) -> { requests.remove(handler.player.getUUID()); pendingLookups.remove(handler.player.getUUID()); });
+        net.fabricmc.fabric.api.event.lifecycle.v1.ServerLifecycleEvents.SERVER_STOPPED.register(server -> { requests.clear(); pendingLookups.clear(); });
         PlayerBlockBreakEvents.BEFORE.register((world, player, pos, state, entity) ->
                 !(entity instanceof EditorBlockEntity editor) || editor.canEdit(player.getUUID()) || !editor.hasOwner() && player.hasPermissions(2));
         ServerPlayNetworking.registerGlobalReceiver(EditorPackets.Request.TYPE, (packet, context) -> context.server().execute(() -> {
@@ -70,46 +71,72 @@ public final class EditorServer {
         }));
         ServerPlayNetworking.registerGlobalReceiver(EditorPackets.AllowlistRequest.TYPE, (packet, context) -> context.server().execute(() -> {
             var player = context.player();
-            long now = System.nanoTime();
-            Long last = requests.get(player.getUUID());
-            EditorBlockEntity editor = null;
-            boolean accepted = false;
-            String message;
+            var server = context.server();
             try {
-                if (last != null && now - last < 100_000_000L) throw new IllegalArgumentException("Please wait before submitting again");
+                requireAllowlistOwner(player, packet);
+                long now = System.nanoTime();
+                Long last = requests.get(player.getUUID());
+                if (last != null && now - last < 100_000_000L || pendingLookups.containsKey(player.getUUID()))
+                    throw new IllegalArgumentException("Please wait before submitting again");
                 requests.put(player.getUUID(), now);
-                if (!player.serverLevel().hasChunkAt(packet.pos()) || player.distanceToSqr(packet.pos().getCenter()) > 64)
-                    throw new IllegalArgumentException("Editor is out of reach");
-                if (!(player.serverLevel().getBlockEntity(packet.pos()) instanceof EditorBlockEntity found))
-                    throw new IllegalArgumentException("Editor no longer exists");
-                editor = found;
-                if (!editor.sessionId().equals(packet.session())) throw new IllegalArgumentException("Editor session changed; reopen it");
                 String name = packet.username().trim();
-                if (name.isEmpty()) throw new IllegalArgumentException("Enter a player name");
-                UUID target = resolvePlayer(player.serverLevel().getServer(), name);
-                if (target == null) throw new IllegalArgumentException("Unknown player: " + name);
-                editor.allowEditor(player.getUUID(), target, packet.allow());
-                accepted = true;
-                message = packet.allow() ? "Added " + name : "Removed " + name;
-            } catch (RuntimeException error) {
-                if (!(error instanceof IllegalArgumentException))
-                    com.mervyn.groove.GrooveMod.LOGGER.error("Unexpected allowlist failure at {} for player {}", packet.pos(), player.getUUID(), error);
-                message = error.getMessage() != null ? error.getMessage() : "Allowlist action failed";
-            }
-            if (editor != null) sendAllowlist(player, editor, packet.request(), accepted, message);
-            else ServerPlayNetworking.send(player, new EditorPackets.AllowlistState(packet.pos(), packet.session(), packet.request(), false, message, false, "", List.of()));
+                UUID target = null;
+                if (!packet.allow()) {
+                    try { target = UUID.fromString(name); } catch (IllegalArgumentException ignored) { }
+                }
+                if (target == null && !name.matches("[A-Za-z0-9_]{1,16}"))
+                    throw new IllegalArgumentException("Enter a valid player name");
+                var online = server.getPlayerList().getPlayerByName(name);
+                if (target != null || online != null) {
+                    finishAllowlist(player, packet, target != null ? target : online.getUUID(), null);
+                    return;
+                }
+                // Profile cache misses may contact the authentication service. Never do that
+                // on the server tick thread, and authorize again after the lookup completes.
+                pendingLookups.put(player.getUUID(), packet.request());
+                java.util.concurrent.CompletableFuture.supplyAsync(() -> server.getProfileCache() == null ? null
+                        : server.getProfileCache().get(name).map(GameProfile::getId).orElse(null), net.minecraft.Util.backgroundExecutor())
+                        .orTimeout(10, java.util.concurrent.TimeUnit.SECONDS)
+                        .whenComplete((id, error) -> server.execute(() -> {
+                            if (!packet.request().equals(pendingLookups.get(player.getUUID()))) return;
+                            pendingLookups.remove(player.getUUID());
+                            if (server.getPlayerList().getPlayer(player.getUUID()) == player)
+                                finishAllowlist(player, packet, id, error);
+                        }));
+            } catch (RuntimeException error) { rejectAllowlist(player, packet, error); }
         }));
     }
-    private static UUID resolvePlayer(MinecraftServer server, String name) {
-        var online = server.getPlayerList().getPlayerByName(name);
-        if (online != null) return online.getUUID();
-        return server.getProfileCache() == null ? null : server.getProfileCache().get(name).map(GameProfile::getId).orElse(null);
+    private static EditorBlockEntity requireAllowlistOwner(ServerPlayer player, EditorPackets.AllowlistRequest packet) {
+        if (!player.serverLevel().hasChunkAt(packet.pos()) || player.distanceToSqr(packet.pos().getCenter()) > 64)
+            throw new IllegalArgumentException("Editor is out of reach");
+        if (!(player.serverLevel().getBlockEntity(packet.pos()) instanceof EditorBlockEntity editor)
+                || !editor.sessionId().equals(packet.session()))
+            throw new IllegalArgumentException("Editor session changed; reopen it");
+        if (!player.getUUID().equals(editor.owner())) throw new IllegalArgumentException("Only the owner manages the allowlist");
+        return editor;
+    }
+    private static void finishAllowlist(ServerPlayer player, EditorPackets.AllowlistRequest packet, UUID target, Throwable error) {
+        try {
+            var editor = requireAllowlistOwner(player, packet);
+            if (error != null) throw new IllegalStateException("Player lookup failed; try again", error);
+            if (target == null) throw new IllegalArgumentException("Unknown player: " + packet.username());
+            editor.allowEditor(player.getUUID(), target, packet.allow());
+            sendAllowlist(player, editor, packet.request(), true, (packet.allow() ? "Added " : "Removed ") + packet.username());
+        } catch (RuntimeException failure) { rejectAllowlist(player, packet, failure); }
+    }
+    private static void rejectAllowlist(ServerPlayer player, EditorPackets.AllowlistRequest packet, RuntimeException error) {
+        if (!(error instanceof IllegalArgumentException))
+            com.mervyn.groove.GrooveMod.LOGGER.error("Unexpected allowlist failure at {} for player {}", packet.pos(), player.getUUID(), error);
+        String message = error.getMessage() == null ? "Allowlist action failed" : error.getMessage();
+        // Echo the requested identity so even missing/replaced blocks release the client's request.
+        ServerPlayNetworking.send(player, new EditorPackets.AllowlistState(packet.pos(), packet.session(), packet.request(),
+                false, message.substring(0, Math.min(512, message.length())), false, "", List.of()));
     }
     private static String resolveName(MinecraftServer server, UUID id) {
         var online = server.getPlayerList().getPlayer(id);
         if (online != null) return online.getGameProfile().getName();
-        return server.getProfileCache() == null ? id.toString().substring(0, 8)
-                : server.getProfileCache().get(id).map(GameProfile::getName).orElse(id.toString().substring(0, 8));
+        return server.getProfileCache() == null ? id.toString()
+                : server.getProfileCache().get(id).map(GameProfile::getName).orElse(id.toString());
     }
     private static void sendAllowlist(ServerPlayer player, EditorBlockEntity editor, UUID request, boolean accepted, String message) {
         boolean isOwner = editor.owner() != null && editor.owner().equals(player.getUUID());

@@ -10,11 +10,11 @@ this design closes.
 **Landed so far:** Each placed editor now owns an independent, persistent session.
 Right-click requests that block's draft from the server. Draft edits autosave,
 including unfinished wiring; Commit validates and queues a separate published
-patch for the safe downbeat. Ownership, a persisted allowlist API, player-break
+patch for the safe downbeat. Ownership, a persisted owner-managed allowlist and Access UI, player-break
 protection, and last-write-wins draft updates are implemented. Draft revisions
 survive chunk reloads. A replacement block gets a new session identity.
 
-**Still pending:** The allowlist management UI, headphone and speaker binding,
+**Still pending:** Headphone and speaker binding,
 audio routing to these sessions, link cleanup, and retirement of the legacy
 monitor stream. `/groove-editor` and `/groove` still operate the legacy global
 session. Existing editor blocks without a recorded owner can be claimed by an
@@ -63,8 +63,8 @@ speakers already took (chat-command/global concept -> world object).
 - **Owner** = whoever placed the block.
 - The owner maintains a flat **allowlist** of other players who may edit.
   There are no permission tiers beyond owner / allowlisted-editor.
-- Gated to owner + allowlist: editing the draft, committing, managing the
-  allowlist, breaking the block.
+- Gated to owner + allowlist: editing the draft, committing, and breaking
+  the block. Only the owner may manage the allowlist.
 - Open to anyone regardless of ACL: binding headphones to preview the draft,
   binding a speaker to broadcast the committed patch. Listening is
   deliberately not gated — the ACL protects the work, not who can hear it.

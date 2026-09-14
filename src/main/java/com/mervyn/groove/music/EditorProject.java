@@ -5,6 +5,7 @@ import java.util.UUID;
 
 /** Persistent block identity, access list, and independent draft/published state. */
 public final class EditorProject {
+    public static final int MAX_EDITORS = 64;
     private UUID sessionId = UUID.randomUUID();
     private UUID owner;
     private final java.util.Set<UUID> editors = new java.util.HashSet<>();
@@ -20,6 +21,8 @@ public final class EditorProject {
     public void allowEditor(UUID actor, UUID player, boolean allowed) {
         if (owner == null || !owner.equals(actor)) throw new IllegalArgumentException("Only the owner manages the allowlist");
         if (player.equals(owner)) throw new IllegalArgumentException("The owner already has full access");
+        if (allowed && !editors.contains(player) && editors.size() >= MAX_EDITORS)
+            throw new IllegalArgumentException("Allowlist is full (64 editors)");
         if (allowed) editors.add(player); else editors.remove(player);
     }
     public void save(CompoundTag tag) {

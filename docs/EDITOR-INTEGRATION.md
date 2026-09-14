@@ -15,9 +15,10 @@ Commit also publishes that transport state.
 Sessions, owner/allowlist, draft revision, both graphs, tempos, and transport
 flags save with the editor's chunk; no `/groove save` is needed for block sessions.
 On reload, transport restarts its cycle origin. Breaking and replacing creates a
-new session. Editing and player breaking require owner/allowlist access. The
-allowlist currently has a server-side API and persistence; its management UI is
-pending. Legacy unowned blocks are claimed when an operator first opens them.
+new session. Editing and player breaking require owner/allowlist access. Use Access to add or remove players by name (owner only, up to 64 editors).
+Scroll the list and click a row to fill the removal field. Uncached names appear
+as full UUIDs, which can also be removed. Offline name lookup runs asynchronously;
+permissions and block identity are checked again before applying the result. Legacy unowned blocks are claimed when an operator first opens them.
 
 Headphone/speaker connections and audio routing to block sessions are still
 pending. Block Play/Stop currently controls stored draft transport and the visual

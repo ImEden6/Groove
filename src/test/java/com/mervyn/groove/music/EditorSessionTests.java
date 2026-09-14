@@ -53,6 +53,12 @@ final class EditorSessionTests {
         check(restored.session().revision() == block.session().revision(), "Draft revision survives reload");
         check(restored.session().committed(System.nanoTime()).current().playing(), "Published transport survives reload");
         check(!new EditorProject().sessionId().equals(block.sessionId()), "Replacement block has a new identity");
+        for (int i = restored.editors().size(); i < EditorProject.MAX_EDITORS; i++) restored.allowEditor(owner, UUID.randomUUID(), true);
+        restored.allowEditor(owner, collaborator, true);
+        reject(() -> restored.allowEditor(owner, UUID.randomUUID(), true), "Allowlist is bounded without rejecting an existing editor");
+        restored.allowEditor(owner, collaborator, false);
+        check(!restored.canEdit(collaborator), "Removal revokes edit access even when list was full");
+        restored.allowEditor(owner, UUID.randomUUID(), true);
         var request = new EditorPackets.Request(pos, block.sessionId(), UUID.randomUUID(), EditorPackets.COMMIT, 2, "", 140, true);
         var response = new EditorPackets.State(pos, block.sessionId(), request.request(), true, "Saved", 2, GraphJson.encode(incomplete), 180, false);
         var wire = new RegistryFriendlyByteBuf(Unpooled.buffer(), RegistryAccess.EMPTY);
@@ -68,6 +74,23 @@ final class EditorSessionTests {
             check(EditorPackets.AllowlistRequest.CODEC.decode(wire).equals(allowlistRequest), "Allowlist request round trip");
             EditorPackets.AllowlistState.CODEC.encode(wire, allowlistState);
             check(EditorPackets.AllowlistState.CODEC.decode(wire).equals(allowlistState), "Allowlist state round trip");
+            var removeUnknown = new EditorPackets.AllowlistRequest(pos, block.sessionId(), UUID.randomUUID(), collaborator.toString(), false);
+            EditorPackets.AllowlistRequest.CODEC.encode(wire, removeUnknown);
+            check(EditorPackets.AllowlistRequest.CODEC.decode(wire).equals(removeUnknown), "Unknown-name editor can be removed by full UUID");
+            var names = new ArrayList<String>(List.of(collaborator.toString()));
+            var unknownNames = new EditorPackets.AllowlistState(pos, block.sessionId(), UUID.randomUUID(), true, "", true, owner.toString(), names);
+            names.clear();
+            check(unknownNames.editors().size() == 1, "Allowlist packet owns its entries");
+            EditorPackets.AllowlistState.CODEC.encode(wire, unknownNames);
+            check(EditorPackets.AllowlistState.CODEC.decode(wire).equals(unknownNames), "Unknown names survive full UUID packet round trip");
+            reject(() -> new EditorPackets.AllowlistState(pos, block.sessionId(), UUID.randomUUID(), true, "", true, "Alex",
+                    Collections.nCopies(EditorProject.MAX_EDITORS + 1, "Steve")), "Oversized allowlist packet rejected");
+            for (int count : new int[] {-1, EditorProject.MAX_EDITORS + 1}) {
+                wire.clear();
+                wire.writeBlockPos(pos); wire.writeUUID(block.sessionId()); wire.writeUUID(UUID.randomUUID());
+                wire.writeBoolean(true); wire.writeUtf(""); wire.writeBoolean(true); wire.writeUtf("Alex"); wire.writeVarInt(count);
+                reject(() -> EditorPackets.AllowlistState.CODEC.decode(wire), "Invalid wire count rejected before reading entries");
+            }
         } finally { wire.release(); }
     }
     private static void check(boolean value, String message) { if (!value) throw new AssertionError(message); }

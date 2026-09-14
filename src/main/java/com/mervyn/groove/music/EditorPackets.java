@@ -33,30 +33,35 @@ public final class EditorPackets {
     public record AllowlistRequest(BlockPos pos, UUID session, UUID request, String username, boolean allow) implements CustomPacketPayload {
         public static final Type<AllowlistRequest> TYPE = new Type<>(GrooveMod.id("editor_allowlist_request"));
         public static final StreamCodec<RegistryFriendlyByteBuf, AllowlistRequest> CODEC = new StreamCodec<>() {
-            public AllowlistRequest decode(RegistryFriendlyByteBuf b) { return new AllowlistRequest(b.readBlockPos(), b.readUUID(), b.readUUID(), b.readUtf(16), b.readBoolean()); }
-            public void encode(RegistryFriendlyByteBuf b, AllowlistRequest p) { b.writeBlockPos(p.pos); b.writeUUID(p.session); b.writeUUID(p.request); b.writeUtf(p.username, 16); b.writeBoolean(p.allow); }
+            public AllowlistRequest decode(RegistryFriendlyByteBuf b) { return new AllowlistRequest(b.readBlockPos(), b.readUUID(), b.readUUID(), b.readUtf(36), b.readBoolean()); }
+            public void encode(RegistryFriendlyByteBuf b, AllowlistRequest p) { b.writeBlockPos(p.pos); b.writeUUID(p.session); b.writeUUID(p.request); b.writeUtf(p.username, 36); b.writeBoolean(p.allow); }
         };
         public Type<? extends CustomPacketPayload> type() { return TYPE; }
     }
     public record AllowlistState(BlockPos pos, UUID session, UUID request, boolean accepted, String message,
                                  boolean owner, String ownerName, List<String> editors) implements CustomPacketPayload {
+        public AllowlistState {
+            editors = List.copyOf(editors);
+            if (editors.size() > EditorProject.MAX_EDITORS) throw new IllegalArgumentException("Allowlist exceeds limit");
+        }
         public static final Type<AllowlistState> TYPE = new Type<>(GrooveMod.id("editor_allowlist_state"));
         public static final StreamCodec<RegistryFriendlyByteBuf, AllowlistState> CODEC = new StreamCodec<>() {
             public AllowlistState decode(RegistryFriendlyByteBuf b) {
                 var pos = b.readBlockPos(); var session = b.readUUID(); var request = b.readUUID();
                 boolean accepted = b.readBoolean(); String message = b.readUtf(512);
-                boolean owner = b.readBoolean(); String ownerName = b.readUtf(16);
+                boolean owner = b.readBoolean(); String ownerName = b.readUtf(36);
                 int count = b.readVarInt();
-                var editors = new ArrayList<String>(Math.min(count, 64));
-                for (int i = 0; i < count; i++) editors.add(b.readUtf(16));
+                if (count < 0 || count > EditorProject.MAX_EDITORS) throw new IllegalArgumentException("Invalid allowlist size");
+                var editors = new ArrayList<String>(count);
+                for (int i = 0; i < count; i++) editors.add(b.readUtf(36));
                 return new AllowlistState(pos, session, request, accepted, message, owner, ownerName, List.copyOf(editors));
             }
             public void encode(RegistryFriendlyByteBuf b, AllowlistState p) {
                 b.writeBlockPos(p.pos); b.writeUUID(p.session); b.writeUUID(p.request);
                 b.writeBoolean(p.accepted); b.writeUtf(p.message, 512);
-                b.writeBoolean(p.owner); b.writeUtf(p.ownerName, 16);
+                b.writeBoolean(p.owner); b.writeUtf(p.ownerName, 36);
                 b.writeVarInt(p.editors.size());
-                for (String name : p.editors) b.writeUtf(name, 16);
+                for (String name : p.editors) b.writeUtf(name, 36);
             }
         };
         public Type<? extends CustomPacketPayload> type() { return TYPE; }
