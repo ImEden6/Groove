@@ -5,6 +5,7 @@ import java.util.Locale;
 
 /** End-to-end PCM measurements, including octave prefilters and table interpolation. */
 final class ResamplerTests {
+    @SuppressWarnings("unused")
     private static volatile double sink;
     static void run() {
         double worstRejection = Double.POSITIVE_INFINITY, worstPassError = 0;

@@ -236,29 +236,6 @@ public final class SignalRuntime {
                 : (release == 0 ? 0 : held(releaseAt,attack,decay,sustain) * Math.max(0,1-(age-releaseAt)/release));
     }
 
-    /** Stateless per-call scan of the trigger source's current window, so this stays a pure
-     *  function of (window, cycle) like the rest of evaluate(): it carries forward no voice
-     *  state, which would break late-join/seek determinism. Overlapping voices combine with MAX,
-     *  not SUM: existing patches assume a single ENVELOPE's output stays in its documented 0-1
-     *  range, and summing would silently multiply that range with polyphony density. */
-    private double evaluateTriggerEnvelope(int triggerNode, double cycle, double attack, double decay,
-                                            double sustain, double release, double mode) {
-        LookaheadScheduler.Window window = triggerWindowByNode[triggerNode];
-        if (window == null) return 0;
-        double best = 0;
-        for (int e = 0; e < window.size(); e++) {
-            Event event = window.entry(e).event();
-            double onset = event.whole().start();
-            if (onset > cycle) continue;
-            double age = cycle - onset;
-            double releaseAt = mode == 0 ? attack+decay : event.whole().end() - onset;
-            if (age >= releaseAt + release) continue;
-            double value = age < releaseAt ? held(age,attack,decay,sustain)
-                    : (release == 0 ? 0 : held(releaseAt,attack,decay,sustain) * Math.max(0,1-(age-releaseAt)/release));
-            if (value > best) best = value;
-        }
-        return best;
-    }
     private static double p(Graph.Node n,String key,double fallback) { return SignalGraph.param(n,key,fallback); }
     private static double bounded(double v) { return Double.isFinite(v) ? clamp(v,-8,8) : 0; }
     private static double clamp(double v,double min,double max) { return Math.max(min,Math.min(max,v)); }

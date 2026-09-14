@@ -12,8 +12,7 @@ import java.util.UUID;
  * Persistent identity for a speaker segment. Client audio promotes only the
  * lowest segment of each contiguous tower into an audible source. A base
  * segment may also be linked to one editor block, whose committed patch it
- * should play instead of the legacy global session (see EDITOR-BLOCK-DESIGN.md);
- * routing that audio is not implemented yet, only the link itself.
+ * plays instead of the retired global session (see EDITOR-BLOCK-DESIGN.md).
  */
 public final class SpeakerBlockEntity extends BlockEntity {
     private BlockPos editorPos;

@@ -79,6 +79,14 @@ public final class MusicClient {
                 try { preview.prepare(serverNow()); failedPreviewSchedule = null; }
                 catch (RuntimeException error) { failedPreviewSchedule = preview; GrooveMod.LOGGER.error("Headphone lookahead preparation failed", error); }
             }
+            long now = serverNow();
+            for (SpeakerLink link : speakerLinks.values()) {
+                var speakerProg = link.program;
+                if (speakerProg != null) {
+                    try { speakerProg.prepare(now); }
+                    catch (RuntimeException error) { GrooveMod.LOGGER.error("Speaker lookahead preparation failed", error); }
+                }
+            }
         }, 0, 50, TimeUnit.MILLISECONDS);
         ClientPlayNetworking.registerGlobalReceiver(MusicPackets.SubmitResult.TYPE, (packet, context) -> {
             if (context.client().screen instanceof com.mervyn.groove.client.ui.GrooveEditorScreen editor) editor.submissionResult(packet);
@@ -315,7 +323,9 @@ public final class MusicClient {
     private static void pollSpeakerLink(BlockPos pos) {
         SpeakerLink link = speakerLinks.computeIfAbsent(pos, p -> new SpeakerLink());
         long now = System.nanoTime();
-        if (link.request != null || now - link.sent < 1_000_000_000L || !ClientPlayNetworking.canSend(SpeakerPackets.CommittedRequest.TYPE))
+        if ((link.request != null && now - link.sent < 3_000_000_000L)
+                || now - link.sent < 1_000_000_000L
+                || !ClientPlayNetworking.canSend(SpeakerPackets.CommittedRequest.TYPE))
             return;
         link.request = UUID.randomUUID(); link.sent = now;
         ClientPlayNetworking.send(new SpeakerPackets.CommittedRequest(pos, link.request));

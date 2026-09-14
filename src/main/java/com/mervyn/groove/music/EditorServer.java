@@ -31,7 +31,7 @@ public final class EditorServer {
                 requests.put(player.getUUID(), now);
                 if (packet.action() < EditorPackets.OPEN || packet.action() > EditorPackets.COMMIT)
                     throw new IllegalArgumentException("Unknown editor action");
-                if (!player.serverLevel().hasChunkAt(packet.pos()) || player.distanceToSqr(packet.pos().getCenter()) > 64)
+                if (!player.serverLevel().hasChunk(packet.pos().getX() >> 4, packet.pos().getZ() >> 4) || player.distanceToSqr(packet.pos().getCenter()) > 64)
                     throw new IllegalArgumentException("Editor is out of reach");
                 if (!(player.serverLevel().getBlockEntity(packet.pos()) instanceof EditorBlockEntity found))
                     throw new IllegalArgumentException("Editor no longer exists");
@@ -107,7 +107,7 @@ public final class EditorServer {
         }));
     }
     private static EditorBlockEntity requireAllowlistOwner(ServerPlayer player, EditorPackets.AllowlistRequest packet) {
-        if (!player.serverLevel().hasChunkAt(packet.pos()) || player.distanceToSqr(packet.pos().getCenter()) > 64)
+        if (!player.serverLevel().hasChunk(packet.pos().getX() >> 4, packet.pos().getZ() >> 4) || player.distanceToSqr(packet.pos().getCenter()) > 64)
             throw new IllegalArgumentException("Editor is out of reach");
         if (!(player.serverLevel().getBlockEntity(packet.pos()) instanceof EditorBlockEntity editor)
                 || !editor.sessionId().equals(packet.session()))

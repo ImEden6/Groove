@@ -51,6 +51,7 @@ public final class GrooveEditorScreen extends Screen {
     private ThemedButton allowlistAdd, allowlistRemove;
     private boolean speakersOpen;
     private UUID speakerListRequest;
+    private long speakerListSent;
     private UUID speakerBindRequest;
     private int speakerScroll;
     private List<net.minecraft.core.BlockPos> speakerPositions = List.of();
@@ -161,8 +162,11 @@ public final class GrooveEditorScreen extends Screen {
         ClientPlayNetworking.send(new com.mervyn.groove.music.EditorPackets.AllowlistRequest(blockSession.pos(), blockSession.session(), allowlistRequest, name, allow));
     }
     private void fetchSpeakers() {
-        if (blockSession == null || speakerListRequest != null) return;
+        if (blockSession == null) return;
+        long now = System.nanoTime();
+        if (speakerListRequest != null && now - speakerListSent < 2_000_000_000L) return;
         speakerListRequest = UUID.randomUUID();
+        speakerListSent = now;
         ClientPlayNetworking.send(new com.mervyn.groove.music.SpeakerPackets.ListRequest(blockSession.pos(), blockSession.session(), speakerListRequest));
     }
     public void speakerListState(com.mervyn.groove.music.SpeakerPackets.ListState packet) {

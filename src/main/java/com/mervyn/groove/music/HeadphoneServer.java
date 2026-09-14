@@ -32,7 +32,7 @@ public final class HeadphoneServer {
                 requests.put(player.getUUID(), now);
                 if (player.isSpectator() || !stack.is(GrooveItems.HEADPHONES))
                     throw new IllegalArgumentException("Hold the headphones in your main hand to bind them");
-                if (!player.serverLevel().hasChunkAt(packet.pos()) || player.distanceToSqr(packet.pos().getCenter()) > 64)
+                if (!player.serverLevel().hasChunk(packet.pos().getX() >> 4, packet.pos().getZ() >> 4) || player.distanceToSqr(packet.pos().getCenter()) > 64)
                     throw new IllegalArgumentException("Editor is out of reach");
                 if (!(player.serverLevel().getBlockEntity(packet.pos()) instanceof EditorBlockEntity editor))
                     throw new IllegalArgumentException("Not an editor block");
@@ -74,7 +74,7 @@ public final class HeadphoneServer {
         if (link.isEmpty()) return null;
         var level = player.serverLevel();
         boolean inRange = HeadphoneLinks.inRange(link.get(), level.dimension().location(), player.position());
-        if (inRange && !level.hasChunkAt(link.get().pos())) return null;
+        if (inRange && !level.hasChunk(link.get().pos().getX() >> 4, link.get().pos().getZ() >> 4)) return null;
         if (inRange && level.getBlockEntity(link.get().pos()) instanceof EditorBlockEntity editor && editor.sessionId().equals(link.get().session()))
             return player.isSpectator() ? null : editor;
         HeadphoneLinks.clear(worn.get());

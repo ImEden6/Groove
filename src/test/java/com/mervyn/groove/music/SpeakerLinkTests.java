@@ -40,6 +40,9 @@ final class SpeakerLinkTests {
             check(SpeakerPackets.ListRequest.CODEC.decode(wire).equals(listRequest), "Speaker list request round trip");
             SpeakerPackets.ListState.CODEC.encode(wire, listState);
             check(SpeakerPackets.ListState.CODEC.decode(wire).equals(listState), "Speaker list state round trip");
+            var throttledListState = new SpeakerPackets.ListState(listRequest.request(), false, "Please wait before refreshing", List.of(), List.of());
+            SpeakerPackets.ListState.CODEC.encode(wire, throttledListState);
+            check(SpeakerPackets.ListState.CODEC.decode(wire).equals(throttledListState), "Throttled speaker list state round trip");
             SpeakerPackets.BindRequest.CODEC.encode(wire, bindRequest);
             check(SpeakerPackets.BindRequest.CODEC.decode(wire).equals(bindRequest), "Speaker bind request round trip");
             SpeakerPackets.BindState.CODEC.encode(wire, bindState);
