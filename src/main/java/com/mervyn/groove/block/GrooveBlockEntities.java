@@ -11,6 +11,10 @@ public final class GrooveBlockEntities {
             BuiltInRegistries.BLOCK_ENTITY_TYPE, GrooveMod.id("speaker"),
             BlockEntityType.Builder.of(SpeakerBlockEntity::new, GrooveBlocks.SPEAKER).build(null));
 
+    public static final BlockEntityType<EditorBlockEntity> EDITOR = Registry.register(
+            BuiltInRegistries.BLOCK_ENTITY_TYPE, GrooveMod.id("editor"),
+            BlockEntityType.Builder.of(EditorBlockEntity::new, GrooveBlocks.EDITOR).build(null));
+
     /** Forces this class's static initializer (and therefore registration) to run. */
     public static void register() {}
 

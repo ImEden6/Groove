@@ -13,6 +13,9 @@ public final class GrooveBlocks {
     public static final Block SPEAKER = register("speaker", SpeakerBlock::new,
             BlockBehaviour.Properties.of().strength(3.5f).sound(SoundType.METAL).requiresCorrectToolForDrops());
 
+    public static final Block EDITOR = register("editor", EditorBlock::new,
+            BlockBehaviour.Properties.of().strength(3.5f).sound(SoundType.METAL).requiresCorrectToolForDrops());
+
     private static Block register(String path, Function<BlockBehaviour.Properties, Block> factory,
                                    BlockBehaviour.Properties properties) {
         return Registry.register(BuiltInRegistries.BLOCK, GrooveMod.id(path), factory.apply(properties));

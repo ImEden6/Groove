@@ -1,0 +1,8 @@
+{
+    "parent": "block/orientable",
+    "textures": {
+        "top": "modid:block/editor/editor_top",
+        "front": "modid:block/editor/editor_front",
+        "side": "modid:block/editor/editor_side"
+    }
+}

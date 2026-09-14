@@ -13,12 +13,16 @@ public final class GrooveItems {
     public static final Item SPEAKER = Registry.register(BuiltInRegistries.ITEM, GrooveMod.id("speaker"),
             new BlockItem(GrooveBlocks.SPEAKER, new Item.Properties()));
 
+    public static final Item EDITOR = Registry.register(BuiltInRegistries.ITEM, GrooveMod.id("editor"),
+            new BlockItem(GrooveBlocks.EDITOR, new Item.Properties()));
+
     public static final Item HEADPHONES = Registry.register(BuiltInRegistries.ITEM, GrooveMod.id("headphones"),
             new HeadphonesItem(new Item.Properties().stacksTo(1)));
 
     public static void register() {
         ItemGroupEvents.modifyEntriesEvent(CreativeModeTabs.FUNCTIONAL_BLOCKS).register(entries -> {
             entries.accept(SPEAKER);
+            entries.accept(EDITOR);
             entries.accept(HEADPHONES);
         });
     }

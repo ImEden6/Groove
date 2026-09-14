@@ -1,0 +1,8 @@
+{
+    "variants": {
+        "facing=north": { "model": "modid:block/editor" },
+        "facing=east": { "model": "modid:block/editor", "y": 90 },
+        "facing=south": { "model": "modid:block/editor", "y": 180 },
+        "facing=west": { "model": "modid:block/editor", "y": 270 }
+    }
+}
