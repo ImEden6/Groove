@@ -401,6 +401,18 @@ public final class BackendTests {
                 throw new AssertionError("Corrupt new save must not silently fall back to stale legacy files");
             } catch (java.io.IOException expected) { }
             invalid(() -> new SessionStore.Saved(Graph.demo(), Double.NaN));
+
+            var player = java.util.UUID.randomUUID();
+            var pos = new net.minecraft.core.BlockPos(4, 5, 6);
+            var session = java.util.UUID.randomUUID();
+            check(HeadphoneLinks.read(root).isEmpty(), "No headphone save reads as empty");
+            var links = new java.util.HashMap<java.util.UUID, HeadphoneLinks.Link>();
+            links.put(player, new HeadphoneLinks.Link(pos, session));
+            HeadphoneLinks.write(root, links);
+            var restored = HeadphoneLinks.read(root);
+            check(restored.equals(links), "Headphone link round trips through disk");
+            HeadphoneLinks.write(root, java.util.Map.of());
+            check(HeadphoneLinks.read(root).isEmpty(), "Headphone links can be cleared");
         } finally {
             try (var files = java.nio.file.Files.list(root)) {
                 for (var file : files.toList()) java.nio.file.Files.delete(file);

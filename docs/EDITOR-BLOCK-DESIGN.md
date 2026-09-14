@@ -13,12 +13,17 @@ including unfinished wiring; Commit validates and queues a separate published
 patch for the safe downbeat. Ownership, a persisted owner-managed allowlist and Access UI, player-break
 protection, and last-write-wins draft updates are implemented. Draft revisions
 survive chunk reloads. A replacement block gets a new session identity.
+Holding the headphones item and right-clicking an editor block now records an
+exclusive, persistent link (`groove-headphones.json`, survives logout/relogin)
+to that editor's current session; binding itself is unrestricted (no ACL check),
+matching this doc's "Open to anyone" rule below.
 
-**Still pending:** Headphone and speaker binding,
-audio routing to these sessions, link cleanup, and retirement of the legacy
-monitor stream. `/groove-editor` and `/groove` still operate the legacy global
-session. Existing editor blocks without a recorded owner can be claimed by an
-operator opening them; newly placed blocks record their placer automatically.
+**Still pending:** Actually routing audio to a linked headphone (the live
+draft feed itself, and the 16-block auto-unlink range), speaker binding, link
+cleanup on block break, and retirement of the legacy monitor stream.
+`/groove-editor` and `/groove` still operate the legacy global session.
+Existing editor blocks without a recorded owner can be claimed by an operator
+opening them; newly placed blocks record their placer automatically.
 
 ## Summary of the current state (before this design)
 
