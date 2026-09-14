@@ -21,6 +21,9 @@ public final class BlockEditorClient {
                 context.client().setScreen(new GrooveEditorScreen(GraphJson.decodeDraft(packet.graph()), new VanillaRenderer(), packet));
             } else if (context.client().screen instanceof GrooveEditorScreen screen) screen.blockState(packet);
         }));
+        ClientPlayNetworking.registerGlobalReceiver(EditorPackets.AllowlistState.TYPE, (packet, context) -> context.client().execute(() -> {
+            if (context.client().screen instanceof GrooveEditorScreen screen) screen.allowlistState(packet);
+        }));
     }
     public static void open(BlockPos pos) {
         opening = UUID.randomUUID();

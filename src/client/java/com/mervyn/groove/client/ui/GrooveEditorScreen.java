@@ -40,6 +40,13 @@ public final class GrooveEditorScreen extends Screen {
     private double blockSubmittedBpm;
     private double savedBpm;
     private long blockAnchor;
+    private boolean accessOpen;
+    private UUID allowlistRequest;
+    private boolean isOwner;
+    private String ownerName = "";
+    private List<String> editorNames = List.of();
+    private EditBox allowlistName;
+    private ThemedButton allowlistAdd, allowlistRemove;
     private final EditorState state;
     private final InputController input;
     private final ThemeRenderer renderer;
@@ -127,6 +134,20 @@ public final class GrooveEditorScreen extends Screen {
             baseGraph = state.toGraph(); savedBpm = packet.bpm(); bpm.setValue(Double.toString(savedBpm));
         }
     }
+    public void allowlistState(com.mervyn.groove.music.EditorPackets.AllowlistState packet) {
+        if (blockSession == null || !packet.session().equals(blockSession.session())) return;
+        if (packet.request().equals(allowlistRequest)) allowlistRequest = null;
+        isOwner = packet.owner(); ownerName = packet.ownerName(); editorNames = packet.editors();
+        if (allowlistName != null) layoutAllowlist();
+        if (!packet.message().isEmpty()) message = packet.message();
+    }
+    private void sendAllowlist(boolean allow) {
+        if (blockSession == null || allowlistRequest != null) return;
+        String name = allowlistName.getValue().trim();
+        if (name.isEmpty()) { message = "Enter a player name"; return; }
+        allowlistRequest = UUID.randomUUID();
+        ClientPlayNetworking.send(new com.mervyn.groove.music.EditorPackets.AllowlistRequest(blockSession.pos(), blockSession.session(), allowlistRequest, name, allow));
+    }
     @Override
     protected void init() {
         input.setViewport(width, height);
@@ -141,6 +162,24 @@ public final class GrooveEditorScreen extends Screen {
         search = new EditBox(font, 5, 40, DRAWER_WIDTH - 10, 18, Component.literal("Search samples"));
         search.setMaxLength(160); search.setValue(query); search.setResponder(s -> { scroll = 0; selectedSample = 0; });
         search.visible = drawer; addRenderableWidget(search);
+
+        ThemedButton access = new ThemedButton(245, 2, 50, 20, Component.literal("Access"), font, theme, textColor,
+                b -> { accessOpen = !accessOpen; if (accessOpen) state.clearSelection(); layoutAllowlist(); });
+        access.visible = blockSession != null; addRenderableWidget(access);
+        int x = Math.max(DRAWER_WIDTH + 10, width - 150) + 4;
+        int bottom = Math.min(height - 20, 220);
+        String name = allowlistName == null ? "" : allowlistName.getValue();
+        allowlistName = new EditBox(font, x, bottom - 40, width - x - 8, 18, Component.literal("Player name"));
+        allowlistName.setMaxLength(16); allowlistName.setValue(name); addRenderableWidget(allowlistName);
+        allowlistAdd = new ThemedButton(x, bottom - 20, (width - x - 12) / 2, 18, Component.literal("Add"), font, theme, textColor, b -> sendAllowlist(true));
+        addRenderableWidget(allowlistAdd);
+        allowlistRemove = new ThemedButton(x + (width - x - 12) / 2 + 4, bottom - 20, (width - x - 12) / 2, 18, Component.literal("Remove"), font, theme, textColor, b -> sendAllowlist(false));
+        addRenderableWidget(allowlistRemove);
+        layoutAllowlist();
+    }
+    private void layoutAllowlist() {
+        boolean visible = accessOpen && blockSession != null;
+        allowlistName.visible = visible; allowlistAdd.visible = visible && isOwner; allowlistRemove.visible = visible && isOwner;
     }
 
     @Override
@@ -224,7 +263,9 @@ public final class GrooveEditorScreen extends Screen {
                 graphics.drawString(font, font.plainSubstrByWidth(rows.get(i).ref().assetId(), DRAWER_WIDTH - 13), 8, y, textColor, false);
             }
         }
-        if (!state.selection().isEmpty()) {
+        if (accessOpen && blockSession != null) {
+            renderAccessPanel(graphics, textColor);
+        } else if (!state.selection().isEmpty()) {
             var node = state.node(state.selection().iterator().next());
             int x = Math.max(DRAWER_WIDTH + 10, width - 150);
             int inspectorBottom = Math.min(height - 20, 220);
@@ -329,20 +370,21 @@ public final class GrooveEditorScreen extends Screen {
             }
             return true;
         }
-        if (!state.selection().isEmpty() && insideInspector(mouseX, mouseY)) {
-            var node = state.node(state.selection().iterator().next());
+        if (rightPanelActive() && insideInspector(mouseX, mouseY)) {
             if (button == 0 && mouseX >= inspectorCloseX() - 2 && mouseX < inspectorCloseX() + 8 && mouseY >= 32 && mouseY < 42) {
-                state.clearSelection();
+                if (accessOpen) { accessOpen = false; layoutAllowlist(); } else state.clearSelection();
                 return true;
             }
-            browsing = false;
-            if (button == 0 && mouseY >= knobTop(node) && mouseY < knobBottom()) {
-                knobs(node).stream().filter(knob -> knob.contains(mouseX, mouseY)).findFirst()
-                        .ifPresent(knob -> input.startValueDrag(node.id(), knob.param(), mouseY, hasControlDown()));
+            if (!accessOpen) {
+                var node = state.node(state.selection().iterator().next());
+                browsing = false;
+                if (button == 0 && mouseY >= knobTop(node) && mouseY < knobBottom()) {
+                    knobs(node).stream().filter(knob -> knob.contains(mouseX, mouseY)).findFirst()
+                            .ifPresent(knob -> input.startValueDrag(node.id(), knob.param(), mouseY, hasControlDown()));
+                }
             }
-            // Any other click inside the inspector (euclid ring, waveform, empty space) is
-            // swallowed here rather than falling through to the canvas underneath. The
-            // panel is opaque and clicking it must never select/drag a node behind it.
+            // Any other click inside this panel (euclid ring, waveform, allowlist rows, empty
+            // space) is swallowed here rather than falling through to the canvas underneath.
             return true;
         }
         browsing = false;
@@ -463,7 +505,7 @@ public final class GrooveEditorScreen extends Screen {
     private boolean canvasVisible(double x, double y) {
         return x >= 0 && x < width && y >= 24 && y < height - 20
                 && (!drawer || x >= DRAWER_WIDTH)
-                && (state.selection().isEmpty() || !insideInspector(x, y))
+                && (!rightPanelActive() || !insideInspector(x, y))
                 && !state.isQuickSpawnOpen();
     }
     /** Shared with render()'s inspector panel drawing so the click-blocking bounds in
@@ -474,6 +516,20 @@ public final class GrooveEditorScreen extends Screen {
         return mouseX >= x - 4 && mouseX < width && mouseY >= 26 && mouseY < inspectorBottom;
     }
     private int inspectorCloseX() { return width - 14; }
+    private boolean rightPanelActive() { return accessOpen || !state.selection().isEmpty(); }
+    private void renderAccessPanel(GuiGraphics graphics, int textColor) {
+        int x = Math.max(DRAWER_WIDTH + 10, width - 150);
+        int bottom = Math.min(height - 20, 220);
+        renderer.drawPanel(graphics, PanelKind.DRAWER, x - 4, 26, width - (x - 4), bottom - 26);
+        int textX = x + 4;
+        graphics.drawString(font, "Access", textX, 34, textColor, false);
+        graphics.drawString(font, "x", inspectorCloseX(), 34, textColor, false);
+        graphics.drawString(font, "Owner: " + (ownerName.isEmpty() ? "(unclaimed)" : ownerName), textX, 48, textColor, false);
+        int y = 60;
+        if (editorNames.isEmpty()) graphics.drawString(font, "No editors added", textX, y, textColor, false);
+        for (String name : editorNames) { graphics.drawString(font, name, textX, y, textColor, false); y += 11; }
+        if (!isOwner) graphics.drawString(font, "Only the owner can edit this list", textX, bottom - 54, 0xffcc66, false);
+    }
     /** Same live-session check render() uses for the "Cycle .. Playing/Stopped" readout,
      *  so the Play/Stop button's icon actually reflects transport state rather than always
      *  showing the same glyph. */

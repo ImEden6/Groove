@@ -15,6 +15,8 @@ public final class EditorBlockEntity extends BlockEntity {
     public EditorBlockEntity(BlockPos pos, BlockState state) { super(GrooveBlockEntities.EDITOR, pos, state); }
     public UUID sessionId() { return project.sessionId(); }
     public EditorSession session() { return project.session(); }
+    public UUID owner() { return project.owner(); }
+    public java.util.Set<UUID> editors() { return project.editors(); }
     public boolean hasOwner() { return project.hasOwner(); }
     public void setOwner(UUID player) { project.setOwner(player); setChanged(); }
     public boolean canEdit(UUID player) { return project.canEdit(player); }

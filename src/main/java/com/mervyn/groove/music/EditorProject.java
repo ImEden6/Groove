@@ -11,13 +11,16 @@ public final class EditorProject {
     private EditorSession session = new EditorSession(System.nanoTime());
     public UUID sessionId() { return sessionId; }
     public EditorSession session() { return session; }
+    public UUID owner() { return owner; }
+    public java.util.Set<UUID> editors() { return java.util.Set.copyOf(editors); }
     public boolean hasOwner() { return owner != null; }
     public void setOwner(UUID player) { if (owner == null) { owner = player; } }
     public boolean canEdit(UUID player) { return owner != null && (owner.equals(player) || editors.contains(player)); }
+    /** Only the owner manages the allowlist; other allowlisted editors cannot. */
     public void allowEditor(UUID actor, UUID player, boolean allowed) {
-        if (!canEdit(actor)) throw new IllegalArgumentException("No edit permission");
+        if (owner == null || !owner.equals(actor)) throw new IllegalArgumentException("Only the owner manages the allowlist");
+        if (player.equals(owner)) throw new IllegalArgumentException("The owner already has full access");
         if (allowed) editors.add(player); else editors.remove(player);
-
     }
     public void save(CompoundTag tag) {
         tag.putUUID("Session", sessionId);

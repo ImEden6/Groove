@@ -6,6 +6,8 @@ import net.minecraft.network.RegistryFriendlyByteBuf;
 import net.minecraft.network.codec.StreamCodec;
 import net.minecraft.network.protocol.common.custom.CustomPacketPayload;
 import net.fabricmc.fabric.api.networking.v1.PayloadTypeRegistry;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.UUID;
 
 public final class EditorPackets {
@@ -28,8 +30,41 @@ public final class EditorPackets {
         };
         public Type<? extends CustomPacketPayload> type() { return TYPE; }
     }
+    public record AllowlistRequest(BlockPos pos, UUID session, UUID request, String username, boolean allow) implements CustomPacketPayload {
+        public static final Type<AllowlistRequest> TYPE = new Type<>(GrooveMod.id("editor_allowlist_request"));
+        public static final StreamCodec<RegistryFriendlyByteBuf, AllowlistRequest> CODEC = new StreamCodec<>() {
+            public AllowlistRequest decode(RegistryFriendlyByteBuf b) { return new AllowlistRequest(b.readBlockPos(), b.readUUID(), b.readUUID(), b.readUtf(16), b.readBoolean()); }
+            public void encode(RegistryFriendlyByteBuf b, AllowlistRequest p) { b.writeBlockPos(p.pos); b.writeUUID(p.session); b.writeUUID(p.request); b.writeUtf(p.username, 16); b.writeBoolean(p.allow); }
+        };
+        public Type<? extends CustomPacketPayload> type() { return TYPE; }
+    }
+    public record AllowlistState(BlockPos pos, UUID session, UUID request, boolean accepted, String message,
+                                 boolean owner, String ownerName, List<String> editors) implements CustomPacketPayload {
+        public static final Type<AllowlistState> TYPE = new Type<>(GrooveMod.id("editor_allowlist_state"));
+        public static final StreamCodec<RegistryFriendlyByteBuf, AllowlistState> CODEC = new StreamCodec<>() {
+            public AllowlistState decode(RegistryFriendlyByteBuf b) {
+                var pos = b.readBlockPos(); var session = b.readUUID(); var request = b.readUUID();
+                boolean accepted = b.readBoolean(); String message = b.readUtf(512);
+                boolean owner = b.readBoolean(); String ownerName = b.readUtf(16);
+                int count = b.readVarInt();
+                var editors = new ArrayList<String>(Math.min(count, 64));
+                for (int i = 0; i < count; i++) editors.add(b.readUtf(16));
+                return new AllowlistState(pos, session, request, accepted, message, owner, ownerName, List.copyOf(editors));
+            }
+            public void encode(RegistryFriendlyByteBuf b, AllowlistState p) {
+                b.writeBlockPos(p.pos); b.writeUUID(p.session); b.writeUUID(p.request);
+                b.writeBoolean(p.accepted); b.writeUtf(p.message, 512);
+                b.writeBoolean(p.owner); b.writeUtf(p.ownerName, 16);
+                b.writeVarInt(p.editors.size());
+                for (String name : p.editors) b.writeUtf(name, 16);
+            }
+        };
+        public Type<? extends CustomPacketPayload> type() { return TYPE; }
+    }
     public static void register() {
         PayloadTypeRegistry.playC2S().register(Request.TYPE, Request.CODEC);
         PayloadTypeRegistry.playS2C().register(State.TYPE, State.CODEC);
+        PayloadTypeRegistry.playC2S().register(AllowlistRequest.TYPE, AllowlistRequest.CODEC);
+        PayloadTypeRegistry.playS2C().register(AllowlistState.TYPE, AllowlistState.CODEC);
     }
 }

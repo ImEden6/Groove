@@ -38,6 +38,8 @@ final class EditorSessionTests {
         block.setOwner(owner);
         block.allowEditor(owner, collaborator, true);
         check(block.canEdit(collaborator) && !block.canEdit(UUID.randomUUID()), "Allowlist protects edits");
+        reject(() -> block.allowEditor(collaborator, UUID.randomUUID(), true), "Only the owner manages the allowlist");
+        reject(() -> block.allowEditor(owner, owner, true), "Owner cannot be added to their own allowlist");
         block.session().edit(changed, 140, true);
         block.session().commit(block.session().revision(), System.nanoTime());
         block.session().edit(incomplete, 180, false);
@@ -59,6 +61,13 @@ final class EditorSessionTests {
             check(EditorPackets.Request.CODEC.decode(wire).equals(request), "Editor request round trip");
             EditorPackets.State.CODEC.encode(wire, response);
             check(EditorPackets.State.CODEC.decode(wire).equals(response), "Editor state round trip");
+            var allowlistRequest = new EditorPackets.AllowlistRequest(pos, block.sessionId(), UUID.randomUUID(), "Steve", true);
+            var allowlistState = new EditorPackets.AllowlistState(pos, block.sessionId(), allowlistRequest.request(), true, "Added Steve",
+                    true, "Alex", List.of("Herobrine", "Steve"));
+            EditorPackets.AllowlistRequest.CODEC.encode(wire, allowlistRequest);
+            check(EditorPackets.AllowlistRequest.CODEC.decode(wire).equals(allowlistRequest), "Allowlist request round trip");
+            EditorPackets.AllowlistState.CODEC.encode(wire, allowlistState);
+            check(EditorPackets.AllowlistState.CODEC.decode(wire).equals(allowlistState), "Allowlist state round trip");
         } finally { wire.release(); }
     }
     private static void check(boolean value, String message) { if (!value) throw new AssertionError(message); }
