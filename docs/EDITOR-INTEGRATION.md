@@ -23,9 +23,11 @@ permissions and block identity are checked again before applying the result. Leg
 Holding headphones in the main hand and right-clicking an editor binds that pair
 to the editor's dimension, position, and session. This is saved as item data;
 previous prototype links in `groove-headphones.json` need rebinding once.
-Headphone audio routing, range/break cleanup, and speaker connections are still
-pending. Block Play/Stop currently controls stored draft transport and the visual
-clock; it does not yet create an audio feed.
+Worn headphones play the linked draft on the server transport clock, including
+custom samples available on the server. Invalid/unavailable drafts are silent.
+The server clears worn links beyond 16 blocks, across dimensions, or when the
+loaded editor is missing/replaced. Stored/unworn link cleanup and speaker
+connections remain pending. Headphones no longer use the global monitor fallback.
 
 ## Legacy command editor
 

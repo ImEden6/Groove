@@ -34,11 +34,11 @@ public final class HeadphonePackets {
         public Type<? extends CustomPacketPayload> type() { return TYPE; }
     }
     /** The linked editor's current draft, resolved server-side from the player's own worn headphones. */
-    public record Draft(UUID request, boolean available, String graph, double bpm, boolean playing, long revision) implements CustomPacketPayload {
+    public record Draft(UUID request, boolean available, String graph, double bpm, boolean playing, long revision, UUID session, long at, double cycle) implements CustomPacketPayload {
         public static final Type<Draft> TYPE = new Type<>(GrooveMod.id("headphone_draft"));
         public static final StreamCodec<RegistryFriendlyByteBuf, Draft> CODEC = new StreamCodec<>() {
-            public Draft decode(RegistryFriendlyByteBuf b) { return new Draft(b.readUUID(), b.readBoolean(), b.readUtf(GraphJson.MAX_LENGTH), b.readDouble(), b.readBoolean(), b.readVarLong()); }
-            public void encode(RegistryFriendlyByteBuf b, Draft p) { b.writeUUID(p.request); b.writeBoolean(p.available); b.writeUtf(p.graph, GraphJson.MAX_LENGTH); b.writeDouble(p.bpm); b.writeBoolean(p.playing); b.writeVarLong(p.revision); }
+            public Draft decode(RegistryFriendlyByteBuf b) { return new Draft(b.readUUID(), b.readBoolean(), b.readUtf(GraphJson.MAX_LENGTH), b.readDouble(), b.readBoolean(), b.readVarLong(), b.readUUID(), b.readLong(), b.readDouble()); }
+            public void encode(RegistryFriendlyByteBuf b, Draft p) { b.writeUUID(p.request); b.writeBoolean(p.available); b.writeUtf(p.graph, GraphJson.MAX_LENGTH); b.writeDouble(p.bpm); b.writeBoolean(p.playing); b.writeVarLong(p.revision); b.writeUUID(p.session); b.writeLong(p.at); b.writeDouble(p.cycle); }
         };
         public Type<? extends CustomPacketPayload> type() { return TYPE; }
     }

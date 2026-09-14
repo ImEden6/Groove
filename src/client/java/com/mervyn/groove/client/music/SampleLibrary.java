@@ -47,6 +47,7 @@ public final class SampleLibrary {
         IO.scheduleWithFixedDelay(SampleLibrary::reload, 0, 5, TimeUnit.SECONDS);
         ClientLifecycleEvents.CLIENT_STOPPING.register(client -> IO.shutdownNow());
         ClientPlayConnectionEvents.DISCONNECT.register((handler, client) -> {
+            globalNeeded = List.of(); previewNeeded = List.of(); globalRefs = Set.of(); previewRefs = Set.of();
             installSession.cancel(); installSession = new SampleInstallStore.Session();
             session++; queued.clear(); failed.clear(); errors = Map.of();
             flight = null; flightIsInstall = false; transfer = null; decoding = false;
@@ -151,10 +152,18 @@ public final class SampleLibrary {
         var pending = bare.pending() == null ? null : new LiveRenderer.Program(bare.pending().state(), bare.pending().plan(), bank);
         return new Prepared(new LiveRenderer.Timeline(current, pending), Map.copyOf(status), List.copyOf(needed));
     }
+    private static List<AssetRef> globalNeeded = List.of(), previewNeeded = List.of();
+    private static Set<AssetRef> globalRefs = Set.of(), previewRefs = Set.of();
     public static void request(List<AssetRef> needed, Set<AssetRef> referenced) {
-        // Called only after MusicClient accepts the compiler generation.
-        graphReferenced = Set.copyOf(referenced);
-        queued.retainGraph(needed);
+        globalNeeded = List.copyOf(needed); globalRefs = Set.copyOf(referenced); updateRequests();
+    }
+    public static void requestPreview(List<AssetRef> needed, Set<AssetRef> referenced) {
+        previewNeeded = List.copyOf(needed); previewRefs = Set.copyOf(referenced); updateRequests();
+    }
+    private static void updateRequests() {
+        var refs = new HashSet<>(globalRefs); refs.addAll(previewRefs); graphReferenced = Set.copyOf(refs);
+        var needed = new java.util.LinkedHashSet<>(globalNeeded); needed.addAll(previewNeeded);
+        queued.retainGraph(List.copyOf(needed));
         long now = System.nanoTime();
         for (AssetRef ref : needed) if (!ref.equals(flight) && now - failed.getOrDefault(ref, now - 31_000_000_000L) > 30_000_000_000L) queued.add(ref, false);
     }

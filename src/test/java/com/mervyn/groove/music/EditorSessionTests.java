@@ -9,6 +9,16 @@ import java.util.*;
 
 final class EditorSessionTests {
     static void run() {
+        var clocked = new EditorSession(0);
+        clocked.edit(Graph.demo(), 120, true, 0);
+        clocked.edit(Graph.demo(), 240, true, 2_000_000_000L);
+        check(clocked.preview().anchorCycle() == 1 && clocked.preview().cycleAt(3_000_000_000L) == 2, "Draft tempo changes preserve the server musical phase");
+        clocked.edit(Graph.demo(), 240, false, 3_000_000_000L);
+        check(clocked.preview().cycleAt(9_000_000_000L) == 2, "Stopped draft holds its phase");
+        var lfo = new Graph(3, List.of(new Graph.Node("lfo", NodeType.LFO, Map.of())), List.of());
+        clocked.edit(lfo, 120, true, 10_000_000_000L);
+        clocked.edit(lfo, 130, true, 11_000_000_000L);
+        check(clocked.preview().graph().nodes().getFirst().birthNanos() == 10_000_000_000L, "Unchanged LFO retains birth across edits");
         var a = new EditorSession(0);
         var b = new EditorSession(0);
         var changed = new Graph(3, Graph.demo().nodes(), Graph.demo().edges());

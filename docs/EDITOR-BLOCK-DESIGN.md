@@ -21,18 +21,18 @@ matching this doc's "Open to anyone" rule below. The server requires headphones
 held in the main hand and rejects spectator binds. The old player-based
 `groove-headphones.json` file is left untouched but no longer read: existing
 prototype links need a one-time rebind because they did not identify an item or
-dimension. Worn (Trinkets-equipped) and linked headphones now poll the linked
-editor's live draft (`HeadphonePackets.Preview`/`Draft`, unrestricted like
-binding, resolved server-side from the actual worn item rather than trusting
-a client-supplied position) and play it privately, replacing the shared
-monitor stream only while linked and within 16 blocks of the bound editor
-(auto-unlink range enforced client-side, checked every tick); outside that
-range, or unlinked, headphones still fall back to the legacy monitor stream
-for now.
+dimension. Worn (Trinkets-equipped) and linked headphones poll the linked
+editor's live draft, resolved from the actual server-side item. Preview uses the
+server's musical phase and a rolling scheduler, including custom sample transfers.
+Unavailable or invalid drafts are silent; old streams and pending compilation
+are discarded on link changes, removal, pause, and audition.
 
-**Still pending:** Speaker binding, link cleanup on block break, and
-retirement of the legacy monitor stream as the headphone fallback once
-speakers can also target a specific editor's committed patch.
+The server checks worn links every tick and clears them past 16 blocks, across
+dimensions, or when a loaded editor is missing/replaced. An unloaded chunk is not
+forced to load. Unlinked headphones are silent, with no global monitor fallback.
+
+**Still pending:** Speaker binding, cleanup of links in stored/unworn items, and
+retirement of the legacy monitor stream for players without headphones.
 `/groove-editor` and `/groove` still operate the legacy global session.
 Existing editor blocks without a recorded owner can be claimed by an operator
 opening them; newly placed blocks record their placer automatically.

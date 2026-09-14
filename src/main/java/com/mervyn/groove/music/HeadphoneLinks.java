@@ -28,6 +28,14 @@ public final class HeadphoneLinks {
             return Optional.empty();
         return Optional.of(new Link(dimension, BlockPos.of(link.getLong("Position")), link.getUUID("Session")));
     }
+    public static boolean inRange(Link link, ResourceLocation dimension, net.minecraft.world.phys.Vec3 position) {
+        return link.dimension().equals(dimension) && position.distanceToSqr(link.pos().getCenter()) <= 256;
+    }
+    public static void clear(ItemStack stack) {
+        CompoundTag data = stack.getOrDefault(DataComponents.CUSTOM_DATA, CustomData.EMPTY).copyTag();
+        data.remove(KEY);
+        stack.set(DataComponents.CUSTOM_DATA, CustomData.of(data));
+    }
     public static void bind(ItemStack stack, Link link) {
         CompoundTag data = stack.getOrDefault(DataComponents.CUSTOM_DATA, CustomData.EMPTY).copyTag();
         CompoundTag tag = new CompoundTag();

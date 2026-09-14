@@ -11,11 +11,9 @@ import com.mervyn.groove.music.MusicPackets;
 import dev.emi.trinkets.api.TrinketsApi;
 import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientChunkEvents;
 import groove.engine.ClockSync;
-import groove.engine.GraphCompiler;
 import groove.engine.LiveRenderer;
 import groove.engine.SessionState;
 import groove.engine.SessionTimeline;
-import groove.engine.SignalGraph;
 import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientLifecycleEvents;
 import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents;
 import net.fabricmc.fabric.api.client.networking.v1.ClientPlayConnectionEvents;
@@ -36,10 +34,14 @@ public final class MusicClient {
             new ArrayBlockingQueue<>(1), task -> {
                 Thread thread = new Thread(task, "Groove graph compiler"); thread.setDaemon(true); return thread;
             }, new ThreadPoolExecutor.DiscardOldestPolicy());
+    private static final ThreadPoolExecutor PREVIEW_COMPILER = new ThreadPoolExecutor(1, 1, 0, TimeUnit.SECONDS,
+            new ArrayBlockingQueue<>(1), task -> { Thread thread = new Thread(task, "Groove preview compiler"); thread.setDaemon(true); return thread; },
+            new ThreadPoolExecutor.DiscardOldestPolicy());
     private static final ScheduledExecutorService SCHEDULER = Executors.newSingleThreadScheduledExecutor(task -> {
         Thread thread = new Thread(task, "Groove lookahead"); thread.setDaemon(true); return thread;
     });
-    private static LiveRenderer.Timeline failedSchedule;
+    private static LiveRenderer.Timeline failedSchedule, failedPreviewSchedule;
+    private static HeadphonePackets.Draft previewWire;
     private static UUID epoch;
     private static long revision = -1, generation, lastPing, outstandingPing;
     private static volatile ClockSync clock = new ClockSync();
@@ -51,7 +53,6 @@ public final class MusicClient {
     private static GrooveSound sound;
     private static GrooveAudioStream stream;
     private static int retryTicks;
-    private static final double MAX_PREVIEW_DIST_SQR = 16.0 * 16.0;
     private static HeadphoneLinks.Link previewLink;
     private static UUID previewRequest;
     private static long previewSent;
@@ -71,12 +72,14 @@ public final class MusicClient {
     public static void register() {
         SCHEDULER.scheduleWithFixedDelay(() -> {
             var active = program;
-            if (active == null) { failedSchedule = null; return; }
-            if (active == failedSchedule) return;
-            try { active.prepare(serverNow()); failedSchedule = null; }
-            catch (RuntimeException error) {
-                failedSchedule = active;
-                GrooveMod.LOGGER.error("Groove lookahead preparation failed", error);
+            if (active != null && active != failedSchedule) {
+                try { active.prepare(serverNow()); failedSchedule = null; }
+                catch (RuntimeException error) { failedSchedule = active; GrooveMod.LOGGER.error("Groove lookahead preparation failed", error); }
+            }
+            var preview = previewProgram;
+            if (preview != null && preview != failedPreviewSchedule) {
+                try { preview.prepare(serverNow()); failedPreviewSchedule = null; }
+                catch (RuntimeException error) { failedPreviewSchedule = preview; GrooveMod.LOGGER.error("Headphone lookahead preparation failed", error); }
             }
         }, 0, 50, TimeUnit.MILLISECONDS);
         ClientPlayNetworking.registerGlobalReceiver(MusicPackets.SubmitResult.TYPE, (packet, context) -> {
@@ -103,38 +106,21 @@ public final class MusicClient {
         ClientPlayNetworking.registerGlobalReceiver(HeadphonePackets.Draft.TYPE, (packet, context) -> context.client().execute(() -> {
             if (!packet.request().equals(previewRequest)) return;
             previewRequest = null;
-            if (!packet.available() || packet.revision() <= previewRevision) return;
-            previewRevision = packet.revision();
-            try {
-                var draft = GraphJson.decodeDraft(packet.graph());
-                GraphCompiler.compile(draft);
-                long now = serverNow();
-                var state = new SessionState(packet.revision(), now, 0, packet.bpm(), packet.playing(), SignalGraph.assignBirths(draft, null, now));
-                var snapshot = new SessionTimeline.Snapshot(state, null);
-                long ticket = ++previewGeneration;
-                COMPILER.execute(() -> {
-                    try {
-                        var prepared = SampleLibrary.prepare(snapshot);
-                        prepared.timeline().prepare(serverNow());
-                        Minecraft.getInstance().execute(() -> {
-                            if (ticket != previewGeneration) return;
-                            previewProgram = prepared.timeline();
-                            previewRenderer.publish(previewProgram);
-                            SampleLibrary.request(prepared.needed(), prepared.status().keySet());
-                        });
-                    } catch (RuntimeException error) {
-                        GrooveMod.LOGGER.error("Rejected headphone preview draft", error);
-                    }
-                });
-            } catch (RuntimeException error) {
-                // Drafts can be mid-edit and briefly uncompilable; keep whatever was
-                // already playing and pick this back up on the next poll.
+            if (!packet.available() || previewLink == null || !packet.session().equals(previewLink.session())) {
+                var link = previewLink;
+                stopHeadphonePreview(context.client());
+                previewLink = link; previewSent = System.nanoTime();
+                return;
             }
+            if (packet.revision() <= previewRevision) return;
+            previewRevision = packet.revision();
+            previewWire = packet;
+            refreshPreview();
         }));
         ClientPlayConnectionEvents.DISCONNECT.register((handler, client) -> reset(client));
         ClientChunkEvents.CHUNK_LOAD.register((level, chunk) -> addSpeakers(chunk));
         ClientChunkEvents.CHUNK_UNLOAD.register((level, chunk) -> removeSpeakers(level, chunk));
-        ClientLifecycleEvents.CLIENT_STOPPING.register(client -> { reset(client); COMPILER.shutdownNow(); SCHEDULER.shutdownNow(); });
+        ClientLifecycleEvents.CLIENT_STOPPING.register(client -> { reset(client); COMPILER.shutdownNow(); PREVIEW_COMPILER.shutdownNow(); SCHEDULER.shutdownNow(); });
         ClientTickEvents.END_CLIENT_TICK.register(client -> {
             if (client.getConnection() == null || !ClientPlayNetworking.canSend(MusicPackets.Ping.TYPE)) return;
             long now = System.nanoTime();
@@ -143,14 +129,14 @@ public final class MusicClient {
                 outstandingPing = now;
                 ClientPlayNetworking.send(new MusicPackets.Ping(now));
             }
-            if (client.level == null || client.player == null || program == null || !clock.ready() || client.isPaused()
+            if (client.level == null || client.player == null || !clock.ready() || client.isPaused()
                     || client.getOverlay() != null || !client.getSoundManager().getAvailableSounds().contains(GrooveMod.id("session"))) {
-                stopEmitters(client);
+                stopEmitters(client); stopMonitor(client); stopHeadphonePreview(client);
                 return;
             }
             if (SampleCommands.auditioning()) {
                 stopEmitters(client);
-                stopMonitor(client);
+                stopMonitor(client); stopHeadphonePreview(client);
                 return;
             }
             boolean headphones = TrinketsApi.getTrinketComponent(client.player)
@@ -158,9 +144,11 @@ public final class MusicClient {
                     .orElse(false);
             if (headphones) {
                 if (!emitters.isEmpty()) stopEmitters(client);
-                if (updateHeadphonePreview(client)) { stopMonitor(client); return; }
+                updateHeadphonePreview(client);
+                stopMonitor(client); return;
             } else {
                 stopHeadphonePreview(client);
+                if (program == null) { stopMonitor(client); return; }
                 updateEmitters(client);
                 if (!emitters.isEmpty()) {
                     stopMonitor(client);
@@ -188,6 +176,7 @@ public final class MusicClient {
         return latestSnapshot == null ? null : latestSnapshot.pending() == null ? latestSnapshot.current() : latestSnapshot.pending();
     }
     public static void refreshSamples() {
+        refreshPreview();
         var wire = latestWire;
         if (wire == null || COMPILER.isShutdown()) return;
         long ticket = ++generation;
@@ -207,6 +196,31 @@ public final class MusicClient {
             } catch (RuntimeException error) {
                 Minecraft.getInstance().execute(() -> { if (ticket == generation) revision = -1; });
                 GrooveMod.LOGGER.error("Rejected Groove session", error);
+            }
+        });
+    }
+    private static void refreshPreview() {
+        var packet = previewWire;
+        if (packet == null || PREVIEW_COMPILER.isShutdown()) return;
+        long ticket = ++previewGeneration;
+        PREVIEW_COMPILER.execute(() -> {
+            try {
+                // Parsing, validation, sample decoding, and lookahead all stay off the UI thread.
+                var draft = GraphJson.decodeDraft(packet.graph());
+                var state = new SessionState(packet.revision(), packet.at(), packet.cycle(), packet.bpm(), packet.playing(),
+                        draft);
+                var prepared = SampleLibrary.prepare(new SessionTimeline.Snapshot(state, null));
+                prepared.timeline().prepare(serverNow());
+                Minecraft.getInstance().execute(() -> {
+                    if (ticket != previewGeneration) return;
+                    previewProgram = prepared.timeline();
+                    previewRenderer.publish(previewProgram);
+                    SampleLibrary.requestPreview(prepared.needed(), prepared.status().keySet());
+                });
+            } catch (RuntimeException error) {
+                Minecraft.getInstance().execute(() -> {
+                    if (ticket == previewGeneration) silencePreview(Minecraft.getInstance());
+                });
             }
         });
     }
@@ -301,15 +315,18 @@ public final class MusicClient {
                 .map(equipped -> equipped.getFirst().getB());
         var link = worn.isEmpty() ? java.util.Optional.<HeadphoneLinks.Link>empty() : HeadphoneLinks.read(worn.get());
         if (link.isEmpty() || client.level == null
-                || !link.get().dimension().equals(client.level.dimension().location())
-                || link.get().pos().distSqr(client.player.blockPosition()) > MAX_PREVIEW_DIST_SQR) {
+                || !HeadphoneLinks.inRange(link.get(), client.level.dimension().location(), client.player.position())) {
             stopHeadphonePreview(client);
             return false;
         }
         if (!link.get().equals(previewLink)) {
-            previewLink = link.get(); previewRevision = -1; previewRequest = null; previewProgram = null;
+            stopHeadphonePreview(client);
+            previewLink = link.get();
         }
         long now = System.nanoTime();
+        if (previewRequest != null && now - previewSent > 5_000_000_000L) {
+            stopHeadphonePreview(client); previewLink = link.get();
+        }
         if (previewRequest == null && now - previewSent > 500_000_000L && ClientPlayNetworking.canSend(HeadphonePackets.Preview.TYPE)) {
             previewRequest = UUID.randomUUID(); previewSent = now;
             ClientPlayNetworking.send(new HeadphonePackets.Preview(previewRequest));
@@ -328,11 +345,20 @@ public final class MusicClient {
         return true;
     }
 
-    private static void stopHeadphonePreview(Minecraft client) {
+    private static void silencePreview(Minecraft client) {
         if (previewSound != null) client.getSoundManager().stop(previewSound);
         if (previewStream != null) previewStream.close();
         previewSound = null; previewStream = null; previewRetryTicks = 0;
-        previewLink = null; previewRequest = null; previewSent = 0; previewRevision = -1; previewProgram = null;
+        previewProgram = null;
+        SampleLibrary.requestPreview(java.util.List.of(), java.util.Set.of());
+    }
+    private static void stopHeadphonePreview(Minecraft client) {
+        if (previewLink == null && previewRequest == null && previewWire == null && previewProgram == null && previewSound == null) return;
+        // Invalidate workers before clearing the stream so an old completion cannot revive it.
+        previewGeneration++;
+        PREVIEW_COMPILER.getQueue().clear();
+        silencePreview(client);
+        previewLink = null; previewRequest = null; previewSent = 0; previewRevision = -1; previewWire = null;
     }
 
     private static void stopEmitters(Minecraft client) {

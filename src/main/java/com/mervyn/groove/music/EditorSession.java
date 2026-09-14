@@ -4,10 +4,11 @@ import groove.engine.*;
 
 /** Shared last-write-wins draft, separate from the published playback timeline. */
 public final class EditorSession {
-    private Graph draft;
+    private Graph draft, previewGraph;
     private double bpm;
     private boolean playing;
-    private long revision;
+    private long revision, draftAt;
+    private double draftCycle;
     private final SessionTimeline committed;
 
     public EditorSession(Graph draft, double bpm, Graph published, double publishedBpm, long now) {
@@ -17,9 +18,11 @@ public final class EditorSession {
                          Graph published, double publishedBpm, boolean publishedPlaying, long now) {
         validateTempo(bpm);
         if (revision < 0) throw new IllegalArgumentException("Invalid draft revision");
+        this.draftAt = now;
         this.playing = playing;
         this.revision = revision;
         this.draft = draft;
+        this.previewGraph = SignalGraph.assignBirths(draft, null, now);
         this.bpm = bpm;
         committed = new SessionTimeline(published, publishedBpm, publishedPlaying, now);
     }
@@ -29,8 +32,13 @@ public final class EditorSession {
     public boolean playing() { return playing; }
     public long revision() { return revision; }
     public SessionTimeline.Snapshot committed(long now) { return committed.snapshot(now); }
-    public void edit(Graph graph, double tempo, boolean play) {
+    public SessionState preview() { return new SessionState(revision, draftAt, draftCycle, bpm, playing, previewGraph); }
+    public void edit(Graph graph, double tempo, boolean play) { edit(graph, tempo, play, System.nanoTime()); }
+    public void edit(Graph graph, double tempo, boolean play, long now) {
         validateTempo(tempo);
+        draftCycle = preview().cycleAt(now);
+        draftAt = now;
+        previewGraph = SignalGraph.assignBirths(graph, previewGraph, now);
         draft = graph;
         bpm = tempo;
         playing = play;

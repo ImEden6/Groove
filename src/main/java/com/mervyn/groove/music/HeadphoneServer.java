@@ -15,10 +15,11 @@ import java.util.UUID;
 /** Binding is open to listeners, but only the held headphones can be changed. */
 public final class HeadphoneServer {
     private static final Map<UUID, Long> requests = new HashMap<>();
+    private static final Map<UUID, Long> previews = new HashMap<>();
     public static void register() {
         HeadphonePackets.register();
-        ServerLifecycleEvents.SERVER_STOPPED.register(server -> requests.clear());
-        ServerPlayConnectionEvents.DISCONNECT.register((handler, server) -> requests.remove(handler.player.getUUID()));
+        ServerLifecycleEvents.SERVER_STOPPED.register(server -> { requests.clear(); previews.clear(); });
+        ServerPlayConnectionEvents.DISCONNECT.register((handler, server) -> { requests.remove(handler.player.getUUID()); previews.remove(handler.player.getUUID()); });
         ServerPlayNetworking.registerGlobalReceiver(HeadphonePackets.Bind.TYPE, (packet, context) -> context.server().execute(() -> {
             var player = context.player();
             var stack = player.getMainHandItem();
@@ -48,20 +49,41 @@ public final class HeadphoneServer {
         }));
         ServerPlayNetworking.registerGlobalReceiver(HeadphonePackets.Preview.TYPE, (packet, context) -> context.server().execute(() -> {
             var player = context.player();
-            boolean available = false; String graph = ""; double bpm = 128; boolean playing = false; long revision = 0;
-            var worn = wornHeadphones(player);
-            if (worn.isPresent()) {
-                var link = HeadphoneLinks.read(worn.get());
-                if (link.isPresent() && link.get().dimension().equals(player.serverLevel().dimension().location())
-                        && player.serverLevel().getBlockEntity(link.get().pos()) instanceof EditorBlockEntity editor
-                        && editor.sessionId().equals(link.get().session())) {
-                    var session = editor.session();
-                    available = true; graph = GraphJson.encode(session.draft()); bpm = session.bpm();
-                    playing = session.playing(); revision = session.revision();
-                }
+            long now = System.nanoTime();
+            Long last = previews.get(player.getUUID());
+            if (last != null && now - last < 250_000_000L) return;
+            previews.put(player.getUUID(), now);
+            var editor = previewEditor(player);
+            if (editor == null) {
+                ServerPlayNetworking.send(player, new HeadphonePackets.Draft(packet.request(), false, "", 128, false, 0, new UUID(0, 0), now, 0));
+            } else {
+                var state = editor.session().preview();
+                ServerPlayNetworking.send(player, new HeadphonePackets.Draft(packet.request(), true, GraphJson.encode(state.graph()), state.bpm(),
+                        state.playing(), state.revision(), editor.sessionId(), state.effectiveNanos(), state.anchorCycle()));
             }
-            ServerPlayNetworking.send(player, new HeadphonePackets.Draft(packet.request(), available, graph, bpm, playing, revision));
         }));
+        // Enforce unlinking even when a client stops sending preview requests.
+        net.fabricmc.fabric.api.event.lifecycle.v1.ServerTickEvents.END_SERVER_TICK.register(server -> {
+            for (var player : server.getPlayerList().getPlayers()) previewEditor(player);
+        });
+    }
+    private static EditorBlockEntity previewEditor(net.minecraft.server.level.ServerPlayer player) {
+        var worn = wornHeadphones(player);
+        if (worn.isEmpty()) return null;
+        var link = HeadphoneLinks.read(worn.get());
+        if (link.isEmpty()) return null;
+        var level = player.serverLevel();
+        boolean inRange = HeadphoneLinks.inRange(link.get(), level.dimension().location(), player.position());
+        if (inRange && !level.hasChunkAt(link.get().pos())) return null;
+        if (inRange && level.getBlockEntity(link.get().pos()) instanceof EditorBlockEntity editor && editor.sessionId().equals(link.get().session()))
+            return player.isSpectator() ? null : editor;
+        HeadphoneLinks.clear(worn.get());
+        player.inventoryMenu.broadcastChanges();
+        return null;
+    }
+    static boolean allowsAsset(net.minecraft.server.level.ServerPlayer player, groove.engine.samples.AssetRef ref) {
+        var editor = previewEditor(player);
+        return editor != null && editor.session().draft().nodes().stream().anyMatch(node -> ref.equals(node.sample()));
     }
     /** Only a worn pair counts (see EDITOR-BLOCK-DESIGN.md: holding it only binds). */
     private static Optional<net.minecraft.world.item.ItemStack> wornHeadphones(net.minecraft.server.level.ServerPlayer player) {

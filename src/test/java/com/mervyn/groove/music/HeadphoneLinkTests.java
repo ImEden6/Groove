@@ -34,10 +34,18 @@ final class HeadphoneLinkTests {
         var registries = RegistryAccess.fromRegistryOfRegistries(BuiltInRegistries.REGISTRY);
         var restored = ItemStack.parse(registries, first.save(registries)).orElseThrow();
         check(HeadphoneLinks.read(restored).orElseThrow().equals(link), "Inventory save/reload preserves link");
+        check(HeadphoneLinks.inRange(link, link.dimension(), link.pos().getCenter().add(16, 0, 0)), "16-block boundary is inclusive");
+        check(!HeadphoneLinks.inRange(link, link.dimension(), link.pos().getCenter().add(16.01, 0, 0)), "Precise range rejects positions beyond boundary");
+        check(!HeadphoneLinks.inRange(link, ResourceLocation.parse("minecraft:the_nether"), link.pos().getCenter()), "Dimension mismatch is out of range");
+        HeadphoneLinks.clear(second);
+        check(HeadphoneLinks.read(second).isEmpty(), "Clearing an unbound item is safe");
         var other = new HeadphoneLinks.Link(ResourceLocation.parse("minecraft:the_nether"), link.pos(), UUID.randomUUID());
         HeadphoneLinks.bind(first, other);
         check(HeadphoneLinks.read(first).orElseThrow().equals(other), "Rebinding replaces the link exclusively");
         check(HeadphoneLinks.read(restored).orElseThrow().equals(link), "Copied/transferred stack has independent link data");
+        HeadphoneLinks.clear(first);
+        check(HeadphoneLinks.read(first).isEmpty(), "Auto-unlink removes the stored link");
+        check(first.get(DataComponents.CUSTOM_DATA).copyTag().getString("other:data").equals("keep"), "Auto-unlink preserves unrelated item data");
         var malformed = new CompoundTag(); var badLink = new CompoundTag();
         badLink.putString("Dimension", "not a dimension"); malformed.put("groove:editor_link", badLink);
         second.set(DataComponents.CUSTOM_DATA, CustomData.of(malformed));
@@ -53,10 +61,10 @@ final class HeadphoneLinkTests {
             var preview = new HeadphonePackets.Preview(UUID.randomUUID());
             HeadphonePackets.Preview.CODEC.encode(wire, preview);
             check(HeadphonePackets.Preview.CODEC.decode(wire).equals(preview), "Preview packet round trip");
-            var draft = new HeadphonePackets.Draft(preview.request(), true, GraphJson.encode(groove.engine.Graph.demo()), 140, true, 7);
+            var draft = new HeadphonePackets.Draft(preview.request(), true, GraphJson.encode(groove.engine.Graph.demo()), 140, true, 7, session, 12345, 2.5);
             HeadphonePackets.Draft.CODEC.encode(wire, draft);
             check(HeadphonePackets.Draft.CODEC.decode(wire).equals(draft), "Draft packet round trip");
-            var unavailable = new HeadphonePackets.Draft(UUID.randomUUID(), false, "", 128, false, 0);
+            var unavailable = new HeadphonePackets.Draft(UUID.randomUUID(), false, "", 128, false, 0, new UUID(0, 0), 0, 0);
             HeadphonePackets.Draft.CODEC.encode(wire, unavailable);
             check(HeadphonePackets.Draft.CODEC.decode(wire).equals(unavailable), "Unavailable draft packet round trip");
         } finally { wire.release(); }

@@ -50,7 +50,7 @@ public final class SampleServer {
         });
         ServerPlayNetworking.registerGlobalReceiver(MusicPackets.AssetRequest.TYPE, (packet, context) -> {
             if (!rateLimited(context.player().getUUID())) return;
-            serveChunk(context.player(), packet.ref(), packet.offset(), MusicServer.allowsAsset(packet.ref()));
+            serveChunk(context.player(), packet.ref(), packet.offset(), (MusicServer.allowsAsset(packet.ref()) || HeadphoneServer.allowsAsset(context.player(), packet.ref())));
         });
         ServerPlayNetworking.registerGlobalReceiver(MusicPackets.AssetInstallRequest.TYPE, (packet, context) -> {
             if (!rateLimited(context.player().getUUID())) return;
