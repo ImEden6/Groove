@@ -1,12 +1,15 @@
 # Samples and packs
 
-## Still unimplemented (from this doc)
-
-- The `/groove-samples list` command does not browse the server's whole catalog (only assets already referenced by the shared graph).
-
 The backend supports pitched WAV/OGG sample graphs, local auditioning, content
 hashes, hot-reloaded catalogs, and restricted server-to-client asset transfer.
 These command controls are independent of the editor UI.
+
+On join and whenever its scanned catalog changes, the server sends its full custom-pack catalog listing (asset IDs and
+hashes only, never bytes) so `/groove-samples list` can browse everything the
+server has, not just assets already wired into the shared graph. Fetching the
+actual bytes for something you find this way is a separate, explicit step
+(`/groove-samples install <id>`, see below) — joining a server never triggers
+a bulk download on its own.
 
 ## Try the factory kit
 
@@ -45,9 +48,16 @@ levels / 4096 filesystem entries.
 | `/groove-samples ref <id>` | Copy the full ID/hash JSON reference to the clipboard |
 | `/groove-samples reload` | Rescan local files and retry graph resolution |
 | `/groove-samples status` | Report graph asset status, transfer errors, and scan warnings |
+| `/groove-samples install <id>` | Explicitly fetch one server catalog asset into the persistent download cache |
 
-The list does not yet browse the server's whole catalog. Network requests fetch
-only assets already referenced by the shared graph.
+`list` shows both locally installed samples and server catalog entries not yet
+installed (labeled accordingly). Assets already referenced by the shared graph
+are still fetched automatically, exactly as before; `install` is for anything
+else in the server's catalog — it requires operator permission level 2 (the
+same threshold as editing the shared graph), since it lets a player pull any
+catalog asset regardless of graph reference. A level-2 player already has an
+equivalent path today via a throwaway graph edit; `install` just removes that
+workaround.
 
 ## Graph format
 
@@ -81,8 +91,8 @@ is available for the inspector to consume.
 
 ## Transfer and memory limits
 
-The server shares exact ID/hash pairs from its catalog only when referenced by
-the current or pending graph. A client requests one asset at a time in 48 KiB
+The server shares exact ID/hash pairs referenced by the current or pending
+graph, or requested explicitly by an operator through `install`. A client requests one asset at a time in 48 KiB
 chunks, with sequential assembly, retries/timeouts, and final hash verification.
 It does not accept unsolicited assets. Invalid audio, unavailable files, or
 budget failures remain silent and expose a status. Failed requests have a
@@ -94,15 +104,35 @@ budget failures remain silent and expose a status. Failed requests have a
 | Channels/rate | Mono/stereo, 8–192 kHz; output at 48 kHz stereo |
 | Duration | 10 seconds before pitch adjustment |
 | Encoded / decoded asset | 4 MiB / 8 MiB |
-| Catalog | 256 assets including factory kit / 32 MiB encoded |
+| Each catalog (user packs, managed downloads, or server) | 256 assets including factory kit / 32 MiB encoded |
+| Combined client catalog | Up to 512 references / 64 MiB encoded; duplicate factory entries are shared in the combined view |
 | Decoded LRU cache | 64 MiB |
 | Current + pending graph bank | 32 MiB unique decoded PCM |
 | Received encoded cache | 32 MiB |
 
-Received assets stay in memory; they are not installed into local folders.
-Disconnect clears transfer state and the received encoded cache. Decoded PCM
-may remain in the bounded LRU. Active banks, crossfades, and decoder scratch
-space also consume memory, so the cache budget is not a total JVM heap guarantee.
+Verified downloads are persisted under
+`<game directory>/groove/downloaded-samples/<pack>/<file>` using a temporary file
+and atomic rename. This folder is managed by Groove: only downloads there are
+eligible for eviction. Files under `groove/samples` are user-owned and are never
+deleted or overwritten by transfers. Files downloaded by older builds into
+`groove/samples` are also left alone because their ownership cannot be inferred.
+
+When a local pack and a download share an ID with different hashes, browsing,
+`ref`, and ID-based audition prefer the local pack. Graph playback can resolve
+either exact hash. Managed downloads have a separate 90%-of-catalog disk budget
+(230 files, about 28.8 MiB); the oldest unprotected downloads are evicted first.
+Current/pending graph IDs and IDs in the connected server catalog are protected.
+Reinstalling an ID accounts for replacement size rather than an extra file.
+
+Install paths reject linked directories, including Windows junctions. Disconnect
+cancels pending disk commits; a commit already in progress completes before the
+connection's cancellation returns. Decoding and temporary-file staging happen
+outside that commit lock. Disk-install failures remain visible in
+`/groove-samples status`, while verified audio may still play from memory.
+Disconnect clears transfer state and the short-lived received cache; managed
+files persist across connections. Explicit installs waiting in the queue survive
+graph refreshes. No files are removed if staging or atomic replacement fails.
+
 Sample pitching uses a bandlimited 48-tap Kaiser-windowed sinc resampler with
 four prefiltered octave levels (68.21 dB minimum stopband rejection); see
 [engine evolution](ENGINE-EVOLUTION.md).
@@ -115,7 +145,10 @@ time. Explicit stop and finite audition streams are excluded from recovery.
 
 `./gradlew -p core-engine check` covers PCM conversion, malformed WAVs, pitch,
 sample tails, immutable data, LRU eviction, catalog mutations, and verified
-transfers. `./gradlew build` also covers graph JSON and Minecraft packet codecs.
+transfers. Installation regressions cover local-file preservation, exact-hash
+collisions, replacement accounting, failed writes, linked parents/roots,
+disconnect cancellation, and explicit request retention. `./gradlew build` also
+covers graph JSON, Minecraft packet codecs, and catalog update announcements.
 `./gradlew runClient -PaudioSmoke` decodes a real Minecraft Vorbis asset, plays the
 sample kit through silent OpenAL, deliberately stalls a refill to test recovery,
 and verifies explicit stop closes the stream. Actual two-machine transfer and

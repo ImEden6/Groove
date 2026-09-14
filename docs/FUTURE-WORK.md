@@ -18,7 +18,7 @@ Ranked by impact on gameplay, creative expressiveness, and multiplayer usability
 | Rank | Item | Value Points | Effort / Complexity | Impact Area | Key Bottleneck Solved | Status |
 |---|---|---|---|---|---|---|
 | **1** | **Headphone Item** | **95** | Medium | Gameplay & Audio | Item, Trinkets equip slot, and priority routing over speaker/positional audio have landed. Remaining: a true `AL_SOURCE_RELATIVE` head-locked sink (currently reuses the non-positional monitor stream) and underwater muffling. | Partial |
-| **2** | **Server Resourcepack Distribution** | **80** | High | Multiplayer UX | Dynamic pack generation/pushing to connecting clients; eliminates manual out-of-band sample installation. | Open |
+| **2** | **Server Resourcepack Distribution** | **80** | High | Multiplayer UX | Full catalog browsing on join plus a permission-gated `/groove-samples install <id>` with disk persistence and eviction have landed. Remaining: no automatic bulk push of everything to every player (a deliberate scope choice), and no vanilla-resource-pack-style compressed bundle transfer. | Partial |
 | **3** | **Sample Drawer Hierarchy & Favorites** | **75** | Low–Medium | Editor UX | Speeds up browsing large custom sample packs beyond a flat list. | Open |
 | **4** | **Direct Entry & Keyboard Controls for Knobs** | **70** | Low | Accessibility & UX | Precision value entry and arrow-key stepping without pixel-hunting rotary drags. | Open |
 | **5** | **Workstation "In-Use" / Merge UI** | **60** | Medium | Multiplayer UX | Clear player feedback when multiple users attempt simultaneous sequencer edits (exclusive edit lock vs. optimistic conflict resolution). | Open |
@@ -84,7 +84,7 @@ The following items from earlier roadmaps are fully implemented and verified in 
 
 ## Distribution & Custom Samples (Remaining)
 
-- **No automated server resourcepack distribution for custom samples.** Both server and clients currently require matching audio files installed locally at identical relative paths ([SAMPLES.md](SAMPLES.md)); dynamic server-to-client resourcepack generation or pushing is not yet built.
+- **Catalog browsing and explicit install have landed; bulk push has not.** On join, the server advertises its full custom catalog listing (id+hash only) so `/groove-samples list` can browse everything, and `/groove-samples install <id>` (operator level 2) explicitly fetches a specific asset into a separate persistent download cache, with eviction limited to managed downloads ([SAMPLES.md](SAMPLES.md)). Assets already referenced by the shared graph still auto-fetch as before. Deliberately not built: an automatic bulk push of every custom asset's bytes to every joining player, and a vanilla-resource-pack-style compressed bundle transfer.
 
 ## Accessibility & Safety (Remaining)
 
@@ -96,7 +96,7 @@ The following items from earlier roadmaps are fully implemented and verified in 
 - [SEQUENCER-UI-ARCHITECTURE.md](SEQUENCER-UI-ARCHITECTURE.md) previously sketched hypothetical `PatchSubmission` and `SampleRegistry` interfaces; these were superseded by the real network packets `MusicPackets.Submit` / `MusicPackets.SubmitResult` and `SampleCatalog`.
 - Themed button and knob draw calls now use real sprite resources (`ThemedButton` wires Apply/Play-Stop/Reload and `RotaryKnob` renders inspector dials).
 
-Comparing your design directly against what makes **Strudel and TidalCycles** so expressive reveals five key capabilities missing from the current architecture.
+Comparing your design directly against what makes **Strudel and TidalCycles** so expressive identified the following capability areas; musical pattern primitives have now landed.
 
 While your execution pipeline (OpenAL streaming, rolling lookahead scheduler, sample caching, and UI themes) is solid, your composition model remains closer to an **analog modular Eurorack sequencer** than a true **Strudel algorithmic pattern engine**.
 
@@ -104,25 +104,12 @@ Here are the functional gaps:
 
 ---
 
-### 1. The Core Strudel Primitives (Musical Mini-Notation as Nodes)
+### 1. Musical pattern primitives - implemented
 
-In Strudel, rhythm is expressive because of structural combinators that transcend simple Euclidean steps:
-
-* **Alternation / Slow-Cat (`< >`):**
-* *Strudel:* `<c3 e3 g3 b3>` cycles through one pitch per measure.
-* *Missing Node:* An **`Alternate` / `CycleStep` node**. On cycle 1, it outputs input A; on cycle 2, input B; on cycle 3, input C. Without this, multi-bar progressions (verse/chorus, 4-chord loops) require large, cumbersome node networks.
-
-
-* **Probability & Degradation (`?`):**
-* *Strudel:* `bd hh?0.7 sn hh?0.3` randomly drops hi-hats for humanized swing/breakbeats.
-* *Missing Node:* A **`Degrade` / `Probability` node** with a simple pass-through percentage slider $[0.0\text{--}1.0]$ and deterministic seed tracking.
-
-
-* **Polymetric Grouping (`{ }`):**
-* *Strudel:* `{bd sn, hh hh hh}` runs a 3-step pattern across a 2-step bar, phasing continuously over multiple cycles.
-* *Current Limit:* While `fast` supports fractional ratios ($1.5$), there is no first-class **`Polymeter` node** that automatically advances a sequence by one step per cycle pulse without manual tempo math.
-
-
+`alternate`, seeded `probability`, and `polymeter` now provide multi-cycle
+progressions, event dropping, and sequences that phase across bar lines.
+See [musical pattern nodes](MUSICAL-PATTERNS.md) for semantics, connection
+ordering, limits, and examples. A dedicated input-order editor is still deferred.
 
 ---
 
@@ -197,7 +184,7 @@ You have clipboard Base64 JSON and world transactional files, but no physical su
 
 | Feature Area | Current Architecture | What Strudel Does | Missing Inception Component |
 | --- | --- | --- | --- |
-| **Rhythm** | Euclid ($k/n$), Fast/Slow multiplier | Euclidean, Alternations (`< >`), Degradation (`?`), Polymeter (`{ }`) | `Alternate`, `Probability`, and `Polymeter` nodes |
+| **Rhythm** | Euclid, Fast/Slow, Alternate, Probability, Polymeter | Euclidean, alternation, degradation, polymeter | Implemented; dedicated input reordering UI deferred |
 | **Pitch** | Raw Frequency (Hz) / Pitch Ratio | Notes (`c3`, `eb4`), Scales, Chords, Microtuning | `ScaleQuantizer` & `ChordGen` nodes |
 | **Sampling** | Trigger full one-shot from start | Chopping (`chop`), Slicing (`slice`), Looping (`loopAt`) | `SampleSlicer` node & start-offset DSP parameter |
 | **Environment** | Static in-game blocks | N/A (Browser-based) | `SunClock`, `WeatherMod`, and `Proximity` sensory nodes |
