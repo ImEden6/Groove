@@ -70,6 +70,8 @@ public final class MusicPackets {
         PayloadTypeRegistry.playS2C().register(Pong.TYPE, Pong.CODEC);
         PayloadTypeRegistry.playC2S().register(AssetRequest.TYPE, AssetRequest.CODEC);
         PayloadTypeRegistry.playS2C().register(AssetChunk.TYPE, AssetChunk.CODEC);
+        PayloadTypeRegistry.playS2C().register(CatalogSnapshot.TYPE, CatalogSnapshot.CODEC);
+        PayloadTypeRegistry.playC2S().register(AssetInstallRequest.TYPE, AssetInstallRequest.CODEC);
     }
     /** Keep JSON bounded on the wire; expensive validation happens after permission/rate checks. */
     public record Submit(UUID epoch, UUID request, long revision, String graph, double bpm, boolean playing) implements CustomPacketPayload {
@@ -109,6 +111,41 @@ public final class MusicPackets {
             public void encode(RegistryFriendlyByteBuf b, AssetChunk p) {
                 writeRef(b, p.ref); b.writeVarInt(p.offset); b.writeVarInt(p.total); b.writeByteArray(p.data);
             }
+        };
+        public Type<? extends CustomPacketPayload> type() { return TYPE; }
+    }
+    /** Server's full custom-asset catalog listing (id+hash only, no bytes) sent on join for browsing. */
+    public record CatalogSnapshot(java.util.List<AssetRef> assets) implements CustomPacketPayload {
+        public CatalogSnapshot { assets = java.util.List.copyOf(assets); if (assets.size() > groove.engine.samples.SampleCatalog.MAX_ASSETS) throw new IllegalArgumentException("Catalog snapshot exceeds asset limit"); }
+        public static final Type<CatalogSnapshot> TYPE = new Type<>(GrooveMod.id("catalog_snapshot"));
+        public static final StreamCodec<RegistryFriendlyByteBuf, CatalogSnapshot> CODEC = new StreamCodec<>() {
+            public CatalogSnapshot decode(RegistryFriendlyByteBuf b) {
+                int count = b.readVarInt();
+                if (count < 0 || count > groove.engine.samples.SampleCatalog.MAX_ASSETS) throw new IllegalArgumentException("Invalid catalog snapshot size");
+                var assets = new java.util.ArrayList<AssetRef>(count);
+                for (int i = 0; i < count; i++) assets.add(readRef(b));
+                return new CatalogSnapshot(assets);
+            }
+            public void encode(RegistryFriendlyByteBuf b, CatalogSnapshot p) {
+                b.writeVarInt(p.assets.size());
+                for (AssetRef ref : p.assets) writeRef(b, ref);
+            }
+        };
+        public Type<? extends CustomPacketPayload> type() { return TYPE; }
+    }
+    /**
+     * Explicit, permission-gated pull for a specific catalog asset regardless of graph reference.
+     * Carries an offset like {@link AssetRequest} (not just the initial one) because a multi-chunk
+     * transfer resumes by resending whichever packet type started it; without an offset here, only
+     * the first chunk of an install would bypass the graph-reference gate and later chunks would
+     * stall against the still-gated {@link AssetRequest} path.
+     */
+    public record AssetInstallRequest(AssetRef ref, int offset) implements CustomPacketPayload {
+        public AssetInstallRequest { if (offset < 0 || offset >= SampleData.MAX_BYTES) throw new IllegalArgumentException("Invalid asset offset"); }
+        public static final Type<AssetInstallRequest> TYPE = new Type<>(GrooveMod.id("asset_install_request"));
+        public static final StreamCodec<RegistryFriendlyByteBuf, AssetInstallRequest> CODEC = new StreamCodec<>() {
+            public AssetInstallRequest decode(RegistryFriendlyByteBuf b) { return new AssetInstallRequest(readRef(b), b.readVarInt()); }
+            public void encode(RegistryFriendlyByteBuf b, AssetInstallRequest p) { writeRef(b, p.ref); b.writeVarInt(p.offset); }
         };
         public Type<? extends CustomPacketPayload> type() { return TYPE; }
     }
