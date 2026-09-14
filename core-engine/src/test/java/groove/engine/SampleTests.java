@@ -8,6 +8,7 @@ import java.util.*;
 public final class SampleTests {
     private static int checks;
     public static void main(String[] args) throws Exception {
+        SampleInstallTests.run();
         String id = "factory:basic/kick.wav";
         byte[] encoded = FactorySamples.bytes(id);
         AssetRef ref = FactorySamples.ref(id);
@@ -53,7 +54,41 @@ public final class SampleTests {
             check(SampleCatalog.scan(folder).status(custom) == SampleCatalog.Status.HASH_MISMATCH, "Hot reload detects content mutation");
             Files.delete(file);
             check(SampleCatalog.scan(folder).status(custom) == SampleCatalog.Status.MISSING, "Hot reload detects deletion");
+
+            check(SampleCatalog.resolveCustomPath(folder, custom).equals(folder.resolve("kick.wav").normalize()),
+                    "Install path resolves a well-formed custom asset id under the samples root");
+            // AssetRef's own constructor already rejects ".."; resolveCustomPath must independently
+            // reject a leading '/', which AssetRef's regex still allows and Path#resolve would
+            // otherwise honor as absolute, escaping the samples root entirely.
+            invalid(() -> SampleCatalog.resolveCustomPath(folder, new AssetRef("custom:/etc/passwd", custom.sha256())));
+            invalid(() -> SampleCatalog.resolveCustomPath(folder, FactorySamples.ref(id)));
         } finally { Files.deleteIfExists(file); Files.delete(folder); }
+
+        Path evictionRoot = Files.createTempDirectory("groove-eviction-test-");
+        try {
+            Path oldFile = evictionRoot.resolve("old.wav"), newFile = evictionRoot.resolve("new.wav"), keepFile = evictionRoot.resolve("keep.wav");
+            Files.write(oldFile, encoded); Files.write(newFile, encoded); Files.write(keepFile, encoded);
+            Files.setLastModifiedTime(oldFile, java.nio.file.attribute.FileTime.fromMillis(1_000));
+            Files.setLastModifiedTime(newFile, java.nio.file.attribute.FileTime.fromMillis(2_000));
+            Files.setLastModifiedTime(keepFile, java.nio.file.attribute.FileTime.fromMillis(500));
+            var scanned = SampleEviction.scan(evictionRoot);
+            check(scanned.size() == 3, "Eviction scan finds every installed custom file");
+            long eachSize = encoded.length, tightBudget = eachSize * 3;
+
+            var victims = SampleEviction.select(scanned, Set.of("custom:keep.wav"), eachSize, tightBudget, 3);
+            check(victims.size() == 1 && victims.get(0).assetId().equals("custom:old.wav"),
+                    "Eviction removes the oldest non-protected file first, even though keep.wav is older still");
+
+            // Every existing file is protected, so nothing can be evicted. An incoming file that
+            // still doesn't fit must abort rather than silently deleting a protected asset.
+            invalid(() -> SampleEviction.select(scanned,
+                    Set.of("custom:old.wav", "custom:new.wav", "custom:keep.wav"), eachSize, tightBudget, 3));
+            // An incoming file bigger than the whole budget can never fit, regardless of eviction.
+            invalid(() -> SampleEviction.select(scanned, Set.of(), eachSize * 100, tightBudget, 3));
+        } finally {
+            try (var files = Files.list(evictionRoot)) { for (var f : files.toList()) Files.deleteIfExists(f); }
+            Files.delete(evictionRoot);
+        }
         SampleTransfer transfer = new SampleTransfer(ref, encoded.length);
         transfer.append(0, encoded);
         check(Arrays.equals(transfer.finish(), encoded), "Verified transfer round trip");

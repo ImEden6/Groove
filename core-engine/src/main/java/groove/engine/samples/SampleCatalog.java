@@ -22,15 +22,48 @@ public final class SampleCatalog {
     }
     private final Map<String, Entry> entries;
     private final List<String> warnings;
+    private final Map<AssetRef, Entry> exactEntries;
     private SampleCatalog(Map<String, Entry> entries, List<String> warnings) {
+        this(entries, warnings, entries.values().stream().collect(java.util.stream.Collectors.toMap(Entry::ref, e -> e)));
+    }
+    private SampleCatalog(Map<String, Entry> entries, List<String> warnings, Map<AssetRef, Entry> exactEntries) {
         this.entries = Map.copyOf(entries); this.warnings = List.copyOf(warnings);
+        this.exactEntries = Map.copyOf(exactEntries);
     }
     public List<Entry> entries() { return entries.values().stream().sorted(Comparator.comparing(e -> e.ref.assetId())).toList(); }
     public List<String> warnings() { return warnings; }
     public Entry find(String id) { return entries.get(id); }
+    public Set<AssetRef> references() { return exactEntries.keySet(); }
+    public Entry find(AssetRef ref) { return exactEntries.get(ref); }
+    /** Local IDs win browsing collisions; exact hashes from both bounded catalogs remain resolvable. */
+    public static SampleCatalog withDownloads(SampleCatalog local, SampleCatalog downloads) {
+        Map<String, Entry> entries = new HashMap<>(downloads.entries);
+        entries.putAll(local.entries);
+        Map<AssetRef, Entry> exact = new HashMap<>(downloads.exactEntries);
+        exact.putAll(local.exactEntries);
+        List<String> warnings = new ArrayList<>(local.warnings);
+        for (String warning : downloads.warnings) warnings.add("Download cache: " + warning);
+        return new SampleCatalog(entries, warnings, exact);
+    }
     public Status status(AssetRef ref) {
+        if (exactEntries.containsKey(ref)) return Status.READY;
         Entry entry = find(ref.assetId());
         return entry == null ? Status.MISSING : entry.ref.equals(ref) ? Status.READY : Status.HASH_MISMATCH;
+    }
+    /**
+     * Resolves where a {@code custom:} asset id would live under a samples root, for installing a
+     * file that does not exist yet. {@link AssetRef}'s own validation still allows a leading '/' in
+     * the id (e.g. "custom:/etc/passwd"), and {@link Path#resolve} silently discards the base for an
+     * absolute-looking input, so this performs its own normalize+startsWith sandbox check rather than
+     * relying on {@link #scan}'s escape guard, which only applies to paths of files that already exist.
+     */
+    public static Path resolveCustomPath(Path root, AssetRef ref) {
+        String id = ref.assetId();
+        if (!id.startsWith("custom:")) throw new IllegalArgumentException("Not an installable custom asset: " + id);
+        Path normalizedRoot = root.normalize();
+        Path resolved = normalizedRoot.resolve(id.substring("custom:".length())).normalize();
+        if (!resolved.startsWith(normalizedRoot)) throw new IllegalArgumentException("Asset path escapes samples root: " + id);
+        return resolved;
     }
     public static SampleCatalog scan(Path root) throws IOException {
         Map<String, Entry> entries = new HashMap<>(); List<String> warnings = new ArrayList<>();
