@@ -42,9 +42,10 @@ public final class EditorProject {
         var allowlist = tag.getList("Editors", net.minecraft.nbt.Tag.TAG_STRING);
         for (int i = 0; i < allowlist.size(); i++) editors.add(UUID.fromString(allowlist.getString(i)));
         if (tag.contains("Draft")) {
+            // decodeDraft: SessionTimeline below compiles the published graph anyway.
             session = new EditorSession(GraphJson.decodeDraft(tag.getString("Draft")), tag.getDouble("DraftBpm"),
                     tag.getBoolean("DraftPlaying"), tag.getLong("DraftRevision"),
-                    GraphJson.decode(tag.getString("Published")), tag.getDouble("PublishedBpm"),
+                    GraphJson.decodeDraft(tag.getString("Published")), tag.getDouble("PublishedBpm"),
                     tag.getBoolean("PublishedPlaying"), System.nanoTime());
         }
     }

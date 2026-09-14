@@ -92,7 +92,6 @@ public final class GrooveEditorScreen extends Screen {
     }
     private void sendBlock(int action, boolean toggle) {
         if (blockRequest != null) return;
-        blockSent = System.nanoTime();
         try {
             double tempo = Double.parseDouble(bpm.getValue());
             if (!Double.isFinite(tempo) || tempo < 30 || tempo > 300) throw new IllegalArgumentException("BPM must be 30–300");

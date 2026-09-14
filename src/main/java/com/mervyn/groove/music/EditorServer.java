@@ -50,7 +50,9 @@ public final class EditorServer {
                 }
                 accepted = true;
                 message = packet.action() == EditorPackets.COMMIT ? "Committed for the safe downbeat" : "Draft saved";
-            } catch (IllegalArgumentException error) { message = error.getMessage(); }
+            } catch (RuntimeException error) {
+                message = error.getMessage() != null ? error.getMessage() : "Editor action failed";
+            }
             boolean visible = editor != null && editor.canEdit(player.getUUID());
             var session = visible ? editor.session() : null;
             ServerPlayNetworking.send(player, new EditorPackets.State(packet.pos(), visible ? editor.sessionId() : packet.session(),
