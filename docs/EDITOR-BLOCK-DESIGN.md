@@ -14,9 +14,14 @@ patch for the safe downbeat. Ownership, a persisted owner-managed allowlist and 
 protection, and last-write-wins draft updates are implemented. Draft revisions
 survive chunk reloads. A replacement block gets a new session identity.
 Holding the headphones item and right-clicking an editor block now records an
-exclusive, persistent link (`groove-headphones.json`, survives logout/relogin)
-to that editor's current session; binding itself is unrestricted (no ACL check),
-matching this doc's "Open to anyone" rule below.
+exclusive link in that item's custom data (survives inventory save/reload and
+travels with the item when traded or dropped), including dimension, position,
+and the editor's current session; binding itself is unrestricted (no ACL check),
+matching this doc's "Open to anyone" rule below. The server requires headphones
+held in the main hand and rejects spectator binds. The old player-based
+`groove-headphones.json` file is left untouched but no longer read: existing
+prototype links need a one-time rebind because they did not identify an item or
+dimension.
 
 **Still pending:** Actually routing audio to a linked headphone (the live
 draft feed itself, and the 16-block auto-unlink range), speaker binding, link

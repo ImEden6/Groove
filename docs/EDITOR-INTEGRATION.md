@@ -20,7 +20,10 @@ Scroll the list and click a row to fill the removal field. Uncached names appear
 as full UUIDs, which can also be removed. Offline name lookup runs asynchronously;
 permissions and block identity are checked again before applying the result. Legacy unowned blocks are claimed when an operator first opens them.
 
-Headphone/speaker connections and audio routing to block sessions are still
+Holding headphones in the main hand and right-clicking an editor binds that pair
+to the editor's dimension, position, and session. This is saved as item data;
+previous prototype links in `groove-headphones.json` need rebinding once.
+Headphone audio routing, range/break cleanup, and speaker connections are still
 pending. Block Play/Stop currently controls stored draft transport and the visual
 clock; it does not yet create an audio feed.
 
