@@ -23,7 +23,7 @@ Ranked by impact on gameplay, creative expressiveness, and multiplayer usability
 | **3** | **Sample Drawer Hierarchy & Favorites** | **75** | Low–Medium | Editor UX | Speeds up browsing large custom sample packs beyond a flat list. | Open |
 | **4** | **Direct Entry & Keyboard Controls for Knobs** | **70** | Low | Accessibility & UX | Precision value entry and arrow-key stepping without pixel-hunting rotary drags. | Implemented |
 | **5** | **Workstation "In-Use" / Merge UI** | **60** | Medium | Multiplayer UX | Clear player feedback when multiple users attempt simultaneous sequencer edits (exclusive edit lock vs. optimistic conflict resolution). | Open |
-| **6** | **Master Peak Limiter Test Suite** | **50** | Low | Audio Safety | Automated verification that adversarial DSP graphs cannot distort or clip past safety ceilings beyond `tanh`. | Open |
+| **6** | **Master Peak Limiter Test Suite** | **50** | Low | Audio Safety | Automated verification that adversarial DSP graphs cannot distort or clip past safety ceilings beyond `tanh`. | Implemented |
 | **7** | **Cable Pulse Animation Toggle** | **45** | Low | Accessibility | Option to reduce visual motion / flashing during fast BPM sessions. | Open |
 | **8** | **Phase 2 routing extensions** | **35** | Very High | Architecture | Independent audio-render sources and arbitrary pattern triggers/polyphonic envelopes have landed (each up to eight, shared event budget). Late joins/resyncs now approximate effect history with bounded local replay and a fade-in; exact historical state remains a refinement. | Implemented (3 of 3; bounded history) |
 
@@ -89,7 +89,7 @@ The following items from earlier roadmaps are fully implemented and verified in 
 
 ## Accessibility & Safety (Remaining)
 
-- **No formal master limiter guarantee.** Output is bounded by non-bypassable `tanh` soft saturation ([SPECS.md §5](SPECS.md)), but there is no lookahead brickwall limiter or automated test asserting peak ceilings under extreme adversarial sum inputs.
+- **Master limiter test suite has landed; still no lookahead brickwall limiter.** Output is bounded by non-bypassable `tanh` soft saturation ([SPECS.md §5](SPECS.md)). `LimiterTests` (core-engine) now sweeps `Biquad` across its full Q/cutoff range under a full-scale step train, and renders a legally-compiled worst-case graph (eight independent max-resonance sources, each four simultaneous full-gain tones, summed into a near-lossless delay feedback loop) for two seconds, asserting every sample stays finite and within tanh's own bound. There is still no separate lookahead brickwall limiter stage beyond `tanh` itself.
 - **No toggle for cable pulses.** Cable beat-pulse animations run at tempo phase across animated themes; an accessibility setting to disable high-frequency cable pulses is not yet implemented.
 
 ## Superseded Documentation Claims
