@@ -43,7 +43,7 @@ public final class EditorCommands {
                                 }))));
     }
 
-    private static int open(ThemeRenderer renderer) {
+    static int open(ThemeRenderer renderer) {
         var session = com.mervyn.groove.client.music.MusicClient.desiredState();
         if (session == null) {
             Minecraft.getInstance().player.displayClientMessage(Component.literal("Waiting for the Groove session; try again shortly."), false);

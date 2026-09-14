@@ -13,6 +13,7 @@ public class GrooveModClient implements ClientModInitializer {
 		com.mervyn.groove.client.music.MusicClient.register();
 		com.mervyn.groove.client.music.AudioSmokeTest.register();
 		com.mervyn.groove.client.ui.EditorCommands.register();
+		com.mervyn.groove.client.ui.EditorBlockInteraction.register();
 		TrinketRendererRegistry.registerRenderer(GrooveItems.HEADPHONES, new HeadphonesRenderer());
 	}
 }
