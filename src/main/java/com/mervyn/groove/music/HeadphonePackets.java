@@ -25,9 +25,28 @@ public final class HeadphonePackets {
         };
         public Type<? extends CustomPacketPayload> type() { return TYPE; }
     }
+    public record Preview(UUID request) implements CustomPacketPayload {
+        public static final Type<Preview> TYPE = new Type<>(GrooveMod.id("headphone_preview"));
+        public static final StreamCodec<RegistryFriendlyByteBuf, Preview> CODEC = new StreamCodec<>() {
+            public Preview decode(RegistryFriendlyByteBuf b) { return new Preview(b.readUUID()); }
+            public void encode(RegistryFriendlyByteBuf b, Preview p) { b.writeUUID(p.request); }
+        };
+        public Type<? extends CustomPacketPayload> type() { return TYPE; }
+    }
+    /** The linked editor's current draft, resolved server-side from the player's own worn headphones. */
+    public record Draft(UUID request, boolean available, String graph, double bpm, boolean playing, long revision) implements CustomPacketPayload {
+        public static final Type<Draft> TYPE = new Type<>(GrooveMod.id("headphone_draft"));
+        public static final StreamCodec<RegistryFriendlyByteBuf, Draft> CODEC = new StreamCodec<>() {
+            public Draft decode(RegistryFriendlyByteBuf b) { return new Draft(b.readUUID(), b.readBoolean(), b.readUtf(GraphJson.MAX_LENGTH), b.readDouble(), b.readBoolean(), b.readVarLong()); }
+            public void encode(RegistryFriendlyByteBuf b, Draft p) { b.writeUUID(p.request); b.writeBoolean(p.available); b.writeUtf(p.graph, GraphJson.MAX_LENGTH); b.writeDouble(p.bpm); b.writeBoolean(p.playing); b.writeVarLong(p.revision); }
+        };
+        public Type<? extends CustomPacketPayload> type() { return TYPE; }
+    }
     public static void register() {
         PayloadTypeRegistry.playC2S().register(Bind.TYPE, Bind.CODEC);
         PayloadTypeRegistry.playS2C().register(State.TYPE, State.CODEC);
+        PayloadTypeRegistry.playC2S().register(Preview.TYPE, Preview.CODEC);
+        PayloadTypeRegistry.playS2C().register(Draft.TYPE, Draft.CODEC);
     }
     private HeadphonePackets() {}
 }

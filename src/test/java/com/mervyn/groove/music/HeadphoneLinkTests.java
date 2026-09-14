@@ -50,6 +50,15 @@ final class HeadphoneLinkTests {
             check(HeadphonePackets.Bind.CODEC.decode(wire).equals(request), "Bind packet round trip");
             HeadphonePackets.State.CODEC.encode(wire, response);
             check(HeadphonePackets.State.CODEC.decode(wire).equals(response), "Rejected bind preserves existing link in acknowledgement");
+            var preview = new HeadphonePackets.Preview(UUID.randomUUID());
+            HeadphonePackets.Preview.CODEC.encode(wire, preview);
+            check(HeadphonePackets.Preview.CODEC.decode(wire).equals(preview), "Preview packet round trip");
+            var draft = new HeadphonePackets.Draft(preview.request(), true, GraphJson.encode(groove.engine.Graph.demo()), 140, true, 7);
+            HeadphonePackets.Draft.CODEC.encode(wire, draft);
+            check(HeadphonePackets.Draft.CODEC.decode(wire).equals(draft), "Draft packet round trip");
+            var unavailable = new HeadphonePackets.Draft(UUID.randomUUID(), false, "", 128, false, 0);
+            HeadphonePackets.Draft.CODEC.encode(wire, unavailable);
+            check(HeadphonePackets.Draft.CODEC.decode(wire).equals(unavailable), "Unavailable draft packet round trip");
         } finally { wire.release(); }
     }
     private static void check(boolean condition, String message) { if (!condition) throw new AssertionError(message); }

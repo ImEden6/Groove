@@ -2,12 +2,14 @@ package com.mervyn.groove.music;
 
 import com.mervyn.groove.block.EditorBlockEntity;
 import com.mervyn.groove.block.GrooveItems;
+import dev.emi.trinkets.api.TrinketsApi;
 import net.fabricmc.fabric.api.event.lifecycle.v1.ServerLifecycleEvents;
 import net.fabricmc.fabric.api.networking.v1.ServerPlayConnectionEvents;
 import net.fabricmc.fabric.api.networking.v1.ServerPlayNetworking;
 import net.minecraft.core.BlockPos;
 import java.util.HashMap;
 import java.util.Map;
+import java.util.Optional;
 import java.util.UUID;
 
 /** Binding is open to listeners, but only the held headphones can be changed. */
@@ -44,6 +46,29 @@ public final class HeadphoneServer {
             ServerPlayNetworking.send(player, new HeadphonePackets.State(packet.request(), accepted, message,
                     link.isPresent(), link.map(HeadphoneLinks.Link::pos).orElse(BlockPos.ZERO)));
         }));
+        ServerPlayNetworking.registerGlobalReceiver(HeadphonePackets.Preview.TYPE, (packet, context) -> context.server().execute(() -> {
+            var player = context.player();
+            boolean available = false; String graph = ""; double bpm = 128; boolean playing = false; long revision = 0;
+            var worn = wornHeadphones(player);
+            if (worn.isPresent()) {
+                var link = HeadphoneLinks.read(worn.get());
+                if (link.isPresent() && link.get().dimension().equals(player.serverLevel().dimension().location())
+                        && player.serverLevel().getBlockEntity(link.get().pos()) instanceof EditorBlockEntity editor
+                        && editor.sessionId().equals(link.get().session())) {
+                    var session = editor.session();
+                    available = true; graph = GraphJson.encode(session.draft()); bpm = session.bpm();
+                    playing = session.playing(); revision = session.revision();
+                }
+            }
+            ServerPlayNetworking.send(player, new HeadphonePackets.Draft(packet.request(), available, graph, bpm, playing, revision));
+        }));
+    }
+    /** Only a worn pair counts (see EDITOR-BLOCK-DESIGN.md: holding it only binds). */
+    private static Optional<net.minecraft.world.item.ItemStack> wornHeadphones(net.minecraft.server.level.ServerPlayer player) {
+        return TrinketsApi.getTrinketComponent(player)
+                .map(component -> component.getEquipped(GrooveItems.HEADPHONES))
+                .filter(equipped -> !equipped.isEmpty())
+                .map(equipped -> equipped.getFirst().getB());
     }
     private HeadphoneServer() {}
 }
