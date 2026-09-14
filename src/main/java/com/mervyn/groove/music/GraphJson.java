@@ -25,6 +25,9 @@ public final class GraphJson {
                         case FAST -> "fast";
                         case EUCLID -> "euclid";
                         case STACK -> "stack";
+                        case ALTERNATE -> "alternate";
+                        case PROBABILITY -> "probability";
+                        case POLYMETER -> "polymeter";
                         case OUTPUT -> "output";
                         default -> value.idStem();
                     });
@@ -39,6 +42,9 @@ public final class GraphJson {
                         case "fast" -> NodeType.FAST;
                         case "euclid" -> NodeType.EUCLID;
                         case "stack" -> NodeType.STACK;
+                        case "alternate" -> NodeType.ALTERNATE;
+                        case "probability" -> NodeType.PROBABILITY;
+                        case "polymeter" -> NodeType.POLYMETER;
                         case "output" -> NodeType.OUTPUT;
                         default -> {
                             NodeType match = null;

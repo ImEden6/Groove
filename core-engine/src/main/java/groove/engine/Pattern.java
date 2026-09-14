@@ -40,6 +40,55 @@ public interface Pattern {
         };
     }
 
+    /** Slow concatenation: each child advances one local cycle per complete rotation. */
+    static Pattern alternate(Pattern... patterns) {
+        List<Pattern> children = List.of(patterns);
+        if (children.isEmpty() || children.size() > 16) throw new IllegalArgumentException("Expected 1..16 patterns");
+        return arc -> {
+            checkQuery(arc);
+            List<Event> events = new ArrayList<>();
+            if (arc.start() == arc.end()) return events;
+            for (long c = (long)Math.floor(arc.start()); c < Math.ceil(arc.end()); c++) {
+                Arc visible = new Arc(c, c + 1.0).intersect(arc);
+                long localCycle = Math.floorDiv(c, children.size());
+                double shift = c - localCycle;
+                Pattern child = children.get(Math.floorMod(c, children.size()));
+                for (Event e : child.query(new Arc(visible.start() - shift, visible.end() - shift))) {
+                    events.add(new Event(new Arc(e.whole().start() + shift, e.whole().end() + shift),
+                            new Arc(e.part().start() + shift, e.part().end() + shift), e.tone(), e.sample()));
+                }
+            }
+            return events;
+        };
+    }
+
+    /** Ordered steps at a shared pulse rate; sequence length may differ from pulses per cycle. */
+    static Pattern polymeter(int stepsPerCycle, Pattern... patterns) {
+        if (stepsPerCycle < 1 || stepsPerCycle > 64) throw new IllegalArgumentException("Expected 1..64 steps per cycle");
+        return alternate(patterns).fast(stepsPerCycle);
+    }
+
+    /** Whole-arc hashing is independent of query partition/order. Coincident notes share a decision. */
+    default Pattern probability(double chance, int seed) {
+        if (!Double.isFinite(chance) || chance < 0 || chance > 1) throw new IllegalArgumentException("Chance must be 0..1");
+        return arc -> {
+            checkQuery(arc);
+            List<Event> events = new ArrayList<>();
+            for (Event e : query(arc)) {
+                long bits = mixSeed(Double.doubleToLongBits(e.whole().start() == 0 ? 0 : e.whole().start()) ^ seed);
+                bits = mixSeed(bits ^ Double.doubleToLongBits(e.whole().end() == 0 ? 0 : e.whole().end()));
+                if ((bits >>> 11) * 0x1.0p-53 < chance) events.add(e);
+            }
+            return events;
+        };
+    }
+
+    private static long mixSeed(long value) {
+        value = (value ^ (value >>> 30)) * 0xbf58476d1ce4e5b9L;
+        value = (value ^ (value >>> 27)) * 0x94d049bb133111ebL;
+        return value ^ (value >>> 31);
+    }
+
     default Pattern fast(double factor) {
         if (!Double.isFinite(factor) || factor <= 0)
             throw new IllegalArgumentException("Speed must be finite and positive");

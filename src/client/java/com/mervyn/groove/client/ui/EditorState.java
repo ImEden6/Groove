@@ -304,8 +304,8 @@ public final class EditorState {
     public void endValueDrag() { valueDrag = null; }
     public boolean isValueDragging() { return valueDrag != null; }
 
-    /** Units per pixel of vertical drag, scaled so each param's full range takes a
-     *  comparable, reasonable drag distance to sweep (roughly 150-400px). */
+    /** Units per pixel of vertical drag. Seeds favor auditioning adjacent integer
+     *  variations; continuous parameters favor a comfortable range sweep. */
     private static double sensitivity(String param) {
         return switch (param) {
             case NodeParam.FREQUENCY, NodeParam.CUTOFF_HZ -> 40.0;
@@ -313,6 +313,9 @@ public final class EditorState {
             case NodeParam.PAN -> 0.01;
             case NodeParam.PITCH_RATIO -> 0.02;
             case NodeParam.WAVE -> 0.05;
+            case NodeParam.CHANCE -> .01;
+            case NodeParam.SEED -> 1.0;
+            case NodeParam.STEPS_PER_CYCLE -> .3;
             case NodeParam.FACTOR -> 0.1;
             case NodeParam.STEPS, NodeParam.PULSES -> 0.3;
             case NodeParam.ROTATION -> 0.5;
@@ -342,6 +345,9 @@ public final class EditorState {
             default -> Math.max(-1,Math.min(1,value));
         };
         return switch (param) {
+            case NodeParam.CHANCE -> Math.max(0, Math.min(1, value));
+            case NodeParam.SEED -> Math.max(0, Math.min(65535, Math.rint(value)));
+            case NodeParam.STEPS_PER_CYCLE -> Math.max(1, Math.min(64, Math.rint(value)));
             case NodeParam.FREQUENCY -> Math.max(20.0, Math.min(16000.0, value));
             case NodeParam.CUTOFF_HZ -> Math.max(20.0, Math.min(20000.0, value));
             case NodeParam.GAIN -> Math.max(0.0, Math.min(1.0, value));
@@ -361,6 +367,8 @@ public final class EditorState {
 
     public static Map<String, Double> defaultParams(NodeType type) {
         return switch (type) {
+            case PROBABILITY -> Map.of(NodeParam.CHANCE, .5, NodeParam.SEED, 0.0);
+            case POLYMETER -> Map.of(NodeParam.STEPS_PER_CYCLE, 4.0);
             case LFO -> Map.of(NodeParam.RATE,1.0,NodeParam.SYNC,0.0,NodeParam.WAVE,0.0);
             case ENVELOPE -> Map.of(NodeParam.ATTACK,.01,NodeParam.DECAY,.1,NodeParam.SUSTAIN,.5,NodeParam.RELEASE,.1,NodeParam.MODE,0.0);
             case ATTENUVERTER -> Map.of(NodeParam.SCALE,1.0,NodeParam.OFFSET,0.0);

@@ -26,5 +26,9 @@ public final class NodeParam {
     /** value0..value7: STEP_SEQUENCE step levels, keyed by index. */
     public static final String[] VALUES = {"value0","value1","value2","value3","value4","value5","value6","value7"};
 
+    public static final String CHANCE = "chance";
+    public static final String SEED = "seed";
+    public static final String STEPS_PER_CYCLE = "stepsPerCycle";
+
     private NodeParam() {}
 }

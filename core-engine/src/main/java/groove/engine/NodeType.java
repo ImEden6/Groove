@@ -8,7 +8,7 @@ public enum NodeType {
     STACK,
     OUTPUT,
     LFO, ENVELOPE, ATTENUVERTER, STEP_SEQUENCE,
-    AUDIO_RENDER, FILTER, DELAY, MIX_BUS, TRIGGER_RENDER;
+    AUDIO_RENDER, FILTER, DELAY, MIX_BUS, TRIGGER_RENDER, ALTERNATE, PROBABILITY, POLYMETER;
 
     private static final java.util.List<Port> PATTERN_OUTPUT = java.util.List.of(new Port("out", PortType.PATTERN, 0, 128));
     private static final java.util.List<Port> PATTERN_INPUT = java.util.List.of(new Port("in", PortType.PATTERN, 1, 1));
@@ -44,8 +44,8 @@ public enum NodeType {
     public java.util.List<Port> inputPorts() {
         return switch (this) {
             case TONE, GENERATOR_SAMPLE -> NO_PORTS;
-            case STACK -> STACK_INPUT;
-            case FAST, EUCLID, AUDIO_RENDER, TRIGGER_RENDER -> PATTERN_INPUT;
+            case STACK, ALTERNATE, POLYMETER -> STACK_INPUT;
+            case FAST, EUCLID, PROBABILITY, AUDIO_RENDER, TRIGGER_RENDER -> PATTERN_INPUT;
             case OUTPUT -> OUTPUT_INPUT;
             case LFO, STEP_SEQUENCE -> NO_PORTS;
             case ENVELOPE -> ENVELOPE_INPUT;

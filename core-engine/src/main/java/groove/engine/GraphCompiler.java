@@ -64,7 +64,9 @@ public final class GraphCompiler {
             case GENERATOR_SAMPLE -> Set.of(NodeParam.PITCH_RATIO, NodeParam.GAIN, NodeParam.PAN, NodeParam.CUTOFF_HZ, NodeParam.RESONANCE_Q);
             case FAST -> Set.of(NodeParam.FACTOR);
             case EUCLID -> Set.of(NodeParam.STEPS, NodeParam.PULSES, NodeParam.ROTATION);
-            case STACK, OUTPUT -> Set.of();
+            case STACK, ALTERNATE, OUTPUT -> Set.of();
+            case PROBABILITY -> Set.of(NodeParam.CHANCE, NodeParam.SEED);
+            case POLYMETER -> Set.of(NodeParam.STEPS_PER_CYCLE);
             default -> throw new IllegalStateException("unreachable: signal nodes are rejected in build()");
         };
         require(allowed.containsAll(node.params().keySet()), "Unknown parameter on " + id);
@@ -86,28 +88,42 @@ public final class GraphCompiler {
                     number(node, NodeParam.PITCH_RATIO, 1), number(node, NodeParam.GAIN, .8), number(node, NodeParam.PAN, 0), number(node, NodeParam.CUTOFF_HZ, 20000),
                     number(node, NodeParam.RESONANCE_Q, Biquad.DEFAULT_Q))), 1);
         }
+        case ALTERNATE, POLYMETER -> {
+            int rate = node.type() == NodeType.POLYMETER ? integer(node, NodeParam.STEPS_PER_CYCLE, 4, 1, 64) : 1;
+            int cost = children.stream().mapToInt(Compiled::cost).max().orElseThrow() * rate;
+            require(cost <= MAX_EVENTS, "Graph exceeds event budget");
+            Pattern[] patterns = children.stream().map(Compiled::pattern).toArray(Pattern[]::new);
+            yield new Compiled(node.type() == NodeType.ALTERNATE ? Pattern.alternate(patterns) : Pattern.polymeter(rate, patterns), cost);
+        }
+        case PROBABILITY -> {
+            Compiled child = children.getFirst();
+            double chance = number(node, NodeParam.CHANCE, .5);
+            require(chance >= 0 && chance <= 1, "Invalid chance");
+            int seed = integer(node, NodeParam.SEED, 0, 0, 65535);
+            yield new Compiled(child.pattern.probability(chance, seed), child.cost);
+        }
         case STACK -> {
             int cost = children.stream().mapToInt(Compiled::cost).sum();
             require(cost <= MAX_EVENTS, "Graph exceeds event budget");
             yield new Compiled(Pattern.stack(children.stream().map(Compiled::pattern).toArray(Pattern[]::new)), cost);
         }
-                case FAST -> {
-                    Compiled child = children.getFirst();
-                    double factor = number(node, NodeParam.FACTOR, 2);
-                    require(factor >= .25 && factor <= 16, "Invalid factor");
-                    require(child.cost * factor <= MAX_EVENTS, "Graph exceeds event budget");
-                    yield new Compiled(child.pattern.fast(factor), (int) Math.ceil(child.cost * Math.max(1, factor)));
-                }
-                case EUCLID -> {
-                    Compiled child = children.getFirst();
-                    int steps = integer(node, NodeParam.STEPS, 16, 1, 64);
-                    int pulses = integer(node, NodeParam.PULSES, 4, 0, steps);
-                    int rotation = integer(node, NodeParam.ROTATION, 0, -1024, 1024);
-                    require(child.cost * Math.max(1, pulses) <= MAX_EVENTS, "Graph exceeds event budget");
-                    yield new Compiled(child.pattern.euclid(steps, pulses, rotation), child.cost * pulses);
-                }
-                case OUTPUT -> children.getFirst();
-                default -> throw new IllegalStateException("unreachable: signal nodes are rejected in build()");
+        case FAST -> {
+            Compiled child = children.getFirst();
+            double factor = number(node, NodeParam.FACTOR, 2);
+            require(factor >= .25 && factor <= 16, "Invalid factor");
+            require(child.cost * factor <= MAX_EVENTS, "Graph exceeds event budget");
+            yield new Compiled(child.pattern.fast(factor), (int) Math.ceil(child.cost * Math.max(1, factor)));
+        }
+        case EUCLID -> {
+            Compiled child = children.getFirst();
+            int steps = integer(node, NodeParam.STEPS, 16, 1, 64);
+            int pulses = integer(node, NodeParam.PULSES, 4, 0, steps);
+            int rotation = integer(node, NodeParam.ROTATION, 0, -1024, 1024);
+            require(child.cost * Math.max(1, pulses) <= MAX_EVENTS, "Graph exceeds event budget");
+            yield new Compiled(child.pattern.euclid(steps, pulses, rotation), child.cost * pulses);
+        }
+        case OUTPUT -> children.getFirst();
+        default -> throw new IllegalStateException("unreachable: signal nodes are rejected in build()");
         };
         visiting.remove(id);
         compiled.put(id, result);

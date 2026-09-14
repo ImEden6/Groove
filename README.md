@@ -9,6 +9,7 @@ in a world with cheats/operator permissions to start the demo.
 See [backend usage](docs/BACKEND-USAGE.md) for commands, patch JSON, timing guarantees,
 and tests, [samples and packs](docs/SAMPLES.md) for WAV/OGG playback and auditioning,
 [the backend plan](docs/BACKEND-PLAN.md) for milestones, and
+[musical pattern nodes](docs/MUSICAL-PATTERNS.md) for alternation, probability, and polymeter, and
 [future work](docs/FUTURE-WORK.md) for what's not implemented yet.
 
 Run the engine without downloading Minecraft:
