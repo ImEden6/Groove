@@ -1,8 +1,11 @@
 package com.mervyn.groove.block;
 
+import com.mervyn.groove.music.SpeakerServer;
 import com.mojang.serialization.MapCodec;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
+import net.minecraft.server.level.ServerLevel;
+import net.minecraft.world.level.Level;
 import net.minecraft.world.level.block.EntityBlock;
 import net.minecraft.world.level.block.HorizontalDirectionalBlock;
 import net.minecraft.world.level.block.entity.BlockEntity;
@@ -26,6 +29,17 @@ public final class EditorBlock extends HorizontalDirectionalBlock implements Ent
     @Override public void setPlacedBy(net.minecraft.world.level.Level level, BlockPos pos, BlockState state, net.minecraft.world.entity.LivingEntity placer, net.minecraft.world.item.ItemStack stack) {
         super.setPlacedBy(level, pos, state, placer, stack);
         if (!level.isClientSide && placer != null && level.getBlockEntity(pos) instanceof EditorBlockEntity editor) editor.setOwner(placer.getUUID());
+    }
+
+    /** Speaker links point at this session by (pos, id); a destroyed session must not leave
+     *  them dangling on speakers that will never be relinked automatically. */
+    @Override
+    protected void onRemove(BlockState state, Level level, BlockPos pos, BlockState newState, boolean movedByPiston) {
+        if (!state.is(newState.getBlock()) && !level.isClientSide && level instanceof ServerLevel serverLevel
+                && level.getBlockEntity(pos) instanceof EditorBlockEntity editor) {
+            SpeakerServer.unlinkAll(serverLevel, pos, editor.sessionId());
+        }
+        super.onRemove(state, level, pos, newState, movedByPiston);
     }
     @Override protected MapCodec<EditorBlock> codec() { return CODEC; }
 

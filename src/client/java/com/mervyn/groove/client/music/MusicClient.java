@@ -8,6 +8,7 @@ import com.mervyn.groove.music.GraphJson;
 import com.mervyn.groove.music.HeadphoneLinks;
 import com.mervyn.groove.music.HeadphonePackets;
 import com.mervyn.groove.music.MusicPackets;
+import com.mervyn.groove.music.SpeakerPackets;
 import dev.emi.trinkets.api.TrinketsApi;
 import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientChunkEvents;
 import groove.engine.ClockSync;
@@ -45,14 +46,10 @@ public final class MusicClient {
     private static UUID epoch;
     private static long revision = -1, generation, lastPing, outstandingPing;
     private static volatile ClockSync clock = new ClockSync();
-    private static LiveRenderer renderer = new LiveRenderer();
     private static volatile LiveRenderer.Timeline program;
     private static groove.engine.SessionTimeline.Snapshot latestSnapshot;
     private static MusicPackets.Snapshot latestWire;
     private static java.util.Map<groove.engine.samples.AssetRef, String> sampleStatus = java.util.Map.of();
-    private static GrooveSound sound;
-    private static GrooveAudioStream stream;
-    private static int retryTicks;
     private static HeadphoneLinks.Link previewLink;
     private static UUID previewRequest;
     private static long previewSent;
@@ -65,6 +62,7 @@ public final class MusicClient {
     private static int previewRetryTicks;
     private static final Set<BlockPos> speakerSegments = new HashSet<>();
     private static final Map<BlockPos, Emitter> emitters = new HashMap<>();
+    private static final Map<BlockPos, SpeakerLink> speakerLinks = new HashMap<>();
     private static final int MAX_EMITTERS = 8;
     private static final double MAX_AUDIBLE_DIST_SQR = 64.0 * 64.0;
     private static int emitterScanCooldown;
@@ -117,6 +115,37 @@ public final class MusicClient {
             previewWire = packet;
             refreshPreview();
         }));
+        ClientPlayNetworking.registerGlobalReceiver(SpeakerPackets.CommittedState.TYPE, (packet, context) -> context.client().execute(() -> {
+            var link = speakerLinks.get(packet.pos());
+            if (link == null || !packet.request().equals(link.request)) return;
+            link.request = null;
+            if (!packet.available()) { link.program = null; link.revision = -1; return; }
+            if (packet.revision() <= link.revision) return;
+            link.revision = packet.revision();
+            try {
+                var graph = GraphJson.decode(packet.graph());
+                var state = new SessionState(packet.revision(), packet.at(), packet.cycle(), packet.bpm(), packet.playing(), graph);
+                var snapshot = new SessionTimeline.Snapshot(state, null);
+                long ticket = ++link.generation;
+                COMPILER.execute(() -> {
+                    try {
+                        var prepared = SampleLibrary.prepare(snapshot);
+                        prepared.timeline().prepare(serverNow());
+                        Minecraft.getInstance().execute(() -> {
+                            if (ticket != link.generation) return;
+                            link.program = prepared.timeline();
+                            var emitter = emitters.get(packet.pos());
+                            if (emitter != null) emitter.renderer.publish(link.program);
+                            SampleLibrary.request(prepared.needed(), prepared.status().keySet());
+                        });
+                    } catch (RuntimeException error) {
+                        GrooveMod.LOGGER.error("Rejected speaker committed patch", error);
+                    }
+                });
+            } catch (RuntimeException error) {
+                // Leave whatever this speaker was already playing; retry on the next poll.
+            }
+        }));
         ClientPlayConnectionEvents.DISCONNECT.register((handler, client) -> reset(client));
         ClientChunkEvents.CHUNK_LOAD.register((level, chunk) -> addSpeakers(chunk));
         ClientChunkEvents.CHUNK_UNLOAD.register((level, chunk) -> removeSpeakers(level, chunk));
@@ -131,12 +160,12 @@ public final class MusicClient {
             }
             if (client.level == null || client.player == null || !clock.ready() || client.isPaused()
                     || client.getOverlay() != null || !client.getSoundManager().getAvailableSounds().contains(GrooveMod.id("session"))) {
-                stopEmitters(client); stopMonitor(client); stopHeadphonePreview(client);
+                stopEmitters(client); stopHeadphonePreview(client);
                 return;
             }
             if (SampleCommands.auditioning()) {
                 stopEmitters(client);
-                stopMonitor(client); stopHeadphonePreview(client);
+                stopHeadphonePreview(client);
                 return;
             }
             boolean headphones = TrinketsApi.getTrinketComponent(client.player)
@@ -145,26 +174,9 @@ public final class MusicClient {
             if (headphones) {
                 if (!emitters.isEmpty()) stopEmitters(client);
                 updateHeadphonePreview(client);
-                stopMonitor(client); return;
             } else {
                 stopHeadphonePreview(client);
-                if (program == null) { stopMonitor(client); return; }
                 updateEmitters(client);
-                if (!emitters.isEmpty()) {
-                    stopMonitor(client);
-                    return;
-                }
-            }
-            if (retryTicks > 0) { retryTicks--; return; }
-            if (sound == null || stream.closed() || !client.getSoundManager().isActive(sound)) {
-                if (sound != null) client.getSoundManager().stop(sound);
-                if (stream != null) stream.close();
-                renderer = new LiveRenderer();
-                renderer.publish(program);
-                stream = new GrooveAudioStream(renderer, clock);
-                sound = new GrooveSound(stream);
-                client.getSoundManager().play(sound);
-                retryTicks = 100;
             }
         });
     }
@@ -189,8 +201,6 @@ public final class MusicClient {
                     if (ticket != generation) return;
                     latestSnapshot = snapshot;
                     program = prepared.timeline(); sampleStatus = prepared.status();
-                    renderer.publish(program);
-                    for (Emitter emitter : emitters.values()) emitter.renderer.publish(program);
                     SampleLibrary.request(prepared.needed(), prepared.status().keySet());
                 });
             } catch (RuntimeException error) {
@@ -228,12 +238,12 @@ public final class MusicClient {
         generation++; revision = -1; epoch = null; program = null;
         latestSnapshot = null; latestWire = null; sampleStatus = java.util.Map.of();
         lastPing = 0; outstandingPing = 0;
-        stopMonitor(client);
         stopEmitters(client);
         stopHeadphonePreview(client);
         speakerSegments.clear();
+        speakerLinks.clear();
         emitterScanCooldown = 0;
-        clock = new ClockSync(); renderer = new LiveRenderer();
+        clock = new ClockSync();
         COMPILER.getQueue().clear();
     }
 
@@ -256,6 +266,7 @@ public final class MusicClient {
             stopEmitter(Minecraft.getInstance(), entry.getValue());
             return true;
         });
+        speakerLinks.keySet().removeIf(pos -> pos.getX() >> 4 == chunk.getPos().x && pos.getZ() >> 4 == chunk.getPos().z);
         if (removed) emitterScanCooldown = 0;
     }
 
@@ -273,7 +284,11 @@ public final class MusicClient {
                     || client.level.getBlockState(pos.below()).is(GrooveBlocks.SPEAKER)) continue;
             bases.add(pos);
         }
-        bases.stream().sorted(java.util.Comparator.comparingDouble(pos -> pos.distSqr(playerPos)))
+        // Poll every nearby base, not just already-linked ones, so a fresh bind picks up automatically.
+        for (BlockPos pos : bases) pollSpeakerLink(pos);
+        bases.stream()
+                .filter(pos -> { SpeakerLink link = speakerLinks.get(pos); return link != null && link.program != null; })
+                .sorted(java.util.Comparator.comparingDouble(pos -> pos.distSqr(playerPos)))
                 .limit(MAX_EMITTERS).forEach(pos -> {
                     int height = towerHeight(client, pos);
                     Emitter emitter = emitters.get(pos);
@@ -281,29 +296,35 @@ public final class MusicClient {
                             && client.getSoundManager().isActive(emitter.sound)) return;
                     if (emitter != null) stopEmitter(client, emitter);
                     LiveRenderer sourceRenderer = new LiveRenderer();
-                    sourceRenderer.publish(program);
+                    sourceRenderer.publish(speakerLinks.get(pos).program);
                     GrooveAudioStream sourceStream = new GrooveAudioStream(sourceRenderer, clock, true);
                     GrooveSound sourceSound = new GrooveSound(sourceStream, pos, height);
                     emitters.put(pos, new Emitter(sourceSound, sourceStream, height, sourceRenderer));
                     client.getSoundManager().play(sourceSound);
                 });
         emitters.entrySet().removeIf(entry -> {
-            if (bases.contains(entry.getKey())) return false;
+            SpeakerLink link = speakerLinks.get(entry.getKey());
+            if (bases.contains(entry.getKey()) && link != null && link.program != null) return false;
             stopEmitter(client, entry.getValue());
             return true;
         });
+        // Cached link state for bases no longer nearby is dropped so re-entering range re-polls fresh.
+        speakerLinks.keySet().removeIf(pos -> !bases.contains(pos));
+    }
+
+    private static void pollSpeakerLink(BlockPos pos) {
+        SpeakerLink link = speakerLinks.computeIfAbsent(pos, p -> new SpeakerLink());
+        long now = System.nanoTime();
+        if (link.request != null || now - link.sent < 1_000_000_000L || !ClientPlayNetworking.canSend(SpeakerPackets.CommittedRequest.TYPE))
+            return;
+        link.request = UUID.randomUUID(); link.sent = now;
+        ClientPlayNetworking.send(new SpeakerPackets.CommittedRequest(pos, link.request));
     }
 
     private static int towerHeight(Minecraft client, BlockPos base) {
         int height = 1;
         while (height < 32 && client.level.getBlockState(base.above(height)).is(GrooveBlocks.SPEAKER)) height++;
         return height;
-    }
-
-    private static void stopMonitor(Minecraft client) {
-        if (sound != null) client.getSoundManager().stop(sound);
-        if (stream != null) stream.close();
-        sound = null; stream = null; retryTicks = 0;
     }
 
     /** Returns whether headphones are usably linked right now; audible or not (a fresh
@@ -372,4 +393,14 @@ public final class MusicClient {
     }
 
     private record Emitter(GrooveSound sound, GrooveAudioStream stream, int height, LiveRenderer renderer) {}
+
+    /** One speaker's polled link state: what it should play, if anything, and the in-flight
+     *  request bookkeeping to avoid re-polling every tick. */
+    private static final class SpeakerLink {
+        UUID request;
+        long sent;
+        long revision = -1;
+        long generation;
+        volatile LiveRenderer.Timeline program;
+    }
 }

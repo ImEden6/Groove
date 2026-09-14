@@ -60,6 +60,7 @@ public final class BackendTests {
         }
         EditorSessionTests.run();
         HeadphoneLinkTests.run();
+        SpeakerLinkTests.run();
         catalogUpdateChecks();
         persistenceChecks();
         typedCompatibilityChecks();

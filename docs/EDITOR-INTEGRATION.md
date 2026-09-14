@@ -26,8 +26,16 @@ previous prototype links in `groove-headphones.json` need rebinding once.
 Worn headphones play the linked draft on the server transport clock, including
 custom samples available on the server. Invalid/unavailable drafts are silent.
 The server clears worn links beyond 16 blocks, across dimensions, or when the
-loaded editor is missing/replaced. Stored/unworn link cleanup and speaker
-connections remain pending. Headphones no longer use the global monitor fallback.
+loaded editor is missing/replaced. Stored/unworn link cleanup remains pending.
+Headphones no longer use the global monitor fallback.
+
+Use Speakers (next to Access) to list placed speakers within 64 blocks of the
+editor and link/unlink each one by clicking its row; binding is unrestricted,
+like headphones. The link lives on the speaker's block entity and survives
+chunk unload/reload. A linked speaker plays the editor's committed patch
+(never the draft), positionally, with the existing tower-height/distance
+rules layered on top; an unlinked speaker is silent. Breaking the editor
+unlinks every speaker still pointing at it within that same 64-block radius.
 
 ## Legacy command editor
 

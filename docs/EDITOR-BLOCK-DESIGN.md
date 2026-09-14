@@ -31,11 +31,30 @@ The server checks worn links every tick and clears them past 16 blocks, across
 dimensions, or when a loaded editor is missing/replaced. An unloaded chunk is not
 forced to load. Unlinked headphones are silent, with no global monitor fallback.
 
-**Still pending:** Speaker binding, cleanup of links in stored/unworn items, and
-retirement of the legacy monitor stream for players without headphones.
-`/groove-editor` and `/groove` still operate the legacy global session.
-Existing editor blocks without a recorded owner can be claimed by an operator
-opening them; newly placed blocks record their placer automatically.
+A "Speakers" panel in the editor GUI (alongside Access) lists placed speakers
+within 64 blocks of the editor block and lets anyone (binding a speaker is
+unrestricted, like headphones) link or unlink each one; the link lives on the
+speaker's own block entity, so it survives chunk unload/reload, and is
+exclusive per speaker — one editor at a time, relinking overwrites. A linked
+speaker now polls and plays that editor's **committed** patch specifically
+(never the draft), positionally, on top of the existing tower-height/distance
+rules; an unlinked speaker is silent. Breaking an editor block unlinks every
+speaker still pointing at its (now-destroyed) session within that same
+64-block search radius, so links don't dangle.
+
+The legacy global monitor stream (the old shared non-positional fallback, and
+the old "every speaker plays the one global session" default) is retired:
+`MusicClient` no longer builds it, and speakers/headphones only ever play
+audio through an explicit link to a specific editor block's session.
+`/groove-editor` and `/groove` still work for editing the legacy global
+session (Apply/Play/Stop, snapshot sync to the editor screen), but that
+session's audio is no longer reachable through any speaker or headphones —
+only editor *blocks* can be linked.
+
+**Still pending:** Cleanup of headphone links left on *stored/unworn* items
+(only currently-worn links are actively revalidated). Existing editor blocks
+without a recorded owner can be claimed by an operator opening them; newly
+placed blocks record their placer automatically.
 
 ## Summary of the current state (before this design)
 

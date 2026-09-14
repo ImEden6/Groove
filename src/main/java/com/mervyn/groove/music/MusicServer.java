@@ -64,6 +64,7 @@ public final class MusicServer {
         MusicPackets.register();
         EditorServer.register();
         HeadphoneServer.register();
+        SpeakerServer.register();
         SampleServer.register();
         ServerLifecycleEvents.SERVER_STARTED.register(server -> active = new MusicServer(server));
         ServerLifecycleEvents.SERVER_STOPPED.register(server -> {

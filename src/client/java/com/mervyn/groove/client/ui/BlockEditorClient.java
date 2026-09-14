@@ -2,6 +2,7 @@ package com.mervyn.groove.client.ui;
 
 import com.mervyn.groove.music.EditorPackets;
 import com.mervyn.groove.music.GraphJson;
+import com.mervyn.groove.music.SpeakerPackets;
 import com.mervyn.groove.client.ui.theme.VanillaRenderer;
 import net.fabricmc.fabric.api.client.networking.v1.ClientPlayNetworking;
 import net.minecraft.core.BlockPos;
@@ -23,6 +24,12 @@ public final class BlockEditorClient {
         }));
         ClientPlayNetworking.registerGlobalReceiver(EditorPackets.AllowlistState.TYPE, (packet, context) -> context.client().execute(() -> {
             if (context.client().screen instanceof GrooveEditorScreen screen) screen.allowlistState(packet);
+        }));
+        ClientPlayNetworking.registerGlobalReceiver(SpeakerPackets.ListState.TYPE, (packet, context) -> context.client().execute(() -> {
+            if (context.client().screen instanceof GrooveEditorScreen screen) screen.speakerListState(packet);
+        }));
+        ClientPlayNetworking.registerGlobalReceiver(SpeakerPackets.BindState.TYPE, (packet, context) -> context.client().execute(() -> {
+            if (context.client().screen instanceof GrooveEditorScreen screen) screen.speakerBindState(packet);
         }));
     }
     public static void open(BlockPos pos) {

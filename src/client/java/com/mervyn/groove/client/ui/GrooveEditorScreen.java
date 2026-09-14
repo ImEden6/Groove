@@ -49,6 +49,12 @@ public final class GrooveEditorScreen extends Screen {
     private List<String> editorNames = List.of();
     private EditBox allowlistName;
     private ThemedButton allowlistAdd, allowlistRemove;
+    private boolean speakersOpen;
+    private UUID speakerListRequest;
+    private UUID speakerBindRequest;
+    private int speakerScroll;
+    private List<net.minecraft.core.BlockPos> speakerPositions = List.of();
+    private List<Boolean> speakerLinked = List.of();
     private final EditorState state;
     private final InputController input;
     private final ThemeRenderer renderer;
@@ -154,6 +160,31 @@ public final class GrooveEditorScreen extends Screen {
         allowlistSent = System.nanoTime();
         ClientPlayNetworking.send(new com.mervyn.groove.music.EditorPackets.AllowlistRequest(blockSession.pos(), blockSession.session(), allowlistRequest, name, allow));
     }
+    private void fetchSpeakers() {
+        if (blockSession == null || speakerListRequest != null) return;
+        speakerListRequest = UUID.randomUUID();
+        ClientPlayNetworking.send(new com.mervyn.groove.music.SpeakerPackets.ListRequest(blockSession.pos(), blockSession.session(), speakerListRequest));
+    }
+    public void speakerListState(com.mervyn.groove.music.SpeakerPackets.ListState packet) {
+        if (!packet.request().equals(speakerListRequest)) return;
+        speakerListRequest = null;
+        if (!packet.accepted()) { message = packet.message(); return; }
+        speakerPositions = packet.speakers(); speakerLinked = packet.linked();
+        speakerScroll = Math.min(speakerScroll, Math.max(0, speakerPositions.size() - accessRows()));
+    }
+    private void sendSpeakerBind(int row) {
+        if (blockSession == null || speakerBindRequest != null || row < 0 || row >= speakerPositions.size()) return;
+        speakerBindRequest = UUID.randomUUID();
+        boolean link = !speakerLinked.get(row);
+        ClientPlayNetworking.send(new com.mervyn.groove.music.SpeakerPackets.BindRequest(blockSession.pos(), blockSession.session(),
+                speakerPositions.get(row), link, speakerBindRequest));
+    }
+    public void speakerBindState(com.mervyn.groove.music.SpeakerPackets.BindState packet) {
+        if (!packet.request().equals(speakerBindRequest)) return;
+        speakerBindRequest = null;
+        message = packet.message();
+        if (packet.accepted()) fetchSpeakers();
+    }
     @Override
     protected void init() {
         input.setViewport(width, height);
@@ -170,8 +201,12 @@ public final class GrooveEditorScreen extends Screen {
         search.visible = drawer; addRenderableWidget(search);
 
         ThemedButton access = new ThemedButton(245, 2, 50, 20, Component.literal("Access"), font, theme, textColor,
-                b -> { accessOpen = !accessOpen; if (accessOpen) state.clearSelection(); layoutAllowlist(); });
+                b -> { accessOpen = !accessOpen; speakersOpen = false; if (accessOpen) state.clearSelection(); layoutAllowlist(); });
         access.visible = blockSession != null; addRenderableWidget(access);
+        ThemedButton speakers = new ThemedButton(299, 2, 64, 20, Component.literal("Speakers"), font, theme, textColor,
+                b -> { speakersOpen = !speakersOpen; accessOpen = false; layoutAllowlist();
+                    if (speakersOpen) { state.clearSelection(); fetchSpeakers(); } });
+        speakers.visible = blockSession != null; addRenderableWidget(speakers);
         int x = Math.max(DRAWER_WIDTH + 10, width - 150) + 4;
         int bottom = Math.min(height - 20, 220);
         String name = allowlistName == null ? "" : allowlistName.getValue();
@@ -275,6 +310,8 @@ public final class GrooveEditorScreen extends Screen {
         }
         if (accessOpen && blockSession != null) {
             renderAccessPanel(graphics, textColor);
+        } else if (speakersOpen && blockSession != null) {
+            renderSpeakerPanel(graphics, textColor);
         } else if (!state.selection().isEmpty()) {
             var node = state.node(state.selection().iterator().next());
             int x = Math.max(DRAWER_WIDTH + 10, width - 150);
@@ -382,14 +419,20 @@ public final class GrooveEditorScreen extends Screen {
         }
         if (rightPanelActive() && insideInspector(mouseX, mouseY)) {
             if (button == 0 && mouseX >= inspectorCloseX() - 2 && mouseX < inspectorCloseX() + 8 && mouseY >= 32 && mouseY < 42) {
-                if (accessOpen) { accessOpen = false; layoutAllowlist(); } else state.clearSelection();
+                if (accessOpen) { accessOpen = false; layoutAllowlist(); }
+                else if (speakersOpen) { speakersOpen = false; }
+                else state.clearSelection();
                 return true;
             }
             if (accessOpen && button == 0 && isOwner && mouseY >= 60 && mouseY < 60 + accessRows() * 11) {
                 int row = accessScroll + (int) ((mouseY - 60) / 11);
                 if (row < editorNames.size()) allowlistName.setValue(editorNames.get(row));
             }
-            if (!accessOpen) {
+            if (speakersOpen && button == 0 && mouseY >= 60 && mouseY < 60 + accessRows() * 11) {
+                int row = speakerScroll + (int) ((mouseY - 60) / 11);
+                sendSpeakerBind(row);
+            }
+            if (!accessOpen && !speakersOpen) {
                 var node = state.node(state.selection().iterator().next());
                 browsing = false;
                 if (button == 0 && mouseY >= knobTop(node) && mouseY < knobBottom()) {
@@ -397,8 +440,8 @@ public final class GrooveEditorScreen extends Screen {
                             .ifPresent(knob -> input.startValueDrag(node.id(), knob.param(), mouseY, hasControlDown()));
                 }
             }
-            // Any other click inside this panel (euclid ring, waveform, allowlist rows, empty
-            // space) is swallowed here rather than falling through to the canvas underneath.
+            // Any other click inside this panel (euclid ring, waveform, allowlist/speaker rows,
+            // empty space) is swallowed here rather than falling through to the canvas underneath.
             return true;
         }
         browsing = false;
@@ -433,6 +476,10 @@ public final class GrooveEditorScreen extends Screen {
     public boolean mouseScrolled(double mouseX, double mouseY, double scrollX, double scrollY) {
         if (accessOpen && insideInspector(mouseX, mouseY)) {
             accessScroll = Math.max(0, Math.min(Math.max(0, editorNames.size() - accessRows()), accessScroll - (int) Math.signum(scrollY)));
+            return true;
+        }
+        if (speakersOpen && insideInspector(mouseX, mouseY)) {
+            speakerScroll = Math.max(0, Math.min(Math.max(0, speakerPositions.size() - accessRows()), speakerScroll - (int) Math.signum(scrollY)));
             return true;
         }
         if (!state.selection().isEmpty() && insideInspector(mouseX, mouseY)) {
@@ -540,7 +587,7 @@ public final class GrooveEditorScreen extends Screen {
         return mouseX >= x - 4 && mouseX < width && mouseY >= 26 && mouseY < inspectorBottom;
     }
     private int inspectorCloseX() { return width - 14; }
-    private boolean rightPanelActive() { return accessOpen || !state.selection().isEmpty(); }
+    private boolean rightPanelActive() { return accessOpen || speakersOpen || !state.selection().isEmpty(); }
     private int accessRows() { return Math.max(0, (Math.min(height - 20, 220) - 60 - 60) / 11); }
     private void renderAccessPanel(GuiGraphics graphics, int textColor) {
         int x = Math.max(DRAWER_WIDTH + 10, width - 150);
@@ -557,6 +604,25 @@ public final class GrooveEditorScreen extends Screen {
         }
         String hint = isOwner ? "Click a name; scroll for more" : "Only owner can change access";
         graphics.drawString(font, font.plainSubstrByWidth(hint, width - textX - 8), textX, bottom - 54, 0xffcc66, false);
+    }
+    private void renderSpeakerPanel(GuiGraphics graphics, int textColor) {
+        int x = Math.max(DRAWER_WIDTH + 10, width - 150);
+        int bottom = Math.min(height - 20, 220);
+        renderer.drawPanel(graphics, PanelKind.DRAWER, x - 4, 26, width - (x - 4), bottom - 26);
+        int textX = x + 4;
+        graphics.drawString(font, "Speakers", textX, 34, textColor, false);
+        graphics.drawString(font, "x", inspectorCloseX(), 34, textColor, false);
+        graphics.drawString(font, "Nearby speakers (click to link/unlink)", textX, 48, textColor, false);
+        int y = 60;
+        if (speakerListRequest != null) graphics.drawString(font, "Searching...", textX, y, textColor, false);
+        else if (speakerPositions.isEmpty()) graphics.drawString(font, "No speakers within reach", textX, y, textColor, false);
+        for (int i = speakerScroll; i < Math.min(speakerPositions.size(), speakerScroll + accessRows()); i++) {
+            var pos = speakerPositions.get(i);
+            String label = pos.getX() + ", " + pos.getY() + ", " + pos.getZ() + (speakerLinked.get(i) ? "  [Linked]" : "");
+            int color = speakerLinked.get(i) ? 0x55ff55 : textColor;
+            graphics.drawString(font, font.plainSubstrByWidth(label, width - textX - 8), textX, y, color, false); y += 11;
+        }
+        graphics.drawString(font, "Click a row; scroll for more", textX, bottom - 54, 0xffcc66, false);
     }
     /** Same live-session check render() uses for the "Cycle .. Playing/Stopped" readout,
      *  so the Play/Stop button's icon actually reflects transport state rather than always
