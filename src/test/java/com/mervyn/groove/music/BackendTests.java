@@ -42,6 +42,36 @@ public final class BackendTests {
         }
     }
 
+    private static void knobEntryChecks() {
+        var graph = new Graph(3, java.util.List.of(new Graph.Node("knob", NodeType.LFO,
+                com.mervyn.groove.client.ui.EditorState.defaultParams(NodeType.LFO))), java.util.List.of());
+        var editor = new com.mervyn.groove.client.ui.EditorState(graph);
+        editor.stepKnobValue("knob", NodeParam.SYNC, 1, false);
+        check(editor.node("knob").params().get(NodeParam.SYNC) == 1, "Keyboard can toggle a binary knob");
+        editor.stepKnobValue("knob", NodeParam.SYNC, 1, true);
+        editor.undo();
+        check(editor.node("knob").params().get(NodeParam.SYNC) == 0, "Clamped no-op does not consume an undo slot");
+        editor.stepKnobValue("knob", NodeParam.WAVE, 1, true);
+        check(editor.node("knob").params().get(NodeParam.WAVE) == 1, "Fine stepping moves an integer knob");
+        editor.stepKnobValue("knob", NodeParam.WAVE, -1, true);
+        check(editor.node("knob").params().get(NodeParam.WAVE) == 0, "Fine stepping moves in both directions");
+        for (double invalidValue : new double[] {Double.NaN, Double.POSITIVE_INFINITY, Double.NEGATIVE_INFINITY}) {
+            Graph before = editor.toGraph();
+            invalid(() -> editor.setKnobValue("knob", NodeParam.RATE, invalidValue));
+            check(editor.toGraph().equals(before), "Non-finite direct entry preserves the graph");
+        }
+        double precise = .123456789012345;
+        editor.setKnobValue("knob", NodeParam.RATE, precise);
+        editor.setKnobValue("knob", NodeParam.RATE, Double.parseDouble(Double.toString(precise)));
+        invalid(() -> editor.setKnobValue("knob", NodeParam.RATE, Double.NaN));
+        editor.undo();
+        check(editor.node("knob").params().get(NodeParam.RATE) == 1, "Unchanged and rejected entries do not consume undo");
+        var stepper = new com.mervyn.groove.client.ui.EditorState(new Graph(3,
+                java.util.List.of(new Graph.Node("seq", NodeType.STEP_SEQUENCE, com.mervyn.groove.client.ui.EditorState.defaultParams(NodeType.STEP_SEQUENCE))), java.util.List.of()));
+        stepper.stepKnobValue("seq", NodeParam.STEPS, 1, true);
+        check(stepper.node("seq").params().get(NodeParam.STEPS) == 5, "Small integer ranges support fine keyboard stepping");
+    }
+
     public static void main(String[] args) throws Exception {
         SharedConstants.tryDetectVersion(); Bootstrap.bootStrap();
         for (NodeType type : java.util.List.of(NodeType.ALTERNATE, NodeType.PROBABILITY, NodeType.POLYMETER)) {
@@ -59,6 +89,7 @@ public final class BackendTests {
             } finally { wire.release(); }
         }
         EditorSessionTests.run();
+        knobEntryChecks();
         HeadphoneLinkTests.run();
         SpeakerLinkTests.run();
         catalogUpdateChecks();

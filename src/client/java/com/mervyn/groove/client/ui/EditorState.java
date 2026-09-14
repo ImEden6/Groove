@@ -320,15 +320,29 @@ public final class EditorState {
         double max = clampParam(node.type(), param, Double.MAX_VALUE, node.params());
         double current = node.params().getOrDefault(param, defaultParams(node.type()).getOrDefault(param, 0.0));
         double step = (max - min) * (fine ? 0.002 : 0.02);
-        pushUndo();
-        applyParamValue(nodeId, param, current + Math.signum(direction) * step);
+        // Quantized controls need at least one whole unit or rounding swallows the key.
+        if (integerParam(param)) step = Math.max(1, step);
+        setKnobValue(nodeId, param, current + Math.signum(direction) * step);
     }
 
     /** Direct numeric entry: types straight through the same clamp a drag would apply. */
     public void setKnobValue(String nodeId, String param, double raw) {
-        if (!nodes.containsKey(nodeId)) return;
+        if (!Double.isFinite(raw)) throw new IllegalArgumentException("Enter a finite number");
+        Graph.Node node = nodes.get(nodeId);
+        if (node == null || !displayParams(node).containsKey(param)) return;
+        double value = clampParam(node.type(), param, raw, node.params());
+        if (value == displayParams(node).get(param)) return;
         pushUndo();
-        applyParamValue(nodeId, param, raw);
+        applyParamValue(nodeId, param, value);
+    }
+
+    private static boolean integerParam(String param) {
+        return switch (param) {
+            case NodeParam.SYNC, NodeParam.MODE, NodeParam.WAVE, NodeParam.STEPS,
+                    NodeParam.FRAMES, NodeParam.SEED, NodeParam.STEPS_PER_CYCLE,
+                    NodeParam.PULSES, NodeParam.ROTATION -> true;
+            default -> false;
+        };
     }
 
     /** Units per pixel of vertical drag. Seeds favor auditioning adjacent integer
