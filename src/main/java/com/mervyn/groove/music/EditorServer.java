@@ -51,6 +51,10 @@ public final class EditorServer {
                 accepted = true;
                 message = packet.action() == EditorPackets.COMMIT ? "Committed for the safe downbeat" : "Draft saved";
             } catch (RuntimeException error) {
+                // Validation rejections are expected; retain diagnostics for unexpected failures.
+                if (!(error instanceof IllegalArgumentException))
+                    com.mervyn.groove.GrooveMod.LOGGER.error("Unexpected editor action failure at {} for player {}",
+                            packet.pos(), player.getUUID(), error);
                 message = error.getMessage() != null ? error.getMessage() : "Editor action failed";
             }
             boolean visible = editor != null && editor.canEdit(player.getUUID());
