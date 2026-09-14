@@ -151,7 +151,7 @@ public final class MusicClient {
                     program = prepared.timeline(); sampleStatus = prepared.status();
                     renderer.publish(program);
                     for (Emitter emitter : emitters.values()) emitter.renderer.publish(program);
-                    SampleLibrary.request(prepared.needed());
+                    SampleLibrary.request(prepared.needed(), prepared.status().keySet());
                 });
             } catch (RuntimeException error) {
                 Minecraft.getInstance().execute(() -> { if (ticket == generation) revision = -1; });

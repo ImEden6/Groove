@@ -24,26 +24,44 @@ public final class SampleLibrary {
     private static final ScheduledExecutorService IO = Executors.newSingleThreadScheduledExecutor(task -> {
         Thread t = new Thread(task, "Groove sample IO"); t.setDaemon(true); return t;
     });
-    private static final Set<AssetRef> queued = new LinkedHashSet<>();
+    private static final SampleRequestQueue queued = new SampleRequestQueue();
+    private static SampleInstallStore.Session installSession = new SampleInstallStore.Session();
     private static final Map<AssetRef, Long> failed = new HashMap<>();
     private static AssetRef flight;
+    private static boolean flightIsInstall;
     private static SampleTransfer transfer;
     private static long sentAt, session, nextSendAt;
     private static int retries;
     private static boolean decoding;
     private static volatile Map<AssetRef, String> errors = Map.of();
+    private static volatile Set<AssetRef> remoteAvailable = Set.of();
+    private static volatile Set<AssetRef> graphReferenced = Set.of();
     static {
         try { catalog = SampleCatalog.scan(null); } catch (java.io.IOException impossible) { throw new ExceptionInInitializerError(impossible); }
     }
     public static SampleCatalog catalog() { return catalog; }
     public static Executor executor() { return IO; }
     public static Map<AssetRef, String> errors() { return errors; }
+    public static Set<AssetRef> remoteAvailable() { return remoteAvailable; }
     public static void register() {
         IO.scheduleWithFixedDelay(SampleLibrary::reload, 0, 5, TimeUnit.SECONDS);
         ClientLifecycleEvents.CLIENT_STOPPING.register(client -> IO.shutdownNow());
         ClientPlayConnectionEvents.DISCONNECT.register((handler, client) -> {
-            session++; queued.clear(); failed.clear(); errors = Map.of(); flight = null; transfer = null; decoding = false;
+            installSession.cancel(); installSession = new SampleInstallStore.Session();
+            session++; queued.clear(); failed.clear(); errors = Map.of();
+            flight = null; flightIsInstall = false; transfer = null; decoding = false;
+            remoteAvailable = Set.of(); graphReferenced = Set.of();
             synchronized (REMOTE) { REMOTE.clear(); remoteBytes = 0; }
+        });
+        ClientPlayNetworking.registerGlobalReceiver(MusicPackets.CatalogSnapshot.TYPE, (packet, context) -> {
+            var available = Set.copyOf(packet.assets());
+            remoteAvailable = available;
+            SampleCatalog local = catalog;
+            long missing = available.stream().filter(ref -> local.status(ref) != SampleCatalog.Status.READY).count();
+            if (missing > 0 && context.client().player != null)
+                context.client().player.displayClientMessage(net.minecraft.network.chat.Component.literal(
+                        "Groove: server has " + missing + " custom sample(s) not yet installed. "
+                                + "Run /groove-samples list to browse, /groove-samples install <id> to fetch."), false);
         });
         ClientPlayNetworking.registerGlobalReceiver(MusicPackets.AssetChunk.TYPE, (packet, context) -> {
             if (decoding || !packet.ref().equals(flight)) return;
@@ -60,26 +78,42 @@ public final class SampleLibrary {
             } catch (IllegalArgumentException error) { fail("INVALID_TRANSFER: " + error.getMessage()); }
         });
         ClientTickEvents.END_CLIENT_TICK.register(client -> {
-            if (client.getConnection() == null || decoding || !ClientPlayNetworking.canSend(MusicPackets.AssetRequest.TYPE)) return;
-            if (flight == null && !queued.isEmpty()) {
-                var iterator = queued.iterator(); flight = iterator.next(); iterator.remove();
+            if (client.getConnection() == null || decoding) return;
+            if (flight == null) {
+                var next = queued.poll();
+                if (next == null) return;
+                flight = next.ref(); flightIsInstall = next.install();
                 transfer = null; retries = 0; sentAt = 0;
             }
+            if (flight == null) return;
+            var type = flightIsInstall ? MusicPackets.AssetInstallRequest.TYPE : MusicPackets.AssetRequest.TYPE;
+            if (!ClientPlayNetworking.canSend(type)) { fail("SERVER_TRANSFER_UNSUPPORTED"); return; }
             long now = System.nanoTime();
-            if (flight != null && now >= nextSendAt && (sentAt == 0 || now - sentAt > 2_000_000_000L)) {
+            if (now >= nextSendAt && (sentAt == 0 || now - sentAt > 2_000_000_000L)) {
                 if (++retries > 3) { fail("TRANSFER_TIMEOUT"); return; }
-                ClientPlayNetworking.send(new MusicPackets.AssetRequest(flight, transfer == null ? 0 : transfer.offset()));
+                int offset = transfer == null ? 0 : transfer.offset();
+                ClientPlayNetworking.send(flightIsInstall ? new MusicPackets.AssetInstallRequest(flight, offset) : new MusicPackets.AssetRequest(flight, offset));
                 sentAt = now;
             }
         });
     }
+    private static java.nio.file.Path samplesRoot() { return FabricLoader.getInstance().getGameDir().resolve("groove/samples"); }
+    private static java.nio.file.Path downloadsRoot() { return FabricLoader.getInstance().getGameDir().resolve("groove/downloaded-samples"); }
     public static void reload() {
         try {
-            var root = FabricLoader.getInstance().getGameDir().resolve("groove/samples");
+            var root = samplesRoot();
             Files.createDirectories(root);
-            SampleCatalog next = SampleCatalog.scan(root);
-            boolean changed = !next.entries().stream().map(SampleCatalog.Entry::ref).toList()
-                    .equals(catalog.entries().stream().map(SampleCatalog.Entry::ref).toList());
+            SampleCatalog local = SampleCatalog.scan(root);
+            SampleCatalog downloads;
+            try {
+                SampleInstallStore.requireUnlinked(downloadsRoot());
+                downloads = SampleCatalog.scan(downloadsRoot());
+            } catch (java.io.IOException error) {
+                GrooveMod.LOGGER.warn("Could not scan managed sample downloads", error);
+                downloads = SampleCatalog.scan(null);
+            }
+            SampleCatalog next = SampleCatalog.withDownloads(local, downloads);
+            boolean changed = !next.references().equals(catalog.references());
             catalog = next;
             if (changed) Minecraft.getInstance().execute(MusicClient::refreshSamples);
         } catch (Exception error) { GrooveMod.LOGGER.warn("Could not scan client sample packs", error); }
@@ -89,7 +123,7 @@ public final class SampleLibrary {
         if (hit != null) return hit;
         byte[] data = null;
         SampleCatalog current = catalog;
-        if (current.status(ref) == SampleCatalog.Status.READY) data = current.find(ref.assetId()).bytes();
+        if (current.status(ref) == SampleCatalog.Status.READY) data = current.find(ref).bytes();
         if (data == null) synchronized (REMOTE) { data = REMOTE.get(ref); }
         if (data == null) throw new IllegalArgumentException(current.status(ref).name());
         if (!AssetRef.hash(data).equals(ref.sha256())) throw new IllegalArgumentException("HASH_MISMATCH");
@@ -117,30 +151,60 @@ public final class SampleLibrary {
         var pending = bare.pending() == null ? null : new LiveRenderer.Program(bare.pending().state(), bare.pending().plan(), bank);
         return new Prepared(new LiveRenderer.Timeline(current, pending), Map.copyOf(status), List.copyOf(needed));
     }
-    public static void request(List<AssetRef> needed) {
-        queued.retainAll(needed);
+    public static void request(List<AssetRef> needed, Set<AssetRef> referenced) {
+        // Called only after MusicClient accepts the compiler generation.
+        graphReferenced = Set.copyOf(referenced);
+        queued.retainGraph(needed);
         long now = System.nanoTime();
-        for (AssetRef ref : needed) if (!ref.equals(flight) && queued.size() < 128 && now - failed.getOrDefault(ref, now - 31_000_000_000L) > 30_000_000_000L) queued.add(ref);
+        for (AssetRef ref : needed) if (!ref.equals(flight) && now - failed.getOrDefault(ref, now - 31_000_000_000L) > 30_000_000_000L) queued.add(ref, false);
+    }
+    /** Explicit player-initiated fetch (e.g. /groove-samples install), regardless of graph reference. */
+    public static void install(AssetRef ref) {
+        failed.remove(ref);
+        if (ref.equals(flight)) { flightIsInstall = true; return; }
+        if (!queued.add(ref, true)) throw new IllegalArgumentException("Sample install queue is full");
     }
     private static void completeTransfer(SampleTransfer finished, AssetRef ref, long ticket, Minecraft client) {
         decoding = true;
+        SampleInstallStore.Session origin = installSession;
         IO.execute(() -> {
+            if (origin.cancelled()) return;
             try {
                 byte[] data = finished.finish();
                 SampleData pcm = SampleDecoder.decode(data);
-                client.execute(() -> commitDecodedSample(ticket, ref, pcm, data));
+                String diskFailure = null;
+                if (ref.assetId().startsWith("custom:")) {
+                    try {
+                        var store = new SampleInstallStore(downloadsRoot(),
+                                (long)(SampleCatalog.MAX_TOTAL_BYTES * .9), (int)(SampleCatalog.MAX_ASSETS * .9));
+                        if (!store.install(ref, data, origin, SampleLibrary::protectedInstallIds)) return;
+                        reload();
+                    } catch (Exception diskError) {
+                        diskFailure = "DISK_INSTALL_FAILED: " + diskError.getMessage();
+                        GrooveMod.LOGGER.warn("Could not install sample {} to disk: {}", ref.assetId(), diskError.getMessage());
+                    }
+                }
+                String installError = diskFailure;
+                client.execute(() -> commitDecodedSample(ticket, ref, pcm, data, installError));
             } catch (RuntimeException error) {
                 GrooveMod.LOGGER.warn("Rejected sample {}: {}", ref.assetId(), error.getMessage());
                 client.execute(() -> { if (ticket == session) fail("DECODE_OR_HASH_ERROR: " + error.getMessage()); });
             }
         });
     }
-    private static void commitDecodedSample(long ticket, AssetRef ref, SampleData pcm, byte[] data) {
+    private static Set<String> protectedInstallIds() {
+        Set<String> ids = new HashSet<>();
+        for (AssetRef ref : graphReferenced) ids.add(ref.assetId());
+        for (AssetRef ref : remoteAvailable) ids.add(ref.assetId());
+        return ids;
+    }
+    private static void commitDecodedSample(long ticket, AssetRef ref, SampleData pcm, byte[] data, String installError) {
         if (ticket != session) return;
         CACHE.put(ref.sha256(), pcm);
         remember(ref, data);
         Map<AssetRef, String> updated = new HashMap<>(errors);
-        updated.remove(ref);
+        if (installError == null) updated.remove(ref);
+        else updated.put(ref, installError);
         errors = Map.copyOf(updated);
         failed.remove(ref);
         flight = null;

@@ -26,6 +26,14 @@ public final class SampleCommands {
                     SampleLibrary.catalog().warnings().forEach(message -> ctx.getSource().sendFeedback(Component.literal(message)));
                     return 1;
                 }))
+                .then(literal("install").then(argument("asset", StringArgumentType.greedyString()).executes(ctx -> {
+                    String id = StringArgumentType.getString(ctx, "asset");
+                    var ref = SampleLibrary.remoteAvailable().stream().filter(candidate -> candidate.assetId().equals(id)).findFirst().orElse(null);
+                    if (ref == null) { ctx.getSource().sendError(Component.literal("Not found in server catalog: " + id)); return 0; }
+                    try { SampleLibrary.install(ref); }
+                    catch (IllegalArgumentException error) { ctx.getSource().sendError(Component.literal(error.getMessage())); return 0; }
+                    ctx.getSource().sendFeedback(Component.literal("Installing " + id + "...")); return 1;
+                })))
                 .then(literal("ref").then(argument("asset", StringArgumentType.greedyString()).executes(ctx -> {
                     var entry = SampleLibrary.catalog().find(StringArgumentType.getString(ctx, "asset"));
                     if (entry == null) { ctx.getSource().sendError(Component.literal("Sample not found")); return 0; }
@@ -55,9 +63,15 @@ public final class SampleCommands {
     }
     private static int list(net.fabricmc.fabric.api.client.command.v2.FabricClientCommandSource source, String search) {
         String query = search.toLowerCase(java.util.Locale.ROOT);
-        var matches = SampleLibrary.catalog().entries().stream().filter(e -> e.ref().assetId().contains(query)).toList();
+        var catalog = SampleLibrary.catalog();
+        var matches = catalog.entries().stream().filter(e -> e.ref().assetId().contains(query)).toList();
         matches.stream().limit(20).forEach(e -> source.sendFeedback(Component.literal(e.ref().assetId() + " (" + e.size() + " bytes)")));
-        source.sendFeedback(Component.literal(matches.size() + " matches; showing up to 20")); return 1;
+        var remoteOnly = SampleLibrary.remoteAvailable().stream()
+                .filter(ref -> ref.assetId().contains(query) && catalog.status(ref) != groove.engine.samples.SampleCatalog.Status.READY)
+                .toList();
+        remoteOnly.stream().limit(20).forEach(ref -> source.sendFeedback(Component.literal(ref.assetId() + " (not installed, run install " + ref.assetId() + ")")));
+        source.sendFeedback(Component.literal(matches.size() + " local match(es), " + remoteOnly.size()
+                + " available on the server not yet installed; showing up to 20 each")); return 1;
     }
     public static void stop() {
         auditionTicket++;
