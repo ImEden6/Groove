@@ -9,8 +9,56 @@ import net.minecraft.server.Bootstrap;
 import java.util.UUID;
 
 public final class BackendTests {
+    private static void catalogUpdateChecks() throws Exception {
+        var root = java.nio.file.Files.createTempDirectory("groove-catalog-updates-");
+        var file = root.resolve("kick.wav");
+        var sent = new java.util.ArrayList<MusicPackets.CatalogSnapshot>();
+        try {
+            var empty = groove.engine.samples.SampleCatalog.scan(root);
+            // Models connected players whose JOIN ran before any scan was available.
+            SampleServer.updateCatalog(empty, sent::add);
+            check(sent.size() == 1 && sent.getFirst().assets().isEmpty(), "First scan announces even an empty catalog");
+            SampleServer.updateCatalog(empty, sent::add);
+            check(sent.size() == 1, "Unchanged scans do not broadcast");
+            java.nio.file.Files.write(file, groove.engine.samples.FactorySamples.bytes("factory:basic/kick.wav"));
+            var added = groove.engine.samples.SampleCatalog.scan(root);
+            SampleServer.updateCatalog(added, sent::add);
+            check(sent.size() == 2 && sent.getLast().assets().equals(java.util.List.of(added.find("custom:kick.wav").ref())),
+                    "New samples reach existing players without factory entries");
+            check(SampleServer.catalogSnapshot(added).equals(sent.getLast()), "Later joins receive the current listing");
+            java.nio.file.Files.write(file, groove.engine.samples.FactorySamples.bytes("factory:basic/snare.wav"));
+            SampleServer.updateCatalog(groove.engine.samples.SampleCatalog.scan(root), sent::add);
+            check(sent.size() == 3 && !sent.get(1).assets().equals(sent.getLast().assets()), "Changed hashes are republished");
+            java.nio.file.Files.delete(file);
+            SampleServer.updateCatalog(groove.engine.samples.SampleCatalog.scan(root), sent::add);
+            check(sent.size() == 4 && sent.getLast().assets().isEmpty(), "Removal clears remote availability");
+            var mutable = new java.util.ArrayList<>(sent.get(1).assets());
+            var packet = new MusicPackets.CatalogSnapshot(mutable);
+            mutable.clear();
+            check(packet.assets().size() == 1, "Catalog packets own immutable snapshots");
+        } finally {
+            java.nio.file.Files.deleteIfExists(file);
+            java.nio.file.Files.delete(root);
+        }
+    }
+
     public static void main(String[] args) throws Exception {
         SharedConstants.tryDetectVersion(); Bootstrap.bootStrap();
+        for (NodeType type : java.util.List.of(NodeType.ALTERNATE, NodeType.PROBABILITY, NodeType.POLYMETER)) {
+            Graph musical = new Graph(3, java.util.List.of(new Graph.Node("tone", NodeType.TONE, java.util.Map.of()),
+                    new Graph.Node("pattern", type, com.mervyn.groove.client.ui.EditorState.defaultParams(type)),
+                    new Graph.Node("out", NodeType.OUTPUT, java.util.Map.of())),
+                    java.util.List.of(Graph.edge("tone", "pattern"), Graph.edge("pattern", "out")));
+            check(GraphJson.decode(GraphJson.encode(musical)).equals(musical), "Musical nodes preserve saved parameters");
+            GraphCompiler.compile(musical);
+            var packet = new MusicPackets.Snapshot(UUID.randomUUID(), new SessionTimeline(musical,120,0).snapshot(0));
+            RegistryFriendlyByteBuf wire = new RegistryFriendlyByteBuf(Unpooled.buffer(), RegistryAccess.EMPTY);
+            try {
+                MusicPackets.Snapshot.CODEC.encode(wire,packet);
+                check(MusicPackets.Snapshot.CODEC.decode(wire).equals(packet), "Musical nodes survive snapshot packets");
+            } finally { wire.release(); }
+        }
+        catalogUpdateChecks();
         persistenceChecks();
         typedCompatibilityChecks();
         signalChecks();
@@ -106,6 +154,28 @@ public final class BackendTests {
             check(buf.readableBytes() == 0, "Asset decoder consumes packet exactly");
             invalid(() -> new MusicPackets.AssetChunk(ref, 0, 0, data));
             invalid(() -> new MusicPackets.AssetRequest(ref, -1));
+            buf.clear();
+            var emptySnapshot = new MusicPackets.CatalogSnapshot(java.util.List.of());
+            MusicPackets.CatalogSnapshot.CODEC.encode(buf, emptySnapshot);
+            check(MusicPackets.CatalogSnapshot.CODEC.decode(buf).equals(emptySnapshot), "Empty catalog snapshot round trip");
+            buf.clear();
+            var typicalSnapshot = new MusicPackets.CatalogSnapshot(java.util.List.of(ref,
+                    new groove.engine.samples.AssetRef("custom:kit/snare.wav", ref.sha256())));
+            MusicPackets.CatalogSnapshot.CODEC.encode(buf, typicalSnapshot);
+            check(MusicPackets.CatalogSnapshot.CODEC.decode(buf).equals(typicalSnapshot), "Typical catalog snapshot round trip");
+            buf.clear();
+            var maxAssets = new java.util.ArrayList<groove.engine.samples.AssetRef>();
+            for (int i = 0; i < groove.engine.samples.SampleCatalog.MAX_ASSETS; i++)
+                maxAssets.add(new groove.engine.samples.AssetRef("custom:kit/sample" + i + ".wav", ref.sha256()));
+            var maxSnapshot = new MusicPackets.CatalogSnapshot(maxAssets);
+            MusicPackets.CatalogSnapshot.CODEC.encode(buf, maxSnapshot);
+            check(MusicPackets.CatalogSnapshot.CODEC.decode(buf).equals(maxSnapshot), "Catalog snapshot round trip at the MAX_ASSETS boundary");
+            invalid(() -> { maxAssets.add(new groove.engine.samples.AssetRef("custom:kit/overflow.wav", ref.sha256())); new MusicPackets.CatalogSnapshot(maxAssets); });
+            buf.clear();
+            var install = new MusicPackets.AssetInstallRequest(ref, 0);
+            MusicPackets.AssetInstallRequest.CODEC.encode(buf, install);
+            check(MusicPackets.AssetInstallRequest.CODEC.decode(buf).equals(install), "Asset install request round trip");
+            invalid(() -> new MusicPackets.AssetInstallRequest(ref, -1));
         } finally { buf.release(); }
         System.out.println("Passed graph JSON and Minecraft packet checks.");
     }
