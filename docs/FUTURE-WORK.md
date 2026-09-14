@@ -21,7 +21,7 @@ Ranked by impact on gameplay, creative expressiveness, and multiplayer usability
 | **1** | **Headphone Item** | **95** | Medium | Gameplay & Audio | Item, Trinkets equip slot, priority routing over speaker/positional audio, and per-editor live draft monitoring while linked and in range have landed. Remaining: a true `AL_SOURCE_RELATIVE` head-locked sink and underwater muffling. | Partial |
 | **2** | **Server Resourcepack Distribution** | **80** | High | Multiplayer UX | Full catalog browsing on join plus a permission-gated `/groove-samples install <id>` with disk persistence and eviction have landed. Remaining: no automatic bulk push of everything to every player (a deliberate scope choice), and no vanilla-resource-pack-style compressed bundle transfer. | Partial |
 | **3** | **Sample Drawer Hierarchy & Favorites** | **75** | Low–Medium | Editor UX | Speeds up browsing large custom sample packs beyond a flat list. | Open |
-| **4** | **Direct Entry & Keyboard Controls for Knobs** | **70** | Low | Accessibility & UX | Precision value entry and arrow-key stepping without pixel-hunting rotary drags. | Open |
+| **4** | **Direct Entry & Keyboard Controls for Knobs** | **70** | Low | Accessibility & UX | Precision value entry and arrow-key stepping without pixel-hunting rotary drags. | Implemented |
 | **5** | **Workstation "In-Use" / Merge UI** | **60** | Medium | Multiplayer UX | Clear player feedback when multiple users attempt simultaneous sequencer edits (exclusive edit lock vs. optimistic conflict resolution). | Open |
 | **6** | **Master Peak Limiter Test Suite** | **50** | Low | Audio Safety | Automated verification that adversarial DSP graphs cannot distort or clip past safety ceilings beyond `tanh`. | Open |
 | **7** | **Cable Pulse Animation Toggle** | **45** | Low | Accessibility | Option to reduce visual motion / flashing during fast BPM sessions. | Open |
@@ -71,7 +71,7 @@ The following items from earlier roadmaps are fully implemented and verified in 
 
 ## Editor UI (Remaining)
 
-- **Rotary knob keyboard & direct entry.** Sprite-backed rotary controls support vertical dragging, fine adjustment via Ctrl, and undo/redo. Keyboard focus navigation, arrow-key stepping, and direct numeric text entry remain future work.
+- **Rotary knob keyboard & direct entry have landed.** Sprite-backed rotary controls support vertical dragging, fine adjustment via Ctrl, and undo/redo. Clicking a knob (or Up/Down once a node is selected) gives it keyboard focus, shown as an outline; Left/Right steps its value by a percentage of the param's actual range (Ctrl for a finer step), and Enter opens a numeric entry field that types an exact value straight through the same clamp a drag would apply. Each step or entry is its own undo entry.
 - **Sample drawer polish.** The sample drawer is currently a flat scrollable/filterable list. Favorites, an animated/resizable drawer panel, vanilla sound-event indexing, and hierarchical pack-tree navigation are deferred.
 - **No concurrent-draft merging.** Block editors use last-write-wins shared drafts, with stale-revision rejection at Commit. The legacy global session still accepts one pending edit at a time. Automatic graph merging is not planned by the block design.
 - **Sample CRC mismatch warning on node cards.** Missing-asset detection functions correctly via `SampleCatalog.Status` and inspector status text, but there is no visual hazard-stripe overlay rendered directly across the node card body for missing samples (only the theme's fallback texture is substituted).

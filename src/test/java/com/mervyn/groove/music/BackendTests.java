@@ -226,6 +226,23 @@ public final class BackendTests {
         double fineMoved = editor.node("sensitivity_test").params().get(NodeParam.FREQUENCY) - coarseMoved - 220.0;
         check(Math.abs(fineMoved) < Math.abs(coarseMoved), "Ctrl (fine) drag moves less than an unmodified drag");
         editor.endValueDrag();
+
+        // Keyboard stepping and direct entry share dragValueTo's clamp path.
+        double beforeKeyStep = editor.node("sensitivity_test").params().get(NodeParam.FREQUENCY);
+        editor.stepKnobValue("sensitivity_test", NodeParam.FREQUENCY, 1, false);
+        double coarseKeyStep = editor.node("sensitivity_test").params().get(NodeParam.FREQUENCY) - beforeKeyStep;
+        check(coarseKeyStep > 0, "A right/up keyboard step increases the value");
+        check(coarseKeyStep > 10, "A coarse keyboard step covers a meaningful fraction of the range");
+        editor.stepKnobValue("sensitivity_test", NodeParam.FREQUENCY, -1, true);
+        double fineKeyStep = editor.node("sensitivity_test").params().get(NodeParam.FREQUENCY) - (beforeKeyStep + coarseKeyStep);
+        check(fineKeyStep < 0 && Math.abs(fineKeyStep) < coarseKeyStep, "Ctrl (fine) keyboard step moves less than a coarse one, in the opposite direction");
+        editor.undo(); editor.undo();
+        check(editor.node("sensitivity_test").params().get(NodeParam.FREQUENCY) == beforeKeyStep, "Each keyboard step is its own undo entry");
+        editor.setKnobValue("sensitivity_test", NodeParam.FREQUENCY, 999999);
+        check(editor.node("sensitivity_test").params().get(NodeParam.FREQUENCY) == 16000.0, "Direct numeric entry clamps out-of-range input the same way a drag does");
+        editor.undo();
+        check(editor.node("sensitivity_test").params().get(NodeParam.FREQUENCY) == beforeKeyStep, "Direct numeric entry is a single undo step");
+
         check(com.mervyn.groove.client.ui.EditorState.clampParam(NodeType.GENERATOR_SAMPLE, NodeParam.PITCH_RATIO, 8.0, java.util.Map.of()) == 4.0,
                 "pitchRatio clamp matches the engine's actual 0.25..4 range");
         check(com.mervyn.groove.client.ui.EditorState.clampParam(NodeType.GENERATOR_SAMPLE, NodeParam.PITCH_RATIO, 0.1, java.util.Map.of()) == 0.25,
@@ -273,6 +290,13 @@ public final class BackendTests {
         check(editor.node("euclid_test").params().get(NodeParam.STEPS) == 16.0
                 && editor.node("euclid_test").params().get(NodeParam.PULSES) == 16.0,
                 "Undo restores both steps and pulses together");
+        editor.stepKnobValue("euclid_test", NodeParam.STEPS, -1, false);
+        check(editor.node("euclid_test").params().get(NodeParam.STEPS) == 15.0, "Keyboard step shrinks Euclid steps");
+        check(editor.node("euclid_test").params().get(NodeParam.PULSES) == 15.0, "Keyboard step on steps also clamps pulses down");
+        editor.undo();
+        check(editor.node("euclid_test").params().get(NodeParam.STEPS) == 16.0
+                && editor.node("euclid_test").params().get(NodeParam.PULSES) == 16.0,
+                "Undo restores a keyboard-stepped Euclid coupling");
 
         var controller = new com.mervyn.groove.client.ui.InputController(editor);
         editor.openQuickSpawn(new com.mervyn.groove.client.ui.Vec2(500, 200));

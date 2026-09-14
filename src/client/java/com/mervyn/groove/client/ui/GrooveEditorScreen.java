@@ -78,6 +78,8 @@ public final class GrooveEditorScreen extends Screen {
     private boolean confirmClose;
     private int knobScroll;
     private String knobNode;
+    private String focusedKnobParam;
+    private EditBox knobEntry;
     private final SampleSearch sampleSearch = new SampleSearch();
 
     public GrooveEditorScreen(Graph graph) { this(graph, new NoOpThemeRenderer()); }
@@ -207,11 +209,11 @@ public final class GrooveEditorScreen extends Screen {
         search.visible = drawer; addRenderableWidget(search);
 
         ThemedButton access = new ThemedButton(245, 2, 50, 20, Component.literal("Access"), font, theme, textColor,
-                b -> { accessOpen = !accessOpen; speakersOpen = false; if (accessOpen) state.clearSelection(); layoutAllowlist(); });
+                b -> { accessOpen = !accessOpen; speakersOpen = false; if (accessOpen) { state.clearSelection(); hideKnobEntry(); } layoutAllowlist(); });
         access.visible = blockSession != null; addRenderableWidget(access);
         ThemedButton speakers = new ThemedButton(299, 2, 64, 20, Component.literal("Speakers"), font, theme, textColor,
                 b -> { speakersOpen = !speakersOpen; accessOpen = false; layoutAllowlist();
-                    if (speakersOpen) { state.clearSelection(); fetchSpeakers(); } });
+                    if (speakersOpen) { state.clearSelection(); hideKnobEntry(); fetchSpeakers(); } });
         speakers.visible = blockSession != null; addRenderableWidget(speakers);
         int x = Math.max(DRAWER_WIDTH + 10, width - 150) + 4;
         int bottom = Math.min(height - 20, 220);
@@ -223,6 +225,9 @@ public final class GrooveEditorScreen extends Screen {
         allowlistRemove = new ThemedButton(x + (width - x - 12) / 2 + 4, bottom - 20, (width - x - 12) / 2, 18, Component.literal("Remove"), font, theme, textColor, b -> sendAllowlist(false));
         addRenderableWidget(allowlistRemove);
         layoutAllowlist();
+        // Shares allowlistName's slot: never visible together, since opening Access clears selection.
+        knobEntry = new EditBox(font, x, bottom - 40, width - x - 8, 18, Component.literal("Value"));
+        knobEntry.setMaxLength(20); knobEntry.visible = false; addRenderableWidget(knobEntry);
     }
     private void layoutAllowlist() {
         boolean visible = accessOpen && blockSession != null;
@@ -368,7 +373,8 @@ public final class GrooveEditorScreen extends Screen {
             graphics.enableScissor(x, knobTop(node), width - 4, knobBottom());
             for (var knob : knobs(node)) {
                 knob.draw(graphics, font, renderer.themeName(), textColor, node,
-                        EditorState.displayParams(node).get(knob.param()), mouseX, mouseY);
+                        EditorState.displayParams(node).get(knob.param()), mouseX, mouseY,
+                        knob.param().equals(focusedKnobParam));
             }
             graphics.disableScissor();
             graphics.drawString(font, "Drag / Ctrl: fine", textX, inspectorBottom - 12, textColor, false);
@@ -399,6 +405,7 @@ public final class GrooveEditorScreen extends Screen {
     public boolean mouseClicked(double mouseX, double mouseY, int button) {
         if (super.mouseClicked(mouseX, mouseY, button)) return true;
         search.setFocused(false); bpm.setFocused(false); setFocused(null);
+        hideKnobEntry();
         if (state.isQuickSpawnOpen()) {
             Vec2 screen = state.toScreen(state.quickSpawnAt());
             int rows = (SPAWNABLE_TYPES.size()+1)/2;
@@ -447,7 +454,10 @@ public final class GrooveEditorScreen extends Screen {
                 browsing = false;
                 if (button == 0 && mouseY >= knobTop(node) && mouseY < knobBottom()) {
                     knobs(node).stream().filter(knob -> knob.contains(mouseX, mouseY)).findFirst()
-                            .ifPresent(knob -> input.startValueDrag(node.id(), knob.param(), mouseY, hasControlDown()));
+                            .ifPresent(knob -> {
+                                focusedKnobParam = knob.param();
+                                input.startValueDrag(node.id(), knob.param(), mouseY, hasControlDown());
+                            });
                 }
             }
             // Any other click inside this panel (euclid ring, waveform, allowlist/speaker rows,
@@ -520,6 +530,11 @@ public final class GrooveEditorScreen extends Screen {
             if (keyCode == GLFW.GLFW_KEY_ESCAPE) { allowlistName.setFocused(false); setFocused(null); return true; }
             return super.keyPressed(keyCode, scanCode, modifiers);
         }
+        if (knobEntry != null && knobEntry.visible && knobEntry.isFocused()) {
+            if (keyCode == GLFW.GLFW_KEY_ESCAPE) { hideKnobEntry(); return true; }
+            if (keyCode == GLFW.GLFW_KEY_ENTER) { commitKnobEntry(); return true; }
+            return super.keyPressed(keyCode, scanCode, modifiers);
+        }
         if (keyCode == GLFW.GLFW_KEY_B && hasControlDown()) { drawer = !drawer; search.visible = drawer; search.setFocused(false); return true; }
         if (state.isQuickSpawnOpen()) {
             if (keyCode == GLFW.GLFW_KEY_UP) { quickSpawnSelected = Math.max(0, quickSpawnSelected - 1); return true; }
@@ -545,8 +560,42 @@ public final class GrooveEditorScreen extends Screen {
             }
             return true;
         }
+        if (!accessOpen && !speakersOpen && !state.isQuickSpawnOpen() && !state.selection().isEmpty()
+                && (keyCode == GLFW.GLFW_KEY_UP || keyCode == GLFW.GLFW_KEY_DOWN
+                    || keyCode == GLFW.GLFW_KEY_LEFT || keyCode == GLFW.GLFW_KEY_RIGHT || keyCode == GLFW.GLFW_KEY_ENTER)) {
+            var node = state.node(state.selection().iterator().next());
+            var params = new java.util.ArrayList<>(EditorState.displayParams(node).keySet());
+            if (!params.isEmpty()) {
+                if (focusedKnobParam == null || !params.contains(focusedKnobParam)) focusedKnobParam = params.get(0);
+                int index = params.indexOf(focusedKnobParam);
+                if (keyCode == GLFW.GLFW_KEY_UP || keyCode == GLFW.GLFW_KEY_DOWN) {
+                    focusedKnobParam = params.get(Math.max(0, Math.min(params.size() - 1, index + (keyCode == GLFW.GLFW_KEY_DOWN ? 1 : -1))));
+                    scrollKnobIntoView(node, focusedKnobParam);
+                } else if (keyCode == GLFW.GLFW_KEY_LEFT || keyCode == GLFW.GLFW_KEY_RIGHT) {
+                    state.stepKnobValue(node.id(), focusedKnobParam, keyCode == GLFW.GLFW_KEY_RIGHT ? 1 : -1, hasControlDown());
+                } else {
+                    openKnobEntry(node, focusedKnobParam);
+                }
+                return true;
+            }
+        }
         if (keyCode == GLFW.GLFW_KEY_SPACE) input.spaceKeyChanged(true);
         return fromKeyCode(keyCode).map(key -> input.keyDown(key, hasControlDown(), hasShiftDown(), false)).orElse(false);
+    }
+    private void commitKnobEntry() {
+        try {
+            double value = Double.parseDouble(knobEntry.getValue().trim());
+            if (focusedKnobParam != null && !state.selection().isEmpty())
+                state.setKnobValue(state.selection().iterator().next(), focusedKnobParam, value);
+            hideKnobEntry();
+        } catch (NumberFormatException ignored) { /* leave the field open so the user can fix it */ }
+    }
+    private void openKnobEntry(Graph.Node node, String param) {
+        double value = EditorState.displayParams(node).getOrDefault(param, 0.0);
+        knobEntry.setValue(value == Math.rint(value) ? Long.toString((long) value) : String.format(java.util.Locale.ROOT, "%.4f", value));
+        knobEntry.visible = true;
+        setFocused(knobEntry);
+        knobEntry.setFocused(true);
     }
 
     @Override
@@ -565,9 +614,26 @@ public final class GrooveEditorScreen extends Screen {
     }
     private int knobBottom() { return Math.max(50, Math.min(height - 20, 220) - 18); }
     private void clampKnobScroll(Graph.Node node) {
-        if (!node.id().equals(knobNode)) { knobNode = node.id(); knobScroll = 0; }
+        if (!node.id().equals(knobNode)) { knobNode = node.id(); knobScroll = 0; focusedKnobParam = null; hideKnobEntry(); }
         int contentHeight = ((EditorState.displayParams(node).size() + 1) / 2) * RotaryKnob.HEIGHT;
         knobScroll = Math.max(0, Math.min(knobScroll, Math.max(0, contentHeight - (knobBottom() - knobTop(node)))));
+    }
+    private void hideKnobEntry() {
+        if (!knobEntry.visible) return;
+        knobEntry.visible = false;
+        if (knobEntry.isFocused()) { knobEntry.setFocused(false); setFocused(null); }
+    }
+    /** Scrolls the focused knob's row into view after Up/Down moves focus, same clamp
+     *  {@link #clampKnobScroll} uses for the mouse wheel. */
+    private void scrollKnobIntoView(Graph.Node node, String param) {
+        var params = EditorState.displayParams(node);
+        int index = new java.util.ArrayList<>(params.keySet()).indexOf(param);
+        if (index < 0) return;
+        int rowTop = (index / 2) * RotaryKnob.HEIGHT, rowBottom = rowTop + RotaryKnob.HEIGHT;
+        int visible = knobBottom() - knobTop(node);
+        if (rowTop < knobScroll) knobScroll = rowTop;
+        else if (rowBottom - knobScroll > visible) knobScroll = rowBottom - visible;
+        clampKnobScroll(node);
     }
     private List<RotaryKnob> knobs(Graph.Node node) {
         clampKnobScroll(node);

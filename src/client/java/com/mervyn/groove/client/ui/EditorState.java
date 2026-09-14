@@ -289,20 +289,47 @@ public final class EditorState {
         if (valueDrag == null) return;
         double scale = sensitivity(valueDrag.param()) * (valueDrag.fine() ? 0.1 : 1.0);
         double delta = (valueDrag.startPointerY() - pointerY) * scale;
-        Graph.Node node = nodes.get(valueDrag.nodeId());
+        applyParamValue(valueDrag.nodeId(), valueDrag.param(), valueDrag.startValue() + delta);
+    }
+    public void endValueDrag() { valueDrag = null; }
+    public boolean isValueDragging() { return valueDrag != null; }
+
+    /** Clamps {@code raw} into the node's params, keeping Euclid's pulses coupled to steps,
+     *  and marks the graph dirty. Shared tail for drag, keyboard stepping, and direct entry. */
+    private void applyParamValue(String nodeId, String param, double raw) {
+        Graph.Node node = nodes.get(nodeId);
         if (node == null) return;
         Map<String, Double> params = new LinkedHashMap<>(node.params());
-        double raw = valueDrag.startValue() + delta;
-        params.put(valueDrag.param(), clampParam(node.type(), valueDrag.param(), raw, params));
-        if (node.type() == NodeType.EUCLID && valueDrag.param().equals(NodeParam.STEPS)) {
+        params.put(param, clampParam(node.type(), param, raw, params));
+        if (node.type() == NodeType.EUCLID && param.equals(NodeParam.STEPS)) {
             params.put(NodeParam.PULSES, Math.min(params.get(NodeParam.STEPS),
                     params.getOrDefault(NodeParam.PULSES, defaultParams(NodeType.EUCLID).get(NodeParam.PULSES))));
         }
         nodes.put(node.id(), new Graph.Node(node.id(), node.type(), params, node.sample(), node.birthNanos()));
         markDirty();
     }
-    public void endValueDrag() { valueDrag = null; }
-    public boolean isValueDragging() { return valueDrag != null; }
+
+    /** Arrow-key nudge for a keyboard-focused knob: one press is one undo step, sized as a
+     *  fraction of the param's actual clamp range so it works for both a 0..1 gain and a
+     *  20..16000 Hz frequency. {@code clampParam}'s own rounding (steps/pulses/wave/seed/etc.
+     *  are integers) quantizes the result automatically, so no per-param step table is needed. */
+    public void stepKnobValue(String nodeId, String param, int direction, boolean fine) {
+        Graph.Node node = nodes.get(nodeId);
+        if (node == null || direction == 0) return;
+        double min = clampParam(node.type(), param, -Double.MAX_VALUE, node.params());
+        double max = clampParam(node.type(), param, Double.MAX_VALUE, node.params());
+        double current = node.params().getOrDefault(param, defaultParams(node.type()).getOrDefault(param, 0.0));
+        double step = (max - min) * (fine ? 0.002 : 0.02);
+        pushUndo();
+        applyParamValue(nodeId, param, current + Math.signum(direction) * step);
+    }
+
+    /** Direct numeric entry: types straight through the same clamp a drag would apply. */
+    public void setKnobValue(String nodeId, String param, double raw) {
+        if (!nodes.containsKey(nodeId)) return;
+        pushUndo();
+        applyParamValue(nodeId, param, raw);
+    }
 
     /** Units per pixel of vertical drag. Seeds favor auditioning adjacent integer
      *  variations; continuous parameters favor a comfortable range sweep. */

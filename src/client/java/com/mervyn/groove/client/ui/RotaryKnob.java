@@ -17,8 +17,15 @@ public record RotaryKnob(String param, int x, int y, int width) {
     }
 
     public void draw(GuiGraphics graphics, Font font, String theme, int color,
-                     Graph.Node node, double value, int mouseX, int mouseY) {
+                     Graph.Node node, double value, int mouseX, int mouseY, boolean focused) {
         if (contains(mouseX, mouseY)) graphics.fill(x, y, x + width, y + HEIGHT, 0x20ffffff);
+        if (focused) {
+            // A thin outline so keyboard focus is visible even when the mouse isn't hovering.
+            graphics.fill(x, y, x + width, y + 1, 0xffffffff);
+            graphics.fill(x, y + HEIGHT - 1, x + width, y + HEIGHT, 0xffffffff);
+            graphics.fill(x, y, x + 1, y + HEIGHT, 0xffffffff);
+            graphics.fill(x + width - 1, y, x + width, y + HEIGHT, 0xffffffff);
+        }
         String label = font.plainSubstrByWidth(param, Math.max(0, width - 4));
         graphics.drawString(font, label, x + (width - font.width(label)) / 2, y, color, false);
         int left = x + (width - SIZE) / 2;
