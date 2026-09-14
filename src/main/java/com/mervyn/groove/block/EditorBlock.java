@@ -13,8 +13,7 @@ import net.minecraft.world.item.context.BlockPlaceContext;
 
 /**
  * Placeable, silent authoring/UI trigger for one independent editor session.
- * See docs/EDITOR-BLOCK-DESIGN.md; the session/draft/commit/ACL state this
- * design calls for is not implemented yet.
+ * Session data is stored in the block entity; audio connections are separate.
  */
 public final class EditorBlock extends HorizontalDirectionalBlock implements EntityBlock {
     private static final MapCodec<EditorBlock> CODEC = simpleCodec(EditorBlock::new);
@@ -24,6 +23,10 @@ public final class EditorBlock extends HorizontalDirectionalBlock implements Ent
         registerDefaultState(stateDefinition.any().setValue(FACING, Direction.NORTH));
     }
 
+    @Override public void setPlacedBy(net.minecraft.world.level.Level level, BlockPos pos, BlockState state, net.minecraft.world.entity.LivingEntity placer, net.minecraft.world.item.ItemStack stack) {
+        super.setPlacedBy(level, pos, state, placer, stack);
+        if (!level.isClientSide && placer != null && level.getBlockEntity(pos) instanceof EditorBlockEntity editor) editor.setOwner(placer.getUUID());
+    }
     @Override protected MapCodec<EditorBlock> codec() { return CODEC; }
 
     @Override

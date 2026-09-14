@@ -59,7 +59,9 @@ public final class GraphJson {
     public static String encode(Graph graph) { return GSON.toJson(graph); }
     /** Explicit canonical import; decode itself remains lossless for stored and wire snapshots. */
     public static Graph decodeCurrent(String json) { return decode(json).toV3(); }
-    public static Graph decode(String json) {
+    public static Graph decode(String json) { return decode(json, true); }
+    public static Graph decodeDraft(String json) { return decode(json, false); }
+    private static Graph decode(String json, boolean compile) {
         if (json.length() > MAX_LENGTH) throw new IllegalArgumentException("Patch exceeds 32 KiB characters");
         int depth = 0;
         boolean string = false, escape = false;
@@ -77,7 +79,16 @@ public final class GraphJson {
         try {
             Graph graph = GSON.fromJson(json, Graph.class);
             if (graph == null) throw new IllegalArgumentException("Empty patch");
-            GraphCompiler.compile(graph);
+            if (compile) GraphCompiler.compile(graph);
+            else {
+                if (graph.version() < 1 || graph.version() > Graph.CURRENT_VERSION || graph.nodes().size() > 64 || graph.edges().size() > 128) throw new IllegalArgumentException("Invalid draft bounds");
+                var ids = new java.util.HashSet<String>();
+                for (var node : graph.nodes()) {
+                    if (node.id() == null || !node.id().matches("[a-zA-Z0-9_-]{1,32}") || node.type() == null || !ids.add(node.id())) throw new IllegalArgumentException("Invalid draft node");
+                    if (node.params().size() > 8 || node.params().values().stream().anyMatch(v -> !Double.isFinite(v))) throw new IllegalArgumentException("Invalid draft parameters");
+                }
+                for (var edge : graph.edges()) if (!ids.contains(edge.fromNode()) || !ids.contains(edge.toNode()) || edge.fromPort() == null || edge.toPort() == null) throw new IllegalArgumentException("Invalid draft edge");
+            }
             return graph;
         } catch (RuntimeException error) {
             throw new IllegalArgumentException("Invalid patch: " + error.getMessage(), error);

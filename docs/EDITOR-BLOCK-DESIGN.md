@@ -7,13 +7,18 @@ for how this relates to the currently-tracked "no live draft-graph monitoring
 through headphones" and "no per-player editors/sessions" gaps, both of which
 this design closes.
 
-**Landed so far:** `GrooveBlocks.EDITOR` is a placeable, silent block
-(`EditorBlock`/`EditorBlockEntity`) with its own textures/model, and
-right-clicking it opens the editor GUI (`EditorBlockInteraction`). Everything
-else below — independent sessions, draft vs. committed, permissions,
-headphone/speaker binding, retiring the monitor stream — is not built yet:
-the block currently just opens the same one global session `/groove-editor`
-already did.
+**Landed so far:** Each placed editor now owns an independent, persistent session.
+Right-click requests that block's draft from the server. Draft edits autosave,
+including unfinished wiring; Commit validates and queues a separate published
+patch for the safe downbeat. Ownership, a persisted allowlist API, player-break
+protection, and last-write-wins draft updates are implemented. Draft revisions
+survive chunk reloads. A replacement block gets a new session identity.
+
+**Still pending:** The allowlist management UI, headphone and speaker binding,
+audio routing to these sessions, link cleanup, and retirement of the legacy
+monitor stream. `/groove-editor` and `/groove` still operate the legacy global
+session. Existing editor blocks without a recorded owner can be claimed by an
+operator opening them; newly placed blocks record their placer automatically.
 
 ## Summary of the current state (before this design)
 

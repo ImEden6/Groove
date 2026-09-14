@@ -73,7 +73,7 @@ The following items from earlier roadmaps are fully implemented and verified in 
 
 - **Rotary knob keyboard & direct entry.** Sprite-backed rotary controls support vertical dragging, fine adjustment via Ctrl, and undo/redo. Keyboard focus navigation, arrow-key stepping, and direct numeric text entry remain future work.
 - **Sample drawer polish.** The sample drawer is currently a flat scrollable/filterable list. Favorites, an animated/resizable drawer panel, vanilla sound-event indexing, and hierarchical pack-tree navigation are deferred.
-- **No concurrent-draft merging.** The server maintains one shared session and accepts one pending edit at a time; concurrent edits from another player are rejected rather than merged. An explicit "workstation in use by [Player]" indicator or optimistic merge UI is not built yet.
+- **No concurrent-draft merging.** Block editors use last-write-wins shared drafts, with stale-revision rejection at Commit. The legacy global session still accepts one pending edit at a time. Automatic graph merging is not planned by the block design.
 - **Sample CRC mismatch warning on node cards.** Missing-asset detection functions correctly via `SampleCatalog.Status` and inspector status text, but there is no visual hazard-stripe overlay rendered directly across the node card body for missing samples (only the theme's fallback texture is substituted).
 
 ## Server Sync & Multiplayer (Remaining)
@@ -81,7 +81,7 @@ The following items from earlier roadmaps are fully implemented and verified in 
 - **No automatic resync tuning beyond fixed thresholds.** Transport clock synchronization operates via documented slew and step thresholds ([BACKEND-USAGE.md](BACKEND-USAGE.md)), but adaptive PID/slew tuning under asymmetric or high-jitter network conditions has not been implemented.
 - **No server-side chunk-unload or distance culling for audio state.** The session is server-wide and persistent, decoupled from individual chunk lifecycles or entity unload events.
 - **GC pressure reduction.** The DSP mixer avoids per-render allocations, but pattern queries and the Minecraft audio stream adapter still allocate temporary buffers per tick/block.
-- **No per-player editors/sessions.** There is one server-wide shared session and patch; giving each player their own independent editor/draft graph is a future architecture change, not just a routing tweak. A placeable `GrooveBlocks.EDITOR` block now exists and opens the editor GUI on right-click, but it still points at the same single global session — it does not yet own an independent draft/committed graph or permissions. See [EDITOR-BLOCK-DESIGN.md](EDITOR-BLOCK-DESIGN.md) for the proposed design and what remains.
+- **Block-session audio routing and ACL UI remain.** Placed editors now own independent persistent draft/committed sessions, ownership, and an allowlist API. The allowlist UI, headphone/speaker connections, and retirement of global playback remain. See [EDITOR-BLOCK-DESIGN.md](EDITOR-BLOCK-DESIGN.md).
 
 ## Distribution & Custom Samples (Remaining)
 

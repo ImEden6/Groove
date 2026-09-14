@@ -14,9 +14,10 @@ public final class SessionTimeline {
         public long revision() { return pending == null ? current.revision() : pending.revision(); }
     }
     private Snapshot snapshot;
-    public SessionTimeline(Graph graph, double bpm, long now) {
+    public SessionTimeline(Graph graph, double bpm, long now) { this(graph, bpm, false, now); }
+    public SessionTimeline(Graph graph, double bpm, boolean playing, long now) {
         GraphCompiler.compile(graph);
-        snapshot = new Snapshot(new SessionState(0, now, 0, bpm, false, SignalGraph.assignBirths(graph, null, now)), null);
+        snapshot = new Snapshot(new SessionState(0, now, 0, bpm, playing, SignalGraph.assignBirths(graph, null, now)), null);
     }
     public Snapshot snapshot(long now) {
         if (snapshot.pending != null && now >= snapshot.pending.effectiveNanos())

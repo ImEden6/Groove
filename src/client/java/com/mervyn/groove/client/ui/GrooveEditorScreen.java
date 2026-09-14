@@ -31,6 +31,15 @@ import net.minecraft.client.gui.components.EditBox;
  * See docs/EDITOR-INTEGRATION.md.
  */
 public final class GrooveEditorScreen extends Screen {
+    private com.mervyn.groove.music.EditorPackets.State blockSession;
+    private UUID blockRequest;
+    private long blockSent;
+    private int blockAction;
+    private boolean commitAfterSave;
+    private Graph blockSubmitted;
+    private double blockSubmittedBpm;
+    private double savedBpm;
+    private long blockAnchor;
     private final EditorState state;
     private final InputController input;
     private final ThemeRenderer renderer;
@@ -67,15 +76,64 @@ public final class GrooveEditorScreen extends Screen {
         state.onGraphChanged(() -> confirmClose = false);
     }
 
+    public GrooveEditorScreen(Graph graph, ThemeRenderer renderer, com.mervyn.groove.music.EditorPackets.State session) {
+        this(graph, renderer);
+        blockSession = session;
+        savedBpm = session.bpm();
+        blockAnchor = MusicClient.serverNow();
+        message = "Draft saves automatically. Commit publishes it.";
+    }
+
+    private boolean blockDirty() {
+        if (!state.toGraph().equals(baseGraph)) return true;
+        if (bpm == null) return false;
+        try { return Double.parseDouble(bpm.getValue()) != savedBpm; }
+        catch (NumberFormatException error) { return true; }
+    }
+    private void sendBlock(int action, boolean toggle) {
+        if (blockRequest != null) return;
+        blockSent = System.nanoTime();
+        try {
+            double tempo = Double.parseDouble(bpm.getValue());
+            if (!Double.isFinite(tempo) || tempo < 30 || tempo > 300) throw new IllegalArgumentException("BPM must be 30–300");
+            blockSubmitted = state.toGraph();
+            blockSubmittedBpm = tempo;
+            blockRequest = UUID.randomUUID();
+            blockSent = System.nanoTime();
+            blockAction = action;
+            ClientPlayNetworking.send(new com.mervyn.groove.music.EditorPackets.Request(blockSession.pos(), blockSession.session(), blockRequest,
+                    action, blockSession.revision(), action == 1 ? GraphJson.encode(blockSubmitted) : "", tempo,
+                    toggle ? !blockSession.playing() : blockSession.playing()));
+        } catch (IllegalArgumentException error) { blockRequest = null; commitAfterSave = false; message = error.getMessage(); }
+    }
+    public void blockState(com.mervyn.groove.music.EditorPackets.State packet) {
+        if (blockSession == null || !packet.request().equals(blockRequest)) return;
+        blockRequest = null;
+        message = packet.message();
+        if (!packet.session().equals(blockSession.session())) { message = "Session replaced; reopen the editor"; commitAfterSave = false; return; }
+        if (!packet.accepted()) { commitAfterSave = false; return; }
+        boolean dirty = blockDirty();
+        if (blockSession.playing() != packet.playing() || blockSession.bpm() != packet.bpm()) blockAnchor = MusicClient.serverNow();
+        blockSession = packet;
+        if (blockAction == 1) {
+            baseGraph = blockSubmitted;
+            savedBpm = blockSubmittedBpm;
+        } else if (!dirty) {
+            var received = GraphJson.decodeDraft(packet.graph());
+            var graph = new Graph(Graph.CURRENT_VERSION, received.nodes(), received.edges());
+            if (!state.toGraph().equals(graph)) state.loadGraph(graph);
+            baseGraph = state.toGraph(); savedBpm = packet.bpm(); bpm.setValue(Double.toString(savedBpm));
+        }
+    }
     @Override
     protected void init() {
         input.setViewport(width, height);
         String theme = renderer.themeName();
         int textColor = renderer.textColor();
-        addRenderableWidget(new ThemedButton(4, 2, 46, 20, Component.literal("Apply"), font, theme, textColor, b -> submit(false)));
+        addRenderableWidget(new ThemedButton(4, 2, 46, 20, Component.literal(blockSession == null ? "Apply" : "Commit"), font, theme, textColor, b -> submit(false)));
         addRenderableWidget(new ThemedButton(54, 2, 79, 20, Component.literal("Play/Stop"), font, theme, textColor, b -> submit(true), this::playStateIcon));
         addRenderableWidget(new ThemedButton(137, 2, 52, 20, Component.literal("Reload"), font, theme, textColor, b -> reloadSession()));
-        String tempo = bpm == null ? Double.toString(MusicClient.desiredState() == null ? 128 : MusicClient.desiredState().bpm()) : bpm.getValue();
+        String tempo = bpm == null ? Double.toString(blockSession != null ? blockSession.bpm() : MusicClient.desiredState() == null ? 128 : MusicClient.desiredState().bpm()) : bpm.getValue();
         bpm = new EditBox(font, 193, 2, 48, 20, Component.literal("BPM")); bpm.setMaxLength(7); bpm.setValue(tempo); addRenderableWidget(bpm);
         String query = search == null ? "" : search.getValue();
         search = new EditBox(font, 5, 40, DRAWER_WIDTH - 10, 18, Component.literal("Search samples"));
@@ -86,10 +144,21 @@ public final class GrooveEditorScreen extends Screen {
     @Override
     public void render(GuiGraphics graphics, int mouseX, int mouseY, float partialTick) {
         state.tick();
+        if (blockSession != null) {
+            long elapsed = System.nanoTime() - blockSent;
+            if (blockRequest != null && elapsed > 5_000_000_000L) { blockRequest = null; commitAfterSave = false; message = "Editor request timed out"; }
+            if (blockRequest == null && elapsed > 400_000_000L) {
+                if (blockDirty()) sendBlock(1, false);
+                else if (commitAfterSave) { commitAfterSave = false; sendBlock(2, false); }
+                else if (elapsed > 1_000_000_000L) sendBlock(0, false);
+            }
+        }
         renderer.tickDecorative(partialTick);
         // Use the same server clock domain as playback, including scheduled transitions.
         var snapshot = MusicClient.snapshot();
-        var live = snapshot == null ? null : snapshot.at(MusicClient.serverNow());
+        var live = blockSession != null
+                ? new groove.engine.SessionState(blockSession.revision(), blockAnchor, 0, blockSession.bpm(), blockSession.playing(), state.toGraph())
+                : snapshot == null ? null : snapshot.at(MusicClient.serverNow());
         double cycle = live == null ? 0 : live.cycleAt(MusicClient.serverNow());
         float tempoPhase = (float) (cycle - Math.floor(cycle));
         renderer.drawBackground(graphics, width, height);
@@ -408,7 +477,9 @@ public final class GrooveEditorScreen extends Screen {
      *  showing the same glyph. */
     private String playStateIcon() {
         var snapshot = MusicClient.snapshot();
-        var live = snapshot == null ? null : snapshot.at(MusicClient.serverNow());
+        var live = blockSession != null
+                ? new groove.engine.SessionState(blockSession.revision(), blockAnchor, 0, blockSession.bpm(), blockSession.playing(), state.toGraph())
+                : snapshot == null ? null : snapshot.at(MusicClient.serverNow());
         return live != null && live.playing() ? "icon_stop" : "icon_play";
     }
     private int visibleRows() { return Math.max(1, (height - 88) / 16); }
@@ -417,6 +488,13 @@ public final class GrooveEditorScreen extends Screen {
         return sampleSearch.filter(SampleLibrary.catalog(), search == null ? "" : search.getValue());
     }
     private void reloadSession() {
+        if (blockSession != null) {
+            if (blockRequest != null) return;
+            if (blockDirty() && !message.equals("Reload again to discard your local draft.")) { message = "Reload again to discard your local draft."; return; }
+            state.loadGraph(GraphJson.decodeDraft(blockSession.graph())); baseGraph = state.toGraph();
+            savedBpm = blockSession.bpm(); bpm.setValue(Double.toString(savedBpm));
+            sendBlock(0, false); return;
+        }
         if (request != null) return;
         var desired = MusicClient.desiredState();
         if (desired == null) { message = "No live session"; return; }
@@ -425,6 +503,12 @@ public final class GrooveEditorScreen extends Screen {
         bpm.setValue(Double.toString(desired.bpm())); message = "Loaded server revision " + baseRevision;
     }
     private void submit(boolean toggle) {
+        if (blockSession != null) {
+            if (blockRequest != null) { message = "Waiting for draft acknowledgement"; return; }
+            if (toggle) sendBlock(1, true);
+            else { commitAfterSave = true; if (blockDirty()) sendBlock(1, false); }
+            return;
+        }
         if (request != null) { message = "Waiting for server acknowledgement"; return; }
         if (baseEpoch == null || !baseEpoch.equals(MusicClient.epoch()) || !ClientPlayNetworking.canSend(MusicPackets.Submit.TYPE)) { message = "Session unavailable or changed; reload"; return; }
         try {
@@ -451,6 +535,11 @@ public final class GrooveEditorScreen extends Screen {
     }
     @Override public void removed() { SampleCommands.stop(); super.removed(); }
     @Override public void onClose() {
+        if (blockSession != null) {
+            if (blockRequest != null || commitAfterSave) { message = "Wait for the draft to save before closing"; return; }
+            if (blockDirty() && !confirmClose) { confirmClose = true; message = "Unsaved draft: Escape again to discard local changes"; return; }
+            super.onClose(); return;
+        }
         if (request != null) { message = "Wait for the submission result before closing."; return; }
         if (!state.toGraph().equals(baseGraph) && !confirmClose) {
             confirmClose = true; message = "Unsent draft: Apply to keep it, or Escape again to discard."; return;

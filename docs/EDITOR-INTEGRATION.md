@@ -1,5 +1,32 @@
 # Live editor integration
 
+## Block sessions
+
+Right-click a placed editor to open its independent server-owned draft. Edits,
+undo/redo, and BPM changes autosave (at most once every 400 ms); the screen polls
+for shared changes once a second when idle. Clean screens adopt the latest draft;
+unsent local edits remain local until their next last-write-wins submission.
+Incomplete graphs may be saved as drafts. Commit first saves local edits, then
+validates the acknowledged shared revision and exact server sample assets before
+queuing the published patch for the safe downbeat. A stale or invalid commit
+preserves both draft and published state. Play/Stop changes draft transport;
+Commit also publishes that transport state.
+
+Sessions, owner/allowlist, draft revision, both graphs, tempos, and transport
+flags save with the editor's chunk; no `/groove save` is needed for block sessions.
+On reload, transport restarts its cycle origin. Breaking and replacing creates a
+new session. Editing and player breaking require owner/allowlist access. The
+allowlist currently has a server-side API and persistence; its management UI is
+pending. Legacy unowned blocks are claimed when an operator first opens them.
+
+Headphone/speaker connections and audio routing to block sessions are still
+pending. Block Play/Stop currently controls stored draft transport and the visual
+clock; it does not yet create an audio feed.
+
+## Legacy command editor
+
+The following Apply workflow still describes `/groove-editor` and `/groove`.
+
 ## Still unimplemented (from this doc)
 
 - Sample drawer favorites, animated/resizable drawers, vanilla-sound indexing, pack-tree navigation.
@@ -27,4 +54,4 @@ This is functional integration, not completion of all proposed drawer polish: fa
 
 ## Verification
 
-`gradlew build` runs packet round-trip and editor-state regressions alongside engine tests. The editor regressions cover sample creation, swap parameter/cable preservation, undo/redo, and stale/pending session rejection. These tests do not substitute for interactive two-player acceptance testing.
+`gradlew build` runs packet round-trip and editor-state regressions alongside engine tests. Block-session checks cover draft isolation, last-write-wins updates, stale/pending/invalid commit rejection, incomplete-draft persistence, saved publication and transport, ownership/allowlist persistence, replacement identity, and packet round trips. The editor regressions cover sample creation, swap parameter/cable preservation, undo/redo, and stale/pending session rejection. These tests do not substitute for interactive two-player acceptance testing.

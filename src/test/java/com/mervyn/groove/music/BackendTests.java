@@ -58,6 +58,7 @@ public final class BackendTests {
                 check(MusicPackets.Snapshot.CODEC.decode(wire).equals(packet), "Musical nodes survive snapshot packets");
             } finally { wire.release(); }
         }
+        EditorSessionTests.run();
         catalogUpdateChecks();
         persistenceChecks();
         typedCompatibilityChecks();
