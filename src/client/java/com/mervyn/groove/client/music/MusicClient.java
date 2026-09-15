@@ -430,6 +430,7 @@ public final class MusicClient {
             client.getSoundManager().play(previewSound);
             previewRetryTicks = 100;
         }
+        if (previewStream != null) previewStream.setUnderwater(client.player.isEyeInFluid(net.minecraft.tags.FluidTags.WATER));
         return true;
     }
 

@@ -97,6 +97,61 @@ final class SpeakerLinkTests {
         fadeOutChecks();
         for (boolean mono : new boolean[] {false, true})
             for (int frames : new int[] {1, 2048, 4096}) exactFadeChecks(mono, frames);
+        muffleChecks();
+    }
+    /** Headphones muffle underwater: a high-frequency tone loses most of its energy once
+     *  {@link com.mervyn.groove.client.music.GrooveAudioStream#setUnderwater} is armed, and
+     *  clearing it mid-stream restores full-bandwidth output on the very next read. */
+    private static void muffleChecks() {
+        var graph = new groove.engine.Graph(1, java.util.List.of(
+                new groove.engine.Graph.Node("tone", groove.engine.NodeType.TONE,
+                        java.util.Map.of(groove.engine.NodeParam.FREQUENCY, 10000.0, groove.engine.NodeParam.GAIN, 1.0)),
+                new groove.engine.Graph.Node("out", groove.engine.NodeType.OUTPUT, java.util.Map.of())),
+                java.util.List.of(groove.engine.Graph.edge("tone", "out")));
+        double dryEnergy = readEnergy(graph, false);
+        double wetEnergy = readEnergy(graph, true);
+        check(wetEnergy < dryEnergy * .05, "Underwater muffling attenuates a high-frequency tone: dry=" + dryEnergy + " wet=" + wetEnergy);
+
+        long now = System.nanoTime();
+        var clock = new groove.engine.ClockSync(); clock.observe(now, now, now);
+        var renderer = new groove.engine.LiveRenderer();
+        var timeline = groove.engine.LiveRenderer.Timeline.compile(new groove.engine.SessionTimeline.Snapshot(
+                new groove.engine.SessionState(1, now, 0, 128, true, graph), null));
+        timeline.prepare(now); renderer.publish(timeline);
+        var stream = new com.mervyn.groove.client.music.GrooveAudioStream(renderer, clock);
+        stream.setUnderwater(true);
+        try {
+            var muffled = stream.readQueued(com.mervyn.groove.client.music.GrooveAudioStream.CHUNK_FRAMES * 4, 0);
+            double muffledEnergy = energyOf(muffled);
+            org.lwjgl.system.MemoryUtil.memFree(muffled);
+            stream.setUnderwater(false);
+            var restored = stream.readQueued(com.mervyn.groove.client.music.GrooveAudioStream.CHUNK_FRAMES * 4, 0);
+            double restoredEnergy = energyOf(restored);
+            org.lwjgl.system.MemoryUtil.memFree(restored);
+            check(restoredEnergy > muffledEnergy * 5, "Clearing underwater mid-stream restores full-bandwidth output on the next read: muffled="
+                    + muffledEnergy + " restored=" + restoredEnergy);
+        } finally { stream.close(); }
+    }
+    private static double readEnergy(groove.engine.Graph graph, boolean underwater) {
+        long now = System.nanoTime();
+        var clock = new groove.engine.ClockSync(); clock.observe(now, now, now);
+        var renderer = new groove.engine.LiveRenderer();
+        var timeline = groove.engine.LiveRenderer.Timeline.compile(new groove.engine.SessionTimeline.Snapshot(
+                new groove.engine.SessionState(1, now, 0, 128, true, graph), null));
+        timeline.prepare(now); renderer.publish(timeline);
+        var stream = new com.mervyn.groove.client.music.GrooveAudioStream(renderer, clock);
+        if (underwater) stream.setUnderwater(true);
+        try {
+            var pcm = stream.readQueued(com.mervyn.groove.client.music.GrooveAudioStream.CHUNK_FRAMES * 4, 0);
+            double energy = energyOf(pcm);
+            org.lwjgl.system.MemoryUtil.memFree(pcm);
+            return energy;
+        } finally { stream.close(); }
+    }
+    private static double energyOf(java.nio.ByteBuffer pcm) {
+        double sum = 0;
+        for (int i = 0; i < pcm.remaining() / 2; i++) { double s = pcm.getShort(i * 2); sum += s * s; }
+        return sum;
     }
     private static void exactFadeChecks(boolean mono, int frames) {
         long now = System.nanoTime();

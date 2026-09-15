@@ -1,5 +1,6 @@
 package com.mervyn.groove.client.music;
 
+import groove.engine.Biquad;
 import groove.engine.ClockSync;
 import groove.engine.LiveRenderer;
 import net.minecraft.client.sounds.AudioStream;
@@ -28,6 +29,10 @@ public final class GrooveAudioStream implements AudioStream {
     // The control thread publishes one request; only the audio thread owns progress.
     private final java.util.concurrent.atomic.AtomicInteger fadeRequest = new java.util.concurrent.atomic.AtomicInteger(-1);
     private int fadeFrames = -1, fadeRemaining;
+    private static final double MUFFLE_CUTOFF_HZ = 700;
+    private final Biquad muffleLeft = new Biquad(), muffleRight = new Biquad();
+    private volatile boolean underwater;
+    private boolean muffleActive;
     public GrooveAudioStream(LiveRenderer renderer, ClockSync clock) { this(renderer, clock, false); }
     public GrooveAudioStream(LiveRenderer renderer, ClockSync clock, boolean mono) {
         this.renderer = renderer; this.clock = clock; this.mono = mono;
@@ -46,6 +51,9 @@ public final class GrooveAudioStream implements AudioStream {
         if (frames < 1) throw new IllegalArgumentException("Fade must contain at least one frame");
         fadeRequest.compareAndSet(-1, frames);
     }
+    /** Headphones sealed over your ears are still muffled by your own head being underwater,
+     *  regardless of how private the feed is. Read by the audio thread on the next block. */
+    public void setUnderwater(boolean value) { underwater = value; }
     public ByteBuffer read(int bytes) { return readQueued(bytes, 0); }
     public ByteBuffer readQueued(int bytes, long queuedFrames) {
         if (closed || bytes < (mono ? 2 : 4)) return null;
@@ -66,6 +74,12 @@ public final class GrooveAudioStream implements AudioStream {
         double blockPeak = peak;
         int requestedFade = fadeRequest.get();
         if (fadeFrames < 0 && requestedFade > 0) { fadeFrames = requestedFade; fadeRemaining = requestedFade; }
+        boolean wantMuffle = underwater;
+        if (wantMuffle != muffleActive) {
+            muffleLeft.reset(); muffleRight.reset();
+            if (wantMuffle) { muffleLeft.setLowPass(MUFFLE_CUTOFF_HZ, Biquad.DEFAULT_Q, LiveRenderer.SAMPLE_RATE); muffleRight.setLowPass(MUFFLE_CUTOFF_HZ, Biquad.DEFAULT_Q, LiveRenderer.SAMPLE_RATE); }
+            muffleActive = wantMuffle;
+        }
         for (int frame = 0; frame < frames; frame++) {
             float left = samples[frame * 2], right = samples[frame * 2 + 1];
             if (fadeFrames > 0) {
@@ -74,6 +88,7 @@ public final class GrooveAudioStream implements AudioStream {
                 if (fadeRemaining > 0) fadeRemaining--;
                 if (fadeRemaining == 0) closed = true;
             }
+            if (muffleActive) { left = (float) muffleLeft.process(left); right = (float) muffleRight.process(right); }
             if (mono) {
                 float mixed = (left + right) * .5f;
                 blockPeak = Math.max(blockPeak, Math.abs(mixed));
