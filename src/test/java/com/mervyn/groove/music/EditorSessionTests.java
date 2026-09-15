@@ -70,13 +70,23 @@ final class EditorSessionTests {
         check(!restored.canEdit(collaborator), "Removal revokes edit access even when list was full");
         restored.allowEditor(owner, UUID.randomUUID(), true);
         var request = new EditorPackets.Request(pos, block.sessionId(), UUID.randomUUID(), EditorPackets.COMMIT, 2, "", 140, true);
-        var response = new EditorPackets.State(pos, block.sessionId(), request.request(), true, "Saved", 2, GraphJson.encode(incomplete), 180, false);
+        var response = new EditorPackets.State(pos, block.sessionId(), request.request(), true, "Saved", 2, GraphJson.encode(incomplete), 180, false,
+                List.of("Steve", "Alex"));
+        var closeRequest = new EditorPackets.Request(pos, block.sessionId(), UUID.randomUUID(), EditorPackets.CLOSE, 0, "", 0, false);
         var wire = new RegistryFriendlyByteBuf(Unpooled.buffer(), RegistryAccess.EMPTY);
         try {
             EditorPackets.Request.CODEC.encode(wire, request);
             check(EditorPackets.Request.CODEC.decode(wire).equals(request), "Editor request round trip");
+            EditorPackets.Request.CODEC.encode(wire, closeRequest);
+            check(EditorPackets.Request.CODEC.decode(wire).equals(closeRequest), "Editor close request round trip");
             EditorPackets.State.CODEC.encode(wire, response);
             check(EditorPackets.State.CODEC.decode(wire).equals(response), "Editor state round trip");
+            var viewers = new ArrayList<String>(List.of("Steve"));
+            var ownsViewers = new EditorPackets.State(pos, block.sessionId(), UUID.randomUUID(), true, "", 2, GraphJson.encode(incomplete), 180, false, viewers);
+            viewers.clear();
+            check(ownsViewers.viewers().size() == 1, "Editor state packet owns its viewer list");
+            reject(() -> new EditorPackets.State(pos, block.sessionId(), UUID.randomUUID(), true, "", 2, GraphJson.encode(incomplete), 180, false,
+                    Collections.nCopies(EditorProject.MAX_EDITORS + 1, "Steve")), "Oversized viewer list rejected");
             var allowlistRequest = new EditorPackets.AllowlistRequest(pos, block.sessionId(), UUID.randomUUID(), "Steve", true);
             var allowlistState = new EditorPackets.AllowlistState(pos, block.sessionId(), allowlistRequest.request(), true, "Added Steve",
                     true, "Alex", List.of("Herobrine", "Steve"));

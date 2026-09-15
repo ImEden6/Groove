@@ -12,14 +12,27 @@ import java.util.*;
 public final class EditorServer {
     private static final Map<UUID, Long> requests = new HashMap<>();
     private static final Map<UUID, UUID> pendingLookups = new HashMap<>();
+    /** Transient "who currently has this editor open" presence, not persisted and keyed by
+     *  session so a replaced block's stale viewers never leak into its new session. */
+    private record ViewerKey(net.minecraft.core.BlockPos pos, UUID session) {}
+    private static final Map<ViewerKey, Set<UUID>> viewers = new HashMap<>();
     public static void register() {
         EditorPackets.register();
-        ServerPlayConnectionEvents.DISCONNECT.register((handler, server) -> { requests.remove(handler.player.getUUID()); pendingLookups.remove(handler.player.getUUID()); });
-        net.fabricmc.fabric.api.event.lifecycle.v1.ServerLifecycleEvents.SERVER_STOPPED.register(server -> { requests.clear(); pendingLookups.clear(); });
+        ServerPlayConnectionEvents.DISCONNECT.register((handler, server) -> {
+            UUID id = handler.player.getUUID();
+            requests.remove(id); pendingLookups.remove(id);
+            for (var players : viewers.values()) players.remove(id);
+        });
+        net.fabricmc.fabric.api.event.lifecycle.v1.ServerLifecycleEvents.SERVER_STOPPED.register(server -> { requests.clear(); pendingLookups.clear(); viewers.clear(); });
         PlayerBlockBreakEvents.BEFORE.register((world, player, pos, state, entity) ->
                 !(entity instanceof EditorBlockEntity editor) || editor.canEdit(player.getUUID()) || !editor.hasOwner() && player.hasPermissions(2));
         ServerPlayNetworking.registerGlobalReceiver(EditorPackets.Request.TYPE, (packet, context) -> context.server().execute(() -> {
             var player = context.player();
+            if (packet.action() == EditorPackets.CLOSE) {
+                var players = viewers.get(new ViewerKey(packet.pos(), packet.session()));
+                if (players != null) players.remove(player.getUUID());
+                return; // Fire-and-forget teardown notice; the client is already closing.
+            }
             long now = System.nanoTime();
             Long last = requests.get(player.getUUID());
 
@@ -42,7 +55,11 @@ public final class EditorServer {
                 if (!editor.canEdit(player.getUUID())) throw new IllegalArgumentException("Editing requires owner or allowlist access");
                 if (packet.action() != EditorPackets.OPEN && !editor.sessionId().equals(packet.session()))
                     throw new IllegalArgumentException("Editor session changed; reopen it");
-                if (packet.action() == EditorPackets.DRAFT) {
+                if (packet.action() == EditorPackets.OPEN) {
+                    var key = new ViewerKey(packet.pos(), editor.sessionId());
+                    viewers.keySet().removeIf(k -> k.pos().equals(packet.pos()) && !k.equals(key));
+                    viewers.computeIfAbsent(key, k -> new HashSet<>()).add(player.getUUID());
+                } else if (packet.action() == EditorPackets.DRAFT) {
                     editor.session().edit(GraphJson.decodeDraft(packet.graph()), packet.bpm(), packet.playing());
                     editor.setChanged();
                 } else if (packet.action() == EditorPackets.COMMIT) {
@@ -63,10 +80,16 @@ public final class EditorServer {
             }
             boolean visible = editor != null && editor.canEdit(player.getUUID());
             var session = visible ? editor.session() : null;
+            var otherViewers = new ArrayList<String>();
+            if (visible) {
+                var players = viewers.get(new ViewerKey(packet.pos(), editor.sessionId()));
+                if (players != null) for (UUID id : players) if (!id.equals(player.getUUID())) otherViewers.add(resolveName(context.server(), id));
+                otherViewers.sort(String.CASE_INSENSITIVE_ORDER);
+            }
             ServerPlayNetworking.send(player, new EditorPackets.State(packet.pos(), visible ? editor.sessionId() : packet.session(),
                     packet.request(), accepted, message.substring(0, Math.min(512, message.length())),
                     session == null ? 0 : session.revision(), session == null ? "" : GraphJson.encode(session.draft()),
-                    session == null ? 128 : session.bpm(), session != null && session.playing()));
+                    session == null ? 128 : session.bpm(), session != null && session.playing(), otherViewers));
             if (accepted && packet.action() == EditorPackets.OPEN) sendAllowlist(player, editor, UUID.randomUUID(), true, "");
         }));
         ServerPlayNetworking.registerGlobalReceiver(EditorPackets.AllowlistRequest.TYPE, (packet, context) -> context.server().execute(() -> {

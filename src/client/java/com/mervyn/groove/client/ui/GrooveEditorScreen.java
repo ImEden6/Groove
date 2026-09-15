@@ -40,6 +40,10 @@ public final class GrooveEditorScreen extends Screen {
     private double blockSubmittedBpm;
     private double savedBpm;
     private long blockAnchor;
+    /** The block-session revision baseGraph currently reflects; a poll/commit response
+     *  reporting a different revision while dirty means someone else's edit landed. */
+    private long baseGraphRevision;
+    private String draftConflict;
     private boolean accessOpen;
     private UUID allowlistRequest;
     private long allowlistSent;
@@ -100,6 +104,7 @@ public final class GrooveEditorScreen extends Screen {
     public GrooveEditorScreen(Graph graph, ThemeRenderer renderer, com.mervyn.groove.music.EditorPackets.State session) {
         this(graph, renderer);
         blockSession = session;
+        baseGraphRevision = session.revision();
         savedBpm = session.bpm();
         blockAnchor = MusicClient.serverNow();
         message = "Draft saves automatically. Commit publishes it.";
@@ -140,12 +145,21 @@ public final class GrooveEditorScreen extends Screen {
         blockSession = packet;
         if (blockAction == 1) {
             baseGraph = blockSubmitted;
+            baseGraphRevision = packet.revision();
             savedBpm = blockSubmittedBpm;
+            draftConflict = null;
         } else if (!dirty) {
             var received = GraphJson.decodeDraft(packet.graph());
             var graph = new Graph(Graph.CURRENT_VERSION, received.nodes(), received.edges());
             if (!state.toGraph().equals(graph)) state.loadGraph(graph);
-            baseGraph = state.toGraph(); savedBpm = packet.bpm(); bpm.setValue(Double.toString(savedBpm));
+            baseGraph = state.toGraph(); baseGraphRevision = packet.revision();
+            savedBpm = packet.bpm(); bpm.setValue(Double.toString(savedBpm));
+            draftConflict = null;
+        } else if (packet.revision() != baseGraphRevision) {
+            // Not my own edit still in flight -- the idle poll that produced this response
+            // only ever sends while clean, so a revision change here came from someone else.
+            draftConflict = "Someone else changed the shared draft while you were editing. "
+                    + "Reload to see their changes, or keep editing to overwrite them.";
         }
     }
     public void allowlistState(com.mervyn.groove.music.EditorPackets.AllowlistState packet) {
@@ -396,7 +410,11 @@ public final class GrooveEditorScreen extends Screen {
             graphics.drawString(font, "Drag / Ctrl: fine", textX, inspectorBottom - 12, textColor, false);
         }
         renderer.drawPanel(graphics, PanelKind.TRANSPORT, 0, height - 20, width, 20);
-        graphics.drawString(font, font.plainSubstrByWidth(message, width - 8), 8, height - 14, textColor, false);
+        String status = draftConflict != null ? draftConflict : message;
+        int statusColor = draftConflict != null ? 0xffaa4444 : textColor;
+        if (blockSession != null && !blockSession.viewers().isEmpty())
+            status = status + "  [Also editing: " + String.join(", ", blockSession.viewers()) + "]";
+        graphics.drawString(font, font.plainSubstrByWidth(status, width - 8), 8, height - 14, statusColor, false);
         graphics.drawString(font, String.format(java.util.Locale.ROOT, "Cycle %.2f  %s", cycle, live != null && live.playing() ? "Playing" : "Stopped"), 249, 8, textColor, false);
         super.render(graphics, mouseX, mouseY, partialTick);
         if (draggedSample != null && sampleDragging) graphics.drawString(font, draggedSample.assetId(), mouseX + 8, mouseY, 0xffcc66, false);
@@ -772,6 +790,7 @@ public final class GrooveEditorScreen extends Screen {
             if (blockRequest != null) return;
             if (blockDirty() && !message.equals("Reload again to discard your local draft.")) { message = "Reload again to discard your local draft."; return; }
             state.loadGraph(GraphJson.decodeDraft(blockSession.graph())); baseGraph = state.toGraph();
+            baseGraphRevision = blockSession.revision(); draftConflict = null;
             savedBpm = blockSession.bpm(); bpm.setValue(Double.toString(savedBpm));
             sendBlock(0, false); return;
         }
@@ -818,6 +837,11 @@ public final class GrooveEditorScreen extends Screen {
         if (blockSession != null) {
             if (blockRequest != null || commitAfterSave) { message = "Wait for the draft to save before closing"; return; }
             if (blockDirty() && !confirmClose) { confirmClose = true; message = "Unsaved draft: Escape again to discard local changes"; return; }
+            // Fire-and-forget: drops this player from the "also editing" presence list
+            // promptly instead of waiting for a stale entry to age out.
+            if (ClientPlayNetworking.canSend(com.mervyn.groove.music.EditorPackets.Request.TYPE))
+                ClientPlayNetworking.send(new com.mervyn.groove.music.EditorPackets.Request(blockSession.pos(), blockSession.session(),
+                        UUID.randomUUID(), com.mervyn.groove.music.EditorPackets.CLOSE, 0, "", 0, false));
             super.onClose(); return;
         }
         if (request != null) { message = "Wait for the submission result before closing."; return; }
