@@ -82,6 +82,7 @@ public final class GrooveEditorScreen extends Screen {
     private EditBox knobEntry;
     private String knobEntryNode, knobEntryParam;
     private final SampleSearch sampleSearch = new SampleSearch();
+    private final java.util.Set<String> collapsedFolders = new java.util.HashSet<>();
 
     public GrooveEditorScreen(Graph graph) { this(graph, new NoOpThemeRenderer()); }
 
@@ -321,11 +322,21 @@ public final class GrooveEditorScreen extends Screen {
         if (drawer) {
             renderer.drawPanel(graphics, PanelKind.DRAWER, 0, 24, DRAWER_WIDTH, height - 44);
             graphics.drawString(font, "Sample Vault  (Ctrl+B)", 8, 32, textColor, false);
-            var rows = samples(); clampScroll(rows.size());
+            var rows = drawerRows(); clampScroll(rows.size());
             for (int i = scroll; i < Math.min(rows.size(), scroll + visibleRows()); i++) {
                 int y = 64 + (i - scroll) * 16;
                 if (i == selectedSample) graphics.fill(2, y - 2, DRAWER_WIDTH - 2, y + 13, 0x5000e5ff);
-                graphics.drawString(font, font.plainSubstrByWidth(rows.get(i).ref().assetId(), DRAWER_WIDTH - 13), 8, y, textColor, false);
+                var row = rows.get(i);
+                String label; int indent;
+                if (row instanceof SampleTree.Folder folder) {
+                    label = (folder.collapsed() ? "+ " : "- ") + folder.label() + " (" + folder.count() + ")";
+                    indent = 8 + folder.depth() * 8;
+                } else {
+                    var leaf = (SampleTree.Leaf) row;
+                    label = (leaf.favorite() ? "* " : "  ") + SampleTree.leafName(leaf.entry());
+                    indent = 8 + leaf.depth() * 8;
+                }
+                graphics.drawString(font, font.plainSubstrByWidth(label, DRAWER_WIDTH - indent - 5), indent, y, textColor, false);
             }
         }
         if (accessOpen && blockSession != null) {
@@ -431,11 +442,21 @@ public final class GrooveEditorScreen extends Screen {
         if (drawer && mouseX < DRAWER_WIDTH) {
             browsing = true;
             int row = scroll + (int) ((mouseY - 64) / 16);
-            var rows = samples();
-            if (button == 0 && mouseY >= 64 && row >= 0 && row < rows.size()) {
-                selectedSample = row; draggedSample = rows.get(row).ref(); sampleDragging = false;
-                sampleDownX = mouseX; sampleDownY = mouseY;
-                SampleCommands.audition(draggedSample, s -> message = s);
+            var rows = drawerRows();
+            if (mouseY >= 64 && row >= 0 && row < rows.size()) {
+                selectedSample = row;
+                var clicked = rows.get(row);
+                if (clicked instanceof SampleTree.Folder folder) {
+                    if (button == 0) toggleFolder(folder.path());
+                } else {
+                    var leaf = (SampleTree.Leaf) clicked;
+                    if (button == 1) SampleFavorites.toggle(leaf.entry().ref().assetId());
+                    else if (button == 0) {
+                        draggedSample = leaf.entry().ref(); sampleDragging = false;
+                        sampleDownX = mouseX; sampleDownY = mouseY;
+                        SampleCommands.audition(draggedSample, s -> message = s);
+                    }
+                }
             }
             return true;
         }
@@ -516,7 +537,7 @@ public final class GrooveEditorScreen extends Screen {
             }
             return true;
         }
-        if (drawer && mouseX < DRAWER_WIDTH) { scroll -= (int) Math.signum(scrollY); clampScroll(samples().size()); return true; }
+        if (drawer && mouseX < DRAWER_WIDTH) { scroll -= (int) Math.signum(scrollY); clampScroll(drawerRows().size()); return true; }
         input.mouseScroll(scrollY, mouseX, mouseY);
         return true;
     }
@@ -556,13 +577,18 @@ public final class GrooveEditorScreen extends Screen {
         }
         if (search.isFocused() || bpm.isFocused()) return super.keyPressed(keyCode, scanCode, modifiers);
         if (browsing && drawer && (keyCode == GLFW.GLFW_KEY_DOWN || keyCode == GLFW.GLFW_KEY_UP || keyCode == GLFW.GLFW_KEY_ENTER || keyCode == GLFW.GLFW_KEY_SPACE)) {
-            var rows = samples();
+            var rows = drawerRows();
             if (!rows.isEmpty()) {
                 selectedSample = Math.max(0, Math.min(rows.size() - 1, selectedSample + (keyCode == GLFW.GLFW_KEY_DOWN ? 1 : keyCode == GLFW.GLFW_KEY_UP ? -1 : 0)));
                 if (selectedSample < scroll) scroll = selectedSample;
                 if (selectedSample >= scroll + visibleRows()) scroll = selectedSample - visibleRows() + 1;
-                if (keyCode == GLFW.GLFW_KEY_ENTER && SampleCommands.auditioning()) SampleCommands.stop();
-                else SampleCommands.audition(rows.get(selectedSample).ref(), s -> message = s);
+                var selected = rows.get(selectedSample);
+                if (selected instanceof SampleTree.Leaf leaf) {
+                    if (keyCode == GLFW.GLFW_KEY_ENTER && SampleCommands.auditioning()) SampleCommands.stop();
+                    else SampleCommands.audition(leaf.entry().ref(), s -> message = s);
+                } else if (keyCode == GLFW.GLFW_KEY_ENTER || keyCode == GLFW.GLFW_KEY_SPACE) {
+                    toggleFolder(((SampleTree.Folder) selected).path());
+                }
             }
             return true;
         }
@@ -730,6 +756,16 @@ public final class GrooveEditorScreen extends Screen {
     private void clampScroll(int size) { scroll = Math.max(0, Math.min(scroll, Math.max(0, size - visibleRows()))); }
     private List<SampleCatalog.Entry> samples() {
         return sampleSearch.filter(SampleLibrary.catalog(), search == null ? "" : search.getValue());
+    }
+    /** While actively searching, folders are ignored entirely so a match anywhere in the
+     *  catalog is never hidden behind a collapsed folder the user hasn't touched. */
+    private List<SampleTree.Row> drawerRows() {
+        String query = search == null ? "" : search.getValue();
+        var collapsed = query.isBlank() ? collapsedFolders : java.util.Set.<String>of();
+        return SampleTree.rows(samples(), SampleFavorites.all(), collapsed);
+    }
+    private void toggleFolder(String path) {
+        if (!collapsedFolders.remove(path)) collapsedFolders.add(path);
     }
     private void reloadSession() {
         if (blockSession != null) {

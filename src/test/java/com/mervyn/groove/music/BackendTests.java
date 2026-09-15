@@ -72,6 +72,67 @@ public final class BackendTests {
         check(stepper.node("seq").params().get(NodeParam.STEPS) == 5, "Small integer ranges support fine keyboard stepping");
     }
 
+    private static void sampleTreeChecks() throws Exception {
+        var root = java.nio.file.Files.createTempDirectory("groove-sample-tree-");
+        try {
+            // factory:basic/{kick,snare,hat}.wav always ship alongside whatever's on disk here.
+            java.nio.file.Files.write(root.resolve("top.wav"), new byte[]{1});
+            java.nio.file.Files.createDirectories(root.resolve("kit"));
+            java.nio.file.Files.write(root.resolve("kit/kick.wav"), new byte[]{2});
+            java.nio.file.Files.write(root.resolve("kit/snare.wav"), new byte[]{3});
+            java.nio.file.Files.createDirectories(root.resolve("kit/sub"));
+            java.nio.file.Files.write(root.resolve("kit/sub/extra.wav"), new byte[]{4});
+            var catalog = groove.engine.samples.SampleCatalog.scan(root);
+            var entries = catalog.entries();
+            var noneFavorited = java.util.Set.<String>of();
+            var noneCollapsed = java.util.Set.<String>of();
+            var rows = com.mervyn.groove.client.ui.SampleTree.rows(entries, noneFavorited, noneCollapsed);
+            check(rows.get(0) instanceof com.mervyn.groove.client.ui.SampleTree.Folder f0 && f0.label().equals("custom") && f0.depth() == 0,
+                    "Top level groups by namespace, custom sorts before factory");
+            var customFolder = (com.mervyn.groove.client.ui.SampleTree.Folder) rows.get(0);
+            check(customFolder.count() == 4, "Folder count covers every descendant, not just direct children");
+            var kitFolder = rows.stream().filter(r -> r instanceof com.mervyn.groove.client.ui.SampleTree.Folder f && f.label().equals("kit"))
+                    .map(r -> (com.mervyn.groove.client.ui.SampleTree.Folder) r).findFirst().orElseThrow();
+            check(kitFolder.depth() == 1 && kitFolder.count() == 3, "Nested folder depth and count");
+            var subLeaf = rows.stream().filter(r -> r instanceof com.mervyn.groove.client.ui.SampleTree.Leaf leaf
+                    && com.mervyn.groove.client.ui.SampleTree.leafName(leaf.entry()).equals("extra.wav"))
+                    .map(r -> (com.mervyn.groove.client.ui.SampleTree.Leaf) r).findFirst().orElseThrow();
+            check(subLeaf.depth() == 3, "Leaf depth is one past its immediate parent folder");
+            check(com.mervyn.groove.client.ui.SampleTree.leafName(subLeaf.entry()).equals("extra.wav"), "Leaf name is the final path segment, not the full id");
+            var topLeaf = rows.stream().filter(r -> r instanceof com.mervyn.groove.client.ui.SampleTree.Leaf leaf
+                    && com.mervyn.groove.client.ui.SampleTree.leafName(leaf.entry()).equals("top.wav")).findFirst().orElseThrow();
+            check(((com.mervyn.groove.client.ui.SampleTree.Leaf) topLeaf).depth() == 1, "A root-level file sits directly under its namespace folder");
+
+            var collapsedCustom = java.util.Set.of("custom/");
+            var collapsedRows = com.mervyn.groove.client.ui.SampleTree.rows(entries, noneFavorited, collapsedCustom);
+            check(collapsedRows.stream().noneMatch(r -> r instanceof com.mervyn.groove.client.ui.SampleTree.Folder f && f.label().equals("kit")),
+                    "Collapsing a folder hides its descendants");
+            check(collapsedRows.stream().anyMatch(r -> r instanceof com.mervyn.groove.client.ui.SampleTree.Folder f && f.label().equals("factory")),
+                    "Collapsing one folder leaves siblings untouched");
+
+            String favoriteId = "factory:basic/kick.wav";
+            var favorited = java.util.Set.of(favoriteId);
+            var favoriteRows = com.mervyn.groove.client.ui.SampleTree.rows(entries, favorited, noneCollapsed);
+            check(favoriteRows.get(0) instanceof com.mervyn.groove.client.ui.SampleTree.Folder f && f.label().equals("Favorites") && f.count() == 1,
+                    "A pinned Favorites group appears first when anything is favorited");
+            check(favoriteRows.get(1) instanceof com.mervyn.groove.client.ui.SampleTree.Leaf leaf
+                    && leaf.entry().ref().assetId().equals(favoriteId) && leaf.favorite(),
+                    "Favorites group lists the favorited entry");
+            long naturalCopies = favoriteRows.stream().filter(r -> r instanceof com.mervyn.groove.client.ui.SampleTree.Leaf leaf
+                    && leaf.entry().ref().assetId().equals(favoriteId)).count();
+            check(naturalCopies == 2, "A favorited entry still appears in its normal folder position too");
+            check(com.mervyn.groove.client.ui.SampleTree.rows(entries, noneFavorited, noneCollapsed).stream()
+                    .noneMatch(r -> r instanceof com.mervyn.groove.client.ui.SampleTree.Folder f && f.label().equals("Favorites")),
+                    "No Favorites group when nothing is favorited");
+        } finally {
+            for (var file : java.util.List.of("top.wav", "kit/kick.wav", "kit/snare.wav", "kit/sub/extra.wav"))
+                java.nio.file.Files.deleteIfExists(root.resolve(file));
+            java.nio.file.Files.deleteIfExists(root.resolve("kit/sub"));
+            java.nio.file.Files.deleteIfExists(root.resolve("kit"));
+            java.nio.file.Files.deleteIfExists(root);
+        }
+    }
+
     public static void main(String[] args) throws Exception {
         SharedConstants.tryDetectVersion(); Bootstrap.bootStrap();
         for (NodeType type : java.util.List.of(NodeType.ALTERNATE, NodeType.PROBABILITY, NodeType.POLYMETER)) {
@@ -90,6 +151,7 @@ public final class BackendTests {
         }
         EditorSessionTests.run();
         knobEntryChecks();
+        sampleTreeChecks();
         HeadphoneLinkTests.run();
         SpeakerLinkTests.run();
         catalogUpdateChecks();
