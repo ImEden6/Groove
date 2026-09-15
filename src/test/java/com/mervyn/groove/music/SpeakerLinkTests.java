@@ -96,7 +96,8 @@ final class SpeakerLinkTests {
 
         fadeOutChecks();
         for (boolean mono : new boolean[] {false, true})
-            for (int frames : new int[] {1, 2048, 4096}) exactFadeChecks(mono, frames);
+            for (boolean underwater : new boolean[] {false, true})
+                for (int frames : new int[] {1, 2048, 4096}) exactFadeChecks(mono, frames, underwater);
         muffleChecks();
     }
     /** Headphones muffle underwater: a high-frequency tone loses most of its energy once
@@ -153,7 +154,7 @@ final class SpeakerLinkTests {
         for (int i = 0; i < pcm.remaining() / 2; i++) { double s = pcm.getShort(i * 2); sum += s * s; }
         return sum;
     }
-    private static void exactFadeChecks(boolean mono, int frames) {
+    private static void exactFadeChecks(boolean mono, int frames, boolean underwater) {
         long now = System.nanoTime();
         var clock = new groove.engine.ClockSync(); clock.observe(now, now, now);
         var renderer = new groove.engine.LiveRenderer();
@@ -161,7 +162,12 @@ final class SpeakerLinkTests {
                 new groove.engine.SessionState(1, now, 0, 128, true, groove.engine.Graph.demo()), null));
         timeline.prepare(now); renderer.publish(timeline);
         var stream = new com.mervyn.groove.client.music.GrooveAudioStream(renderer, clock, mono);
+        stream.setUnderwater(underwater);
         try {
+            // Prime filter history: even a one-frame fade must silence an existing tail.
+            var warmup = stream.readQueued(2048 * (mono ? 2 : 4), 0);
+            try { check(energyOf(warmup) > 0, "Fade begins with audible PCM"); }
+            finally { org.lwjgl.system.MemoryUtil.memFree(warmup); }
             reject(() -> stream.fadeOut(0), "Zero-length fade rejected");
             reject(() -> stream.fadeOut(-1), "Negative fade rejected");
             stream.fadeOut(frames);

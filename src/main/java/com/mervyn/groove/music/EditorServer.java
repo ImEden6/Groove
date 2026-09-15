@@ -14,14 +14,14 @@ public final class EditorServer {
     private static final Map<UUID, UUID> pendingLookups = new HashMap<>();
     /** Transient "who currently has this editor open" presence, not persisted and keyed by
      *  session so a replaced block's stale viewers never leak into its new session. */
-    private record ViewerKey(net.minecraft.core.BlockPos pos, UUID session) {}
+    private record ViewerKey(net.minecraft.resources.ResourceKey<net.minecraft.world.level.Level> dimension, net.minecraft.core.BlockPos pos, UUID session) {}
     private static final Map<ViewerKey, Set<UUID>> viewers = new HashMap<>();
     public static void register() {
         EditorPackets.register();
         ServerPlayConnectionEvents.DISCONNECT.register((handler, server) -> {
             UUID id = handler.player.getUUID();
             requests.remove(id); pendingLookups.remove(id);
-            for (var players : viewers.values()) players.remove(id);
+            removeViewer(id);
         });
         net.fabricmc.fabric.api.event.lifecycle.v1.ServerLifecycleEvents.SERVER_STOPPED.register(server -> { requests.clear(); pendingLookups.clear(); viewers.clear(); });
         PlayerBlockBreakEvents.BEFORE.register((world, player, pos, state, entity) ->
@@ -29,8 +29,9 @@ public final class EditorServer {
         ServerPlayNetworking.registerGlobalReceiver(EditorPackets.Request.TYPE, (packet, context) -> context.server().execute(() -> {
             var player = context.player();
             if (packet.action() == EditorPackets.CLOSE) {
-                var players = viewers.get(new ViewerKey(packet.pos(), packet.session()));
+                var players = viewers.get(new ViewerKey(player.serverLevel().dimension(), packet.pos(), packet.session()));
                 if (players != null) players.remove(player.getUUID());
+                viewers.values().removeIf(Set::isEmpty);
                 return; // Fire-and-forget teardown notice; the client is already closing.
             }
             long now = System.nanoTime();
@@ -56,8 +57,9 @@ public final class EditorServer {
                 if (packet.action() != EditorPackets.OPEN && !editor.sessionId().equals(packet.session()))
                     throw new IllegalArgumentException("Editor session changed; reopen it");
                 if (packet.action() == EditorPackets.OPEN) {
-                    var key = new ViewerKey(packet.pos(), editor.sessionId());
-                    viewers.keySet().removeIf(k -> k.pos().equals(packet.pos()) && !k.equals(key));
+                    var key = new ViewerKey(player.serverLevel().dimension(), packet.pos(), editor.sessionId());
+                    removeViewer(player.getUUID());
+                    viewers.keySet().removeIf(k -> k.dimension().equals(key.dimension()) && k.pos().equals(packet.pos()) && !k.equals(key));
                     viewers.computeIfAbsent(key, k -> new HashSet<>()).add(player.getUUID());
                 } else if (packet.action() == EditorPackets.DRAFT) {
                     editor.session().edit(GraphJson.decodeDraft(packet.graph()), packet.bpm(), packet.playing());
@@ -82,8 +84,20 @@ public final class EditorServer {
             var session = visible ? editor.session() : null;
             var otherViewers = new ArrayList<String>();
             if (visible) {
-                var players = viewers.get(new ViewerKey(packet.pos(), editor.sessionId()));
-                if (players != null) for (UUID id : players) if (!id.equals(player.getUUID())) otherViewers.add(resolveName(context.server(), id));
+                var players = viewers.get(new ViewerKey(player.serverLevel().dimension(), packet.pos(), editor.sessionId()));
+                if (players != null) {
+                    // Revoked or displaced viewers must not accumulate beyond the packet's
+                    // allowlist-sized bound, even when a client never sends CLOSE.
+                    var iterator = players.iterator();
+                    while (iterator.hasNext()) {
+                        UUID id = iterator.next();
+                        var viewer = context.server().getPlayerList().getPlayer(id);
+                        if (viewer == null || !editor.canEdit(id) || viewer.serverLevel() != player.serverLevel()
+                                || viewer.distanceToSqr(packet.pos().getCenter()) > 64) iterator.remove();
+                        else if (!id.equals(player.getUUID())) otherViewers.add(viewer.getGameProfile().getName());
+                    }
+                    viewers.values().removeIf(Set::isEmpty);
+                }
                 otherViewers.sort(String.CASE_INSENSITIVE_ORDER);
             }
             ServerPlayNetworking.send(player, new EditorPackets.State(packet.pos(), visible ? editor.sessionId() : packet.session(),
@@ -128,6 +142,10 @@ public final class EditorServer {
                         }));
             } catch (RuntimeException error) { rejectAllowlist(player, packet, error); }
         }));
+    }
+    private static void removeViewer(UUID id) {
+        for (var players : viewers.values()) players.remove(id);
+        viewers.values().removeIf(Set::isEmpty);
     }
     private static EditorBlockEntity requireAllowlistOwner(ServerPlayer player, EditorPackets.AllowlistRequest packet) {
         if (!player.serverLevel().hasChunk(packet.pos().getX() >> 4, packet.pos().getZ() >> 4) || player.distanceToSqr(packet.pos().getCenter()) > 64)

@@ -82,13 +82,16 @@ public final class GrooveAudioStream implements AudioStream {
         }
         for (int frame = 0; frame < frames; frame++) {
             float left = samples[frame * 2], right = samples[frame * 2 + 1];
+            if (muffleActive) { left = (float) muffleLeft.process(left); right = (float) muffleRight.process(right); }
+            // A low-pass step response can overshoot the renderer's limiter.
+            left = Math.clamp(left, -1f, 1f); right = Math.clamp(right, -1f, 1f);
+            // Fade the filtered output so its state cannot ring past the silent endpoint.
             if (fadeFrames > 0) {
                 float gain = fadeFrames == 1 ? 0 : Math.max(0f, (float) (fadeRemaining - 1) / (fadeFrames - 1));
                 left *= gain; right *= gain;
                 if (fadeRemaining > 0) fadeRemaining--;
                 if (fadeRemaining == 0) closed = true;
             }
-            if (muffleActive) { left = (float) muffleLeft.process(left); right = (float) muffleRight.process(right); }
             if (mono) {
                 float mixed = (left + right) * .5f;
                 blockPeak = Math.max(blockPeak, Math.abs(mixed));

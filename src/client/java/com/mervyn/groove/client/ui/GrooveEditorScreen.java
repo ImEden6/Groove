@@ -159,7 +159,7 @@ public final class GrooveEditorScreen extends Screen {
             // Not my own edit still in flight -- the idle poll that produced this response
             // only ever sends while clean, so a revision change here came from someone else.
             draftConflict = "Someone else changed the shared draft while you were editing. "
-                    + "Reload to see their changes, or keep editing to overwrite them.";
+                    + "Autosave paused. Reload their changes, or Commit to overwrite them.";
         }
     }
     public void allowlistState(com.mervyn.groove.music.EditorPackets.AllowlistState packet) {
@@ -269,7 +269,7 @@ public final class GrooveEditorScreen extends Screen {
                 allowlistRequest = null; message = "Allowlist request timed out; try again";
             }
             if (blockRequest == null && allowlistRequest == null && elapsed > 400_000_000L) {
-                if (blockDirty()) sendBlock(1, false);
+                if (blockDirty()) { if (draftConflict == null) sendBlock(1, false); }
                 else if (commitAfterSave) { commitAfterSave = false; sendBlock(2, false); }
                 else if (elapsed > 1_000_000_000L) sendBlock(0, false);
             }
@@ -350,6 +350,7 @@ public final class GrooveEditorScreen extends Screen {
                     label = (leaf.favorite() ? "* " : "  ") + SampleTree.leafName(leaf.entry());
                     indent = 8 + leaf.depth() * 8;
                 }
+                indent = Math.min(indent, DRAWER_WIDTH - 53);
                 graphics.drawString(font, font.plainSubstrByWidth(label, DRAWER_WIDTH - indent - 5), indent, y, textColor, false);
             }
         }
@@ -410,7 +411,7 @@ public final class GrooveEditorScreen extends Screen {
             graphics.drawString(font, "Drag / Ctrl: fine", textX, inspectorBottom - 12, textColor, false);
         }
         renderer.drawPanel(graphics, PanelKind.TRANSPORT, 0, height - 20, width, 20);
-        String status = draftConflict != null ? draftConflict : message;
+        String status = draftConflict != null ? message + "  " + draftConflict : message;
         int statusColor = draftConflict != null ? 0xffaa4444 : textColor;
         if (blockSession != null && !blockSession.viewers().isEmpty())
             status = status + "  [Also editing: " + String.join(", ", blockSession.viewers()) + "]";
@@ -832,16 +833,18 @@ public final class GrooveEditorScreen extends Screen {
         request = null; message = result.message();
         if (result.accepted()) { baseRevision++; baseGraph = submittedGraph; }
     }
-    @Override public void removed() { SampleCommands.stop(); super.removed(); }
+    @Override public void removed() {
+        SampleCommands.stop();
+        // Screen replacement (including death) bypasses onClose().
+        if (blockSession != null && ClientPlayNetworking.canSend(com.mervyn.groove.music.EditorPackets.Request.TYPE))
+            ClientPlayNetworking.send(new com.mervyn.groove.music.EditorPackets.Request(blockSession.pos(), blockSession.session(),
+                    UUID.randomUUID(), com.mervyn.groove.music.EditorPackets.CLOSE, 0, "", 0, false));
+        super.removed();
+    }
     @Override public void onClose() {
         if (blockSession != null) {
             if (blockRequest != null || commitAfterSave) { message = "Wait for the draft to save before closing"; return; }
             if (blockDirty() && !confirmClose) { confirmClose = true; message = "Unsaved draft: Escape again to discard local changes"; return; }
-            // Fire-and-forget: drops this player from the "also editing" presence list
-            // promptly instead of waiting for a stale entry to age out.
-            if (ClientPlayNetworking.canSend(com.mervyn.groove.music.EditorPackets.Request.TYPE))
-                ClientPlayNetworking.send(new com.mervyn.groove.music.EditorPackets.Request(blockSession.pos(), blockSession.session(),
-                        UUID.randomUUID(), com.mervyn.groove.music.EditorPackets.CLOSE, 0, "", 0, false));
             super.onClose(); return;
         }
         if (request != null) { message = "Wait for the submission result before closing."; return; }

@@ -419,6 +419,8 @@ public final class MusicClient {
             previewRequest = UUID.randomUUID(); previewSent = now;
             ClientPlayNetworking.send(new HeadphonePackets.Preview(previewRequest));
         }
+        boolean underwater = client.player.isEyeInFluid(net.minecraft.tags.FluidTags.WATER);
+        if (previewStream != null) previewStream.setUnderwater(underwater);
         if (previewRetryTicks > 0) { previewRetryTicks--; return true; }
         if (previewProgram != null && (previewSound == null || previewStream.closed() || !client.getSoundManager().isActive(previewSound))) {
             if (previewSound != null) client.getSoundManager().stop(previewSound);
@@ -426,11 +428,11 @@ public final class MusicClient {
             previewRenderer = new LiveRenderer();
             previewRenderer.publish(previewProgram);
             previewStream = new GrooveAudioStream(previewRenderer, clock);
+            previewStream.setUnderwater(underwater);
             previewSound = new GrooveSound(previewStream);
             client.getSoundManager().play(previewSound);
             previewRetryTicks = 100;
         }
-        if (previewStream != null) previewStream.setUnderwater(client.player.isEyeInFluid(net.minecraft.tags.FluidTags.WATER));
         return true;
     }
 
