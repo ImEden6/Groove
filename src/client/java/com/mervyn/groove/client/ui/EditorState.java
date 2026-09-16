@@ -370,7 +370,7 @@ public final class EditorState {
             case NodeParam.SYNC, NodeParam.MODE, NodeParam.WAVE, NodeParam.STEPS,
                     NodeParam.FRAMES, NodeParam.SEED, NodeParam.STEPS_PER_CYCLE,
                     NodeParam.PULSES, NodeParam.ROTATION, NodeParam.ROOT, NodeParam.CHORD, NodeParam.INVERSION,
-                    NodeParam.START_FRAME, NodeParam.END_FRAME, NodeParam.SLICES, NodeParam.INDEX, NodeParam.REVERSE -> true;
+                    NodeParam.START_FRAME, NodeParam.END_FRAME, NodeParam.SLICES, NodeParam.INDEX, NodeParam.REVERSE, NodeParam.SUBDIVISION -> true;
             default -> false;
         };
     }
@@ -390,6 +390,8 @@ public final class EditorState {
             case NodeParam.FACTOR -> 0.1;
             case NodeParam.STEPS, NodeParam.PULSES -> 0.3;
             case NodeParam.ROTATION -> 0.5;
+            case NodeParam.SUBDIVISION -> 0.3;
+            case NodeParam.AMOUNT -> 0.01;
             case NodeParam.RATE -> .05;
             case NodeParam.SYNC, NodeParam.MODE -> .05;
             case NodeParam.ATTACK, NodeParam.DECAY, NodeParam.RELEASE, NodeParam.SUSTAIN, NodeParam.GATE -> .005;
@@ -436,6 +438,11 @@ public final class EditorState {
             case NodeParam.REVERSE -> Math.max(0, Math.min(1, Math.rint(value)));
             case NodeParam.SLICES -> Math.max(1, Math.min(64, Math.rint(value)));
             case NodeParam.INDEX -> Math.max(0, Math.min((existingParams == null ? 8 : existingParams.getOrDefault(NodeParam.SLICES, 8.0)) - 1, Math.rint(value)));
+            case NodeParam.SUBDIVISION -> {
+                double clamped = Math.max(2.0, Math.min(64.0, Math.rint(value)));
+                yield clamped % 2 == 0 ? clamped : clamped - 1.0;
+            }
+            case NodeParam.AMOUNT -> Math.max(0.0, Math.min(1.0, value));
             case NodeParam.CHANCE -> Math.max(0, Math.min(1, value));
             case NodeParam.SEED -> Math.max(0, Math.min(65535, Math.rint(value)));
             case NodeParam.STEPS_PER_CYCLE -> Math.max(1, Math.min(64, Math.rint(value)));
@@ -500,6 +507,8 @@ public final class EditorState {
                 m.put(NodeParam.FACTOR, 2.0);
                 yield m;
             }
+            case REVERSE -> Map.of();
+            case SWING -> Map.of(NodeParam.SUBDIVISION, 16.0, NodeParam.AMOUNT, 0.333);
             default -> Map.of();
         };
     }

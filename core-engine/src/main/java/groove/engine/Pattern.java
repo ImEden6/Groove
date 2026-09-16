@@ -202,6 +202,65 @@ public interface Pattern {
         };
     }
 
+    /** Reverses events within each integer cycle [c, c+1). */
+    default Pattern reverse() {
+        return arc -> {
+            checkQuery(arc);
+            List<Event> events = new ArrayList<>();
+            if (arc.start() == arc.end()) return events;
+            for (long c = (long) Math.floor(arc.start()); c < Math.ceil(arc.end()); c++) {
+                Arc visible = new Arc(c, c + 1.0).intersect(arc);
+                if (visible == null) continue;
+                Arc childArc = new Arc(2 * c + 1.0 - visible.end(), 2 * c + 1.0 - visible.start());
+                for (Event e : query(childArc)) {
+                    double revStart = 2 * c + 1.0 - e.whole().end();
+                    double revEnd = 2 * c + 1.0 - e.whole().start();
+                    Arc whole = new Arc(Math.max(c, revStart), Math.min(c + 1.0, revEnd));
+                    Arc part = new Arc(Math.max(c, 2 * c + 1.0 - e.part().end()),
+                            Math.min(c + 1.0, 2 * c + 1.0 - e.part().start())).intersect(visible);
+                    if (part != null) events.add(new Event(whole, part, e.tone(), e.sample()));
+                }
+            }
+            return events;
+        };
+    }
+
+    /** Continuous bijective swing warping over periods of width T = 2 / subdivision. */
+    default Pattern swing(int subdivision, double amount) {
+        if (subdivision < 2 || subdivision > 64 || subdivision % 2 != 0)
+            throw new IllegalArgumentException("Subdivision must be an even integer in 2..64");
+        if (!Double.isFinite(amount) || amount < 0 || amount > 1)
+            throw new IllegalArgumentException("Swing amount must be in 0..1");
+        double T = 2.0 / subdivision;
+        double R = 0.5 + 0.25 * amount;
+        return arc -> {
+            checkQuery(arc);
+            List<Event> events = new ArrayList<>();
+            if (arc.start() == arc.end()) return events;
+            Arc childArc = new Arc(unwarp(arc.start(), T, R), unwarp(arc.end(), T, R));
+            for (Event e : query(childArc)) {
+                Arc whole = new Arc(warp(e.whole().start(), T, R), warp(e.whole().end(), T, R));
+                Arc part = new Arc(warp(e.part().start(), T, R), warp(e.part().end(), T, R)).intersect(arc);
+                if (part != null) events.add(new Event(whole, part, e.tone(), e.sample()));
+            }
+            return events;
+        };
+    }
+
+    private static double warp(double t, double T, double R) {
+        long k = (long) Math.floor(t / T);
+        double tau = Math.max(0.0, Math.min(T, t - k * T));
+        double w = tau < 0.5 * T ? 2.0 * R * tau : R * T + 2.0 * (1.0 - R) * (tau - 0.5 * T);
+        return k * T + w;
+    }
+
+    private static double unwarp(double sigma, double T, double R) {
+        long k = (long) Math.floor(sigma / T);
+        double tau = Math.max(0.0, Math.min(T, sigma - k * T));
+        double u = tau < R * T ? tau / (2.0 * R) : 0.5 * T + (tau - R * T) / (2.0 * (1.0 - R));
+        return k * T + u;
+    }
+
     private static void checkQuery(Arc arc) {
         if (arc == null || Math.abs(arc.start()) > 1e9 || Math.abs(arc.end()) > 1e9
                 || arc.end() - arc.start() > 4096)

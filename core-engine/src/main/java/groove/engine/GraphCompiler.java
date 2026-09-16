@@ -90,7 +90,8 @@ public final class GraphCompiler {
             case SAMPLE_SLICE -> Set.of(NodeParam.SLICES, NodeParam.INDEX, NodeParam.REVERSE);
             case FAST -> Set.of(NodeParam.FACTOR);
             case EUCLID -> Set.of(NodeParam.STEPS, NodeParam.PULSES, NodeParam.ROTATION);
-            case STACK, ALTERNATE, OUTPUT -> Set.of();
+            case STACK, ALTERNATE, OUTPUT, REVERSE -> Set.of();
+            case SWING -> Set.of(NodeParam.SUBDIVISION, NodeParam.AMOUNT);
             case PROBABILITY -> Set.of(NodeParam.CHANCE, NodeParam.SEED);
             case POLYMETER -> Set.of(NodeParam.STEPS_PER_CYCLE);
             case TRANSPOSE -> Set.of(NodeParam.SEMITONES);
@@ -209,6 +210,15 @@ public final class GraphCompiler {
             int rotation = integer(node, NodeParam.ROTATION, 0, -1024, 1024);
             require(child.cost * Math.max(1, pulses) <= MAX_EVENTS, "Graph exceeds event budget");
             yield derived(child.pattern.euclid(steps, pulses, rotation), child.cost * pulses, children);
+        }
+        case REVERSE -> derived(children.getFirst().pattern.reverse(), children.getFirst().cost, children);
+        case SWING -> {
+            Compiled child = children.getFirst();
+            int subdivision = integer(node, NodeParam.SUBDIVISION, 16, 2, 64);
+            require(subdivision % 2 == 0, "Subdivision must be an even integer in 2..64");
+            double amount = number(node, NodeParam.AMOUNT, 0.333);
+            require(amount >= 0 && amount <= 1, "Swing amount must be in 0..1");
+            yield derived(child.pattern.swing(subdivision, amount), child.cost, children);
         }
         case OUTPUT -> children.getFirst();
         default -> throw new IllegalStateException("unreachable: signal nodes are rejected in build()");

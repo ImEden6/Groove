@@ -38,6 +38,8 @@ public final class NodeParam {
     public static final String CHANCE = "chance";
     public static final String SEED = "seed";
     public static final String STEPS_PER_CYCLE = "stepsPerCycle";
+    public static final String SUBDIVISION = "subdivision";
+    public static final String AMOUNT = "amount";
 
     private NodeParam() {}
 }
