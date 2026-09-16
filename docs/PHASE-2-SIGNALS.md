@@ -17,7 +17,7 @@ graphs and their v1/v2 serialization continue to work unchanged.
 | `envelope` | `trigger`: TRIGGER | `out`: MOD_FLOAT | `attack=.01`, `decay=.1`, `release=.1` (0–8 cycles); `sustain=.5` (0–1); `mode=0` (ONE_SHOT=0, GATED=1) |
 | `attenuverter` | `in`: MOD_FLOAT | `out`: MOD_FLOAT | `scale=1`, `offset=0` (each -20000–20000); result clamped to that range |
 | `filter` | `in`: AUDIO; optional `cutoff`: MOD_FLOAT | `out`: AUDIO | `cutoffHz=20000` (20–20000); `resonanceQ=.70710678` (.1–20) |
-| `delay` | `in`: AUDIO | `out`: AUDIO | `frames=64` (integer 64–48000, at 48 kHz) |
+| `delay` | `in`: AUDIO | `out`: AUDIO | `sync=0` (0=free frames, 1=tempo-synced); `frames=64` (integer 64–48000, at 48 kHz, used when `sync=0`); `division=2` (integer 0–7: 1/16, 1/8T, 1/8, 1/4T, 1/8D, 1/4, 1/4D, 1/2; used when `sync=1`) |
 | `mix_bus` | `in`: AUDIO, 1–16 sources; optional `gain`: MOD_FLOAT | `out`: AUDIO | `gain=1` (0–1) |
 | `output` | Either `in`: PATTERN or `audio`: AUDIO | None | Exactly one input across both sockets |
 
@@ -116,8 +116,11 @@ The control graph is evaluated in dependency order with bounded node/edge counts
 
 Compilation cuts audio edges **entering** delays and rejects any remaining cycle.
 It checks every node, so a delay in one arm of a diamond cannot hide a bypass cycle.
-Delay lengths have a 64-frame minimum, a 48000-frame per-node maximum, and a combined
-192000-frame budget (about 3 MiB of stereo double storage per renderer/program).
+Delay lengths have a 64-frame minimum and a combined 192000-frame budget (about 3 MiB
+of stereo double storage per renderer/program). Free delays cap at 48000 frames each.
+Synced delays are sized from the BPM and charged their 30 BPM length against the budget,
+so a 1/2-note synced delay can use all 192000 frames on its own. See
+[Stage 3](ENGINE-UPGRADE-STAGES.md#tempo-synced-delay-and-memory-budgeting).
 Mix/filter output and feedback writes are bounded to ±8 to prevent runaway state;
 this is intentional overload saturation, not a transparent limiter.
 
