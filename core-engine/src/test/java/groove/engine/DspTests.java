@@ -142,6 +142,21 @@ final class DspTests {
             double mean = sum / 1000;
             check(Math.abs(mean) < 1e-10, "Pulse wave DC null for duty " + d + ", mean=" + mean);
         }
+        // 16 kHz gives a 1/3 phase increment, so 0.2 and 0.8 hit the duty clamp.
+        for (double d : new double[]{0.2, 0.5, 0.8}) {
+            VoiceDsp v = new VoiceDsp();
+            v.start(new Tone(Tone.Wave.PULSE, 16000, 1.0, 0.0, 24000, 1.0, d), null, 48000);
+            double sum = 0;
+            double[] out = new double[2];
+            for (int i = 0; i < 999; i++) {
+                out[0] = 0; out[1] = 0;
+                v.add(0.01, 1.0, (i % 3) / 3.0, 1.0, out);
+                check(Double.isFinite(out[0]) && Math.abs(out[0]) <= 1, "Pulse stays bounded near Nyquist for duty " + d);
+                sum += out[0];
+            }
+            double mean = sum / 999;
+            check(Math.abs(mean) < 1e-10, "Clamped pulse DC null for duty " + d + ", mean=" + mean);
+        }
 
         Tone pTone = new Tone(Tone.Wave.PULSE, 440, .6, 0, 20000, Biquad.DEFAULT_Q, 0.35);
         Pattern pPat = Pattern.tone(pTone).fast(2);
