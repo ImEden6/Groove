@@ -1,5 +1,8 @@
 # Musical pattern nodes
 
+For note names, scale-degree sequences, transpose, chords, and filter modes,
+see [engine upgrade stages](ENGINE-UPGRADE-STAGES.md).
+
 `alternate`, `probability`, and `polymeter` are available in the editor's
 Shift+A / Tab palette. They work with tones, samples, audio_render, and
 trigger_render. All decisions use musical cycle time, so lookahead queries,

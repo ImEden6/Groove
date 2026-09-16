@@ -12,6 +12,9 @@ and tests, [samples and packs](docs/SAMPLES.md) for WAV/OGG playback and auditio
 [musical pattern nodes](docs/MUSICAL-PATTERNS.md) for alternation, probability, and polymeter, and
 [future work](docs/FUTURE-WORK.md) for what's not implemented yet.
 
+See [engine upgrade stages](docs/ENGINE-UPGRADE-STAGES.md) for note names,
+scale sequences, chords, transposition, filter modes, and the remaining roadmap.
+
 Run the engine without downloading Minecraft:
 
 ```powershell

@@ -634,11 +634,10 @@ public final class GrooveEditorScreen extends Screen {
     }
     private void commitKnobEntry() {
         try {
-            double value = Double.parseDouble(knobEntry.getValue().trim());
             if (knobEntryNode != null && knobEntryParam != null && state.selection().contains(knobEntryNode))
-                state.setKnobValue(knobEntryNode, knobEntryParam, value);
+                state.setKnobText(knobEntryNode, knobEntryParam, knobEntry.getValue());
             hideKnobEntry();
-        } catch (IllegalArgumentException invalid) { message = "Enter a finite number"; }
+        } catch (IllegalArgumentException invalid) { message = "Enter a finite number, or a note such as C4 for pitch"; }
     }
     private void openKnobEntry(Graph.Node node, String param) {
         double value = EditorState.displayParams(node).getOrDefault(param, 0.0);

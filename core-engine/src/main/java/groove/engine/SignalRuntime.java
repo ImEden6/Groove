@@ -10,6 +10,7 @@ public final class SignalRuntime {
     private final double[][] controls, delayLeft, delayRight;
     private final int[] cursors;
     private final Biquad[] filtersLeft, filtersRight;
+    private final Biquad.Mode[] filterModes;
     private final boolean[] filterCoefficientsSet;
     private final LookaheadScheduler.Window[] triggerWindowByNode;
     private static final LookaheadScheduler.Window[] NO_TRIGGERS = new LookaheadScheduler.Window[0];
@@ -22,6 +23,7 @@ public final class SignalRuntime {
         controls = new double[size][SignalGraph.CONTROL_FRAMES];
         delayLeft = new double[size][]; delayRight = new double[size][]; cursors = new int[size];
         filtersLeft = new Biquad[size]; filtersRight = new Biquad[size]; filterCoefficientsSet = new boolean[size];
+        filterModes = new Biquad.Mode[size];
         triggerWindowByNode = new LookaheadScheduler.Window[size];
         for (int i=0;i<size;i++) {
             Graph.Node n = graph.nodes[i];
@@ -29,7 +31,10 @@ public final class SignalRuntime {
                 int frames = (int)p(n,NodeParam.FRAMES,64);
                 delayLeft[i] = new double[frames]; delayRight[i] = new double[frames];
             }
-            if (n.type() == NodeType.FILTER) { filtersLeft[i] = new Biquad(); filtersRight[i] = new Biquad(); }
+            if (n.type() == NodeType.FILTER) {
+                filtersLeft[i] = new Biquad(); filtersRight[i] = new Biquad();
+                filterModes[i] = Biquad.Mode.values()[(int)p(n,NodeParam.MODE,0)];
+            }
         }
     }
 
@@ -93,8 +98,8 @@ public final class SignalRuntime {
                     if (mod >= 0 || !filterCoefficientsSet[i]) {
                         double cutoff = mod < 0 ? p(n,NodeParam.CUTOFF_HZ,20000) : clamp(controls[mod][frame],20,20000);
                         double q = p(n,NodeParam.RESONANCE_Q,Biquad.DEFAULT_Q);
-                        filtersLeft[i].setLowPass(cutoff,q,LiveRenderer.SAMPLE_RATE);
-                        filtersRight[i].setLowPass(cutoff,q,LiveRenderer.SAMPLE_RATE);
+                        filtersLeft[i].set(filterModes[i],cutoff,q,LiveRenderer.SAMPLE_RATE);
+                        filtersRight[i].set(filterModes[i],cutoff,q,LiveRenderer.SAMPLE_RATE);
                         filterCoefficientsSet[i] = true;
                     }
                     left[i] = bounded(filtersLeft[i].process(left[inputs[0]]));

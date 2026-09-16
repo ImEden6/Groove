@@ -10,6 +10,8 @@ public final class EngineTests {
 
     public static void main(String[] args) {
         MusicalPatternTests.run();
+        PitchTests.run();
+        FilterModeTests.run();
         PortTests.run();
         SignalTests.run();
         DspTests.run();

@@ -11,6 +11,9 @@ import net.minecraft.client.gui.GuiGraphics;
 public record RotaryKnob(String param, int x, int y, int width) {
     public static final int HEIGHT = 48;
     private static final int SIZE = 24;
+    private static final String[] FILTER_NAMES = {"LPF", "HPF", "BPF", "Notch"};
+    private static final String[] SCALE_NAMES = {"Major", "Minor", "Dorian", "Phrygian", "Lydian", "Mixolydian", "Min Pent", "Blues", "Whole Tone"};
+    private static final String[] CHORD_NAMES = {"Major", "Minor", "7", "Maj7", "Min7", "Sus4", "Dim", "9"};
 
     public boolean contains(double px, double py) {
         return px >= x && px < x + width && py >= y && py < y + HEIGHT;
@@ -36,7 +39,13 @@ public record RotaryKnob(String param, int x, int y, int width) {
         graphics.pose().mulPose(Axis.ZP.rotationDegrees(KnobScale.angle(node, param, value)));
         graphics.blitSprite(ThemeAssets.sprite(theme, "knob_indicator"), -SIZE / 2, -SIZE / 2, SIZE, SIZE);
         graphics.pose().popPose();
-        String text = param.equals(NodeParam.WAVE) ? (value < .5 ? "Sine" : "Saw")
+        String text = node.type() == groove.engine.NodeType.FILTER && param.equals(NodeParam.MODE)
+                ? FILTER_NAMES[Math.max(0, Math.min(3, (int)value))]
+                : node.type() == groove.engine.NodeType.SCALE_SEQUENCE && param.equals(NodeParam.SCALE)
+                ? SCALE_NAMES[Math.max(0, Math.min(8, (int)value))]
+                : node.type() == groove.engine.NodeType.CHORD && param.equals(NodeParam.CHORD)
+                ? CHORD_NAMES[Math.max(0, Math.min(7, (int)value))]
+                : param.equals(NodeParam.WAVE) ? (value < .5 ? "Sine" : "Saw")
                 : value == Math.rint(value) ? Long.toString((long) value)
                 : String.format(java.util.Locale.ROOT, "%.2f", value);
         text = font.plainSubstrByWidth(text, Math.max(0, width - 4));

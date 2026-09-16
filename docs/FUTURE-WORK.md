@@ -116,7 +116,10 @@ ordering, limits, and examples. A dedicated input-order editor is still deferred
 
 ### 2. Musical Pitch: Note Quantization & Scale Systems
 
-Right now, your pitch model is purely physical: raw frequency in Hz ($20\text{--}16000\text{ Hz}$) or pitch ratios ($0.25\text{--}4.0$). Strudel's musical power comes from scales and pitch theory:
+Stage 1 now provides note-name authoring, `scale_sequence`, `transpose`, and
+`chord` on the event side. See [engine upgrade stages](ENGINE-UPGRADE-STAGES.md)
+for parameters, bounds, and an example patch. Continuous signal-driven pitch
+quantization remains future work:
 
 * **Scale Quantizer Node:**
 * Takes continuous pitch ratios or integer scale degrees ($0, 1, 2, 3\dots$) and forces them into musical scales (Minor Pentatonic, Dorian, Phrygian, Major, Blues).
@@ -128,8 +131,9 @@ $$\text{frequency} = 440 \times 2^{\frac{\text{scaleInterval} - 69}{12}}$$
 
 
 
-* **Chord Expander Node:**
-* Takes a root note and outputs polyphonic chord triads/sevenths (e.g., `min7`, `sus4`, `dom7`) to eliminate manually wiring 3 separate Tone nodes just to build a chord.
+* **Chord Expander Node — implemented:**
+* `chord` expands tone events into fixed triads, sevenths, sus4, diminished,
+  or dominant ninth voicings, with inversions and a shared event budget.
 
 
 

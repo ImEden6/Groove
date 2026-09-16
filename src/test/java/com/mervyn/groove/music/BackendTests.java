@@ -135,7 +135,8 @@ public final class BackendTests {
 
     public static void main(String[] args) throws Exception {
         SharedConstants.tryDetectVersion(); Bootstrap.bootStrap();
-        for (NodeType type : java.util.List.of(NodeType.ALTERNATE, NodeType.PROBABILITY, NodeType.POLYMETER)) {
+        for (NodeType type : java.util.List.of(NodeType.ALTERNATE, NodeType.PROBABILITY, NodeType.POLYMETER,
+                NodeType.TRANSPOSE, NodeType.SCALE_SEQUENCE, NodeType.CHORD)) {
             Graph musical = new Graph(3, java.util.List.of(new Graph.Node("tone", NodeType.TONE, java.util.Map.of()),
                     new Graph.Node("pattern", type, com.mervyn.groove.client.ui.EditorState.defaultParams(type)),
                     new Graph.Node("out", NodeType.OUTPUT, java.util.Map.of())),
@@ -151,6 +152,7 @@ public final class BackendTests {
         }
         EditorSessionTests.run();
         knobEntryChecks();
+        PitchEntryTests.run();
         sampleTreeChecks();
         HeadphoneLinkTests.run();
         SpeakerLinkTests.run();

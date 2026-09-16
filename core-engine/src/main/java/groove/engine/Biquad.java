@@ -1,10 +1,11 @@
 package groove.engine;
 
 /**
- * Direct Form I biquad, RBJ Audio-EQ-Cookbook low-pass with configurable resonance. Mutable, single-voice-owned; reset() on note attack so state
+ * Direct Form I biquad, RBJ Audio-EQ-Cookbook filters with configurable resonance. Mutable, single-voice-owned; reset() on note attack so state
  * never bleeds between notes.
  */
 public final class Biquad {
+    public enum Mode { LOW_PASS, HIGH_PASS, BAND_PASS, NOTCH }
     public static final double DEFAULT_Q = 0.70710678118654752; // 1/sqrt(2)
     private double b0 = 1, b1, b2, a1, a2;
     private double x1, x2, y1, y2;
@@ -14,20 +15,32 @@ public final class Biquad {
     }
 
     public void setLowPass(double cutoffHz, double resonanceQ, double sampleRate) {
-        if (!Double.isFinite(sampleRate) || sampleRate <= 40
+        set(Mode.LOW_PASS, cutoffHz, resonanceQ, sampleRate);
+    }
+
+    /** RBJ coefficients; band-pass has unity peak gain. https://www.w3.org/TR/audio-eq-cookbook/ */
+    public void set(Mode mode, double cutoffHz, double resonanceQ, double sampleRate) {
+        if (mode == null || !Double.isFinite(sampleRate) || sampleRate <= 40
                 || !Double.isFinite(resonanceQ) || resonanceQ < .1 || resonanceQ > 20)
             throw new IllegalArgumentException("Invalid filter settings");
         double nyquistCeiling = sampleRate * 0.499;
-        if (!Double.isFinite(cutoffHz) || cutoffHz >= nyquistCeiling) {
+        if (mode == Mode.LOW_PASS && (!Double.isFinite(cutoffHz) || cutoffHz >= nyquistCeiling)) {
             b0 = 1; b1 = 0; b2 = 0; a1 = 0; a2 = 0; // bypass: pass-through
             return;
         }
-        double clamped = Math.max(20, cutoffHz);
+        if (!Double.isFinite(cutoffHz)) throw new IllegalArgumentException("Invalid filter cutoff");
+        double clamped = Math.min(nyquistCeiling, Math.max(20, cutoffHz));
         double omega = 2 * Math.PI * clamped / sampleRate;
         double sinOmega = Math.sin(omega), cosOmega = Math.cos(omega);
         double alpha = sinOmega / (2 * resonanceQ);
         double a0 = 1 + alpha;
         double rawB0 = (1 - cosOmega) / 2, rawB1 = 1 - cosOmega, rawB2 = (1 - cosOmega) / 2;
+        switch (mode) {
+            case HIGH_PASS -> { rawB0 = (1 + cosOmega) / 2; rawB1 = -(1 + cosOmega); rawB2 = rawB0; }
+            case BAND_PASS -> { rawB0 = alpha; rawB1 = 0; rawB2 = -alpha; }
+            case NOTCH -> { rawB0 = 1; rawB1 = -2 * cosOmega; rawB2 = 1; }
+            default -> { }
+        }
         double rawA1 = -2 * cosOmega, rawA2 = 1 - alpha;
         b0 = rawB0 / a0; b1 = rawB1 / a0; b2 = rawB2 / a0;
         a1 = rawA1 / a0; a2 = rawA2 / a0;

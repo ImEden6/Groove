@@ -8,6 +8,59 @@ import java.util.List;
 public interface Pattern {
     List<Event> query(Arc arc);
 
+    /** Pitch mapping runs only during control-thread queries, preserving event identity/timing. */
+    default Pattern transpose(double semitones) {
+        if (!Double.isFinite(semitones) || Math.abs(semitones) > 48)
+            throw new IllegalArgumentException("Transpose must be -48..48 semitones");
+        double ratio = Math.pow(2, semitones / 12);
+        return mapTones(t -> Pitch.withFrequency(t, t.frequency() * ratio));
+    }
+
+    /** Absolute scale pitches applied to successive branches, at a shared step rate. */
+    default Pattern scaleSequence(int root, Pitch.Scale scale, int stepsPerCycle, int... degrees) {
+        if (degrees.length < 1 || degrees.length > 8) throw new IllegalArgumentException("Expected 1..8 degrees");
+        Pattern[] steps = new Pattern[degrees.length];
+        for (int i = 0; i < degrees.length; i++) {
+            double hz = Pitch.degreeHz(root, scale, degrees[i]);
+            if (hz < 20 || hz > 16000) throw new IllegalArgumentException("Scale pitch must be 20..16000 Hz");
+            steps[i] = mapTones(t -> Pitch.withFrequency(t, hz));
+        }
+        return polymeter(stepsPerCycle, steps);
+    }
+
+    /** Chord gain is divided by voice count to retain the input's summed gain. */
+    default Pattern chord(Pitch.Chord chord, int inversion) {
+        if (chord == null) throw new IllegalArgumentException("Missing chord");
+        int[] intervals = chord.intervals(inversion);
+        double[] ratios = new double[intervals.length];
+        for (int i = 0; i < intervals.length; i++) ratios[i] = Math.pow(2, intervals[i] / 12.0);
+        return arc -> {
+            checkQuery(arc);
+            List<Event> events = new ArrayList<>();
+            for (Event e : query(arc)) {
+                if (e.tone() == null) throw new IllegalArgumentException("Chords require tone events");
+                for (double ratio : ratios) {
+                    Tone t = Pitch.withFrequency(e.tone(), e.tone().frequency() * ratio);
+                    events.add(new Event(e.whole(), e.part(), new Tone(t.wave(), t.frequency(),
+                            t.gain() / ratios.length, t.pan(), t.cutoffHz(), t.resonanceQ())));
+                }
+            }
+            return events;
+        };
+    }
+
+    private Pattern mapTones(java.util.function.UnaryOperator<Tone> mapper) {
+        return arc -> {
+            checkQuery(arc);
+            List<Event> events = new ArrayList<>();
+            for (Event e : query(arc)) {
+                if (e.tone() == null) throw new IllegalArgumentException("Pitch transforms require tone events");
+                events.add(new Event(e.whole(), e.part(), mapper.apply(e.tone())));
+            }
+            return events;
+        };
+    }
+
     static Pattern tone(Tone tone) {
         if (tone == null) throw new IllegalArgumentException("Missing tone");
         return trigger(tone, null);

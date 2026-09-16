@@ -9,7 +9,22 @@ public final class GraphCompiler {
     private final Map<String, List<String>> inputs = new HashMap<>();
     private final Map<String, Compiled> compiled = new HashMap<>();
     private final Set<String> visiting = new HashSet<>();
-    private record Compiled(Pattern pattern, int cost) {}
+    // Bounds cover every branch, including branches absent from the cycle-zero preview.
+    private record Compiled(Pattern pattern, int cost, double minHz, double maxHz, boolean samples) {}
+
+    private static Compiled derived(Pattern pattern, int cost, List<Compiled> children) {
+        double min = Double.POSITIVE_INFINITY, max = 0;
+        boolean samples = false;
+        for (Compiled child : children) {
+            min = Math.min(min, child.minHz); max = Math.max(max, child.maxHz); samples |= child.samples;
+        }
+        return new Compiled(pattern, cost, min, max, samples);
+    }
+
+    private static void pitchBounds(double min, double max) {
+        require(Double.isFinite(min) && Double.isFinite(max) && min >= 20 && max <= 16000,
+                "Transformed frequency must be 20..16000 Hz in every branch");
+    }
 
     public static LoopPlan compile(Graph graph) {
         if (graph.nodes().stream().anyMatch(n -> n.type() != null && n.type().isSignalNode())) return SignalGraph.compile(graph);
@@ -28,7 +43,7 @@ public final class GraphCompiler {
             require(!node.type().isSignalNode(), "Signal node requires v3 routing");
             require(node.type() == NodeType.GENERATOR_SAMPLE ? graph.version() >= 2 && node.sample() != null : node.sample() == null,
                     "Sample reference requires a v2/v3 generator/sample node");
-            require(node.params().size() <= 8, "Too many parameters");
+            require(node.params().size() <= (node.type() == NodeType.SCALE_SEQUENCE ? 12 : 8), "Too many parameters");
             inputs.put(node.id(), new ArrayList<>());
         }
         Set<Graph.Edge> unique = new HashSet<>();
@@ -67,6 +82,10 @@ public final class GraphCompiler {
             case STACK, ALTERNATE, OUTPUT -> Set.of();
             case PROBABILITY -> Set.of(NodeParam.CHANCE, NodeParam.SEED);
             case POLYMETER -> Set.of(NodeParam.STEPS_PER_CYCLE);
+            case TRANSPOSE -> Set.of(NodeParam.SEMITONES);
+            case CHORD -> Set.of(NodeParam.CHORD, NodeParam.INVERSION);
+            case SCALE_SEQUENCE -> Set.of(NodeParam.ROOT, NodeParam.SCALE, NodeParam.STEPS, NodeParam.STEPS_PER_CYCLE,
+                    "value0", "value1", "value2", "value3", "value4", "value5", "value6", "value7");
             default -> throw new IllegalStateException("unreachable: signal nodes are rejected in build()");
         };
         require(allowed.containsAll(node.params().keySet()), "Unknown parameter on " + id);
@@ -81,38 +100,82 @@ public final class GraphCompiler {
             double cutoffHz = number(node, NodeParam.CUTOFF_HZ, 20000);
             require(cutoffHz >= 20 && cutoffHz <= 20000, "cutoffHz must be 20..20000 Hz");
             yield new Compiled(Pattern.tone(new Tone(Tone.Wave.values()[wave], frequency,
-                    number(node, NodeParam.GAIN, .25), number(node, NodeParam.PAN, 0), cutoffHz, number(node, NodeParam.RESONANCE_Q, Biquad.DEFAULT_Q))), 1);
+                    number(node, NodeParam.GAIN, .25), number(node, NodeParam.PAN, 0), cutoffHz, number(node, NodeParam.RESONANCE_Q, Biquad.DEFAULT_Q))), 1, frequency, frequency, false);
         }
         case GENERATOR_SAMPLE -> {
             yield new Compiled(Pattern.sample(new groove.engine.samples.SampleVoice(node.sample(),
                     number(node, NodeParam.PITCH_RATIO, 1), number(node, NodeParam.GAIN, .8), number(node, NodeParam.PAN, 0), number(node, NodeParam.CUTOFF_HZ, 20000),
-                    number(node, NodeParam.RESONANCE_Q, Biquad.DEFAULT_Q))), 1);
+                    number(node, NodeParam.RESONANCE_Q, Biquad.DEFAULT_Q))), 1, Double.POSITIVE_INFINITY, 0, true);
+        }
+        case TRANSPOSE -> {
+            Compiled child = children.getFirst();
+            require(!child.samples, "Transpose requires tone events");
+            double semitones = number(node, NodeParam.SEMITONES, 0);
+            require(Math.abs(semitones) <= 48, "Transpose must be -48..48 semitones");
+            double ratio = Math.pow(2, semitones / 12);
+            pitchBounds(child.minHz * ratio, child.maxHz * ratio);
+            yield new Compiled(child.pattern.transpose(semitones), child.cost, child.minHz * ratio, child.maxHz * ratio, false);
+        }
+        case CHORD -> {
+            Compiled child = children.getFirst();
+            require(!child.samples, "Chords require tone events");
+            Pitch.Chord chord = Pitch.Chord.values()[integer(node, NodeParam.CHORD, 0, 0, Pitch.Chord.values().length - 1)];
+            int inversion = integer(node, NodeParam.INVERSION, 0, 0, chord.size() - 1);
+            int cost = child.cost * chord.size();
+            require(cost <= MAX_EVENTS, "Graph exceeds event budget");
+            int[] intervals = chord.intervals(inversion);
+            double min = child.minHz * Math.pow(2, intervals[0] / 12.0);
+            double max = child.maxHz * Math.pow(2, intervals[intervals.length - 1] / 12.0);
+            pitchBounds(min, max);
+            yield new Compiled(child.pattern.chord(chord, inversion), cost, min, max, false);
+        }
+        case SCALE_SEQUENCE -> {
+            Compiled child = children.getFirst();
+            require(!child.samples, "Scale sequences require tone events");
+            int root = integer(node, NodeParam.ROOT, 60, 0, 127);
+            Pitch.Scale scale = Pitch.Scale.values()[integer(node, NodeParam.SCALE, 0, 0, Pitch.Scale.values().length - 1)];
+            int steps = integer(node, NodeParam.STEPS, 4, 1, 8);
+            int rate = integer(node, NodeParam.STEPS_PER_CYCLE, 4, 1, 64);
+            int cost = child.cost * rate;
+            require(cost <= MAX_EVENTS, "Graph exceeds event budget");
+            int[] degrees = new int[steps];
+            double min = Double.POSITIVE_INFINITY, max = 0;
+            for (int i = 0; i < 8; i++) {
+                int degree = integer(node, NodeParam.VALUES[i], 0, -64, 64);
+                if (i < steps) {
+                    degrees[i] = degree;
+                    double hz = Pitch.degreeHz(root, scale, degree);
+                    min = Math.min(min, hz); max = Math.max(max, hz);
+                }
+            }
+            pitchBounds(min, max);
+            yield new Compiled(child.pattern.scaleSequence(root, scale, rate, degrees), cost, min, max, false);
         }
         case ALTERNATE, POLYMETER -> {
             int rate = node.type() == NodeType.POLYMETER ? integer(node, NodeParam.STEPS_PER_CYCLE, 4, 1, 64) : 1;
             int cost = children.stream().mapToInt(Compiled::cost).max().orElseThrow() * rate;
             require(cost <= MAX_EVENTS, "Graph exceeds event budget");
             Pattern[] patterns = children.stream().map(Compiled::pattern).toArray(Pattern[]::new);
-            yield new Compiled(node.type() == NodeType.ALTERNATE ? Pattern.alternate(patterns) : Pattern.polymeter(rate, patterns), cost);
+            yield derived(node.type() == NodeType.ALTERNATE ? Pattern.alternate(patterns) : Pattern.polymeter(rate, patterns), cost, children);
         }
         case PROBABILITY -> {
             Compiled child = children.getFirst();
             double chance = number(node, NodeParam.CHANCE, .5);
             require(chance >= 0 && chance <= 1, "Invalid chance");
             int seed = integer(node, NodeParam.SEED, 0, 0, 65535);
-            yield new Compiled(child.pattern.probability(chance, seed), child.cost);
+            yield derived(child.pattern.probability(chance, seed), child.cost, children);
         }
         case STACK -> {
             int cost = children.stream().mapToInt(Compiled::cost).sum();
             require(cost <= MAX_EVENTS, "Graph exceeds event budget");
-            yield new Compiled(Pattern.stack(children.stream().map(Compiled::pattern).toArray(Pattern[]::new)), cost);
+            yield derived(Pattern.stack(children.stream().map(Compiled::pattern).toArray(Pattern[]::new)), cost, children);
         }
         case FAST -> {
             Compiled child = children.getFirst();
             double factor = number(node, NodeParam.FACTOR, 2);
             require(factor >= .25 && factor <= 16, "Invalid factor");
             require(child.cost * factor <= MAX_EVENTS, "Graph exceeds event budget");
-            yield new Compiled(child.pattern.fast(factor), (int) Math.ceil(child.cost * Math.max(1, factor)));
+            yield derived(child.pattern.fast(factor), (int) Math.ceil(child.cost * Math.max(1, factor)), children);
         }
         case EUCLID -> {
             Compiled child = children.getFirst();
@@ -120,7 +183,7 @@ public final class GraphCompiler {
             int pulses = integer(node, NodeParam.PULSES, 4, 0, steps);
             int rotation = integer(node, NodeParam.ROTATION, 0, -1024, 1024);
             require(child.cost * Math.max(1, pulses) <= MAX_EVENTS, "Graph exceeds event budget");
-            yield new Compiled(child.pattern.euclid(steps, pulses, rotation), child.cost * pulses);
+            yield derived(child.pattern.euclid(steps, pulses, rotation), child.cost * pulses, children);
         }
         case OUTPUT -> children.getFirst();
         default -> throw new IllegalStateException("unreachable: signal nodes are rejected in build()");

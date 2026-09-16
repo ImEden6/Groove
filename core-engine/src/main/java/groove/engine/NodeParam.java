@@ -2,6 +2,10 @@ package groove.engine;
 
 public final class NodeParam {
     public static final String FREQUENCY = "frequency";
+    public static final String ROOT = "root";
+    public static final String SEMITONES = "semitones";
+    public static final String CHORD = "chord";
+    public static final String INVERSION = "inversion";
     public static final String GAIN = "gain";
     public static final String PAN = "pan";
     public static final String WAVE = "wave";

@@ -45,6 +45,9 @@ public final class GraphJson {
                         case "alternate" -> NodeType.ALTERNATE;
                         case "probability" -> NodeType.PROBABILITY;
                         case "polymeter" -> NodeType.POLYMETER;
+                        case "transpose" -> NodeType.TRANSPOSE;
+                        case "scale_sequence" -> NodeType.SCALE_SEQUENCE;
+                        case "chord" -> NodeType.CHORD;
                         case "output" -> NodeType.OUTPUT;
                         default -> {
                             NodeType match = null;
@@ -77,7 +80,26 @@ public final class GraphJson {
             } else if (c == ']' || c == '}') depth--;
         }
         try {
-            Graph graph = GSON.fromJson(json, Graph.class);
+            var tree = com.google.gson.JsonParser.parseString(json);
+            // Note names are authoring sugar; stored/wire graphs retain the numeric schema.
+            if (tree.isJsonObject() && tree.getAsJsonObject().has("nodes")) {
+                for (var element : tree.getAsJsonObject().getAsJsonArray("nodes")) {
+                    var node = element.getAsJsonObject();
+                    if (!node.has("params") || !node.get("params").isJsonObject()) continue;
+                    var params = node.getAsJsonObject("params");
+                    String type = node.has("type") ? node.get("type").getAsString() : "";
+                    String key = type.equals("tone") ? groove.engine.NodeParam.FREQUENCY
+                            : type.equals("scale_sequence") ? groove.engine.NodeParam.ROOT : null;
+                    if (key == null || !params.has(key) || !params.get(key).isJsonPrimitive()) continue;
+                    var value = params.getAsJsonPrimitive(key);
+                    if (value.isString() && value.getAsString().matches("[A-Ga-g].*")) {
+                        String note = value.getAsString();
+                        params.addProperty(key, key.equals(groove.engine.NodeParam.ROOT)
+                                ? groove.engine.Pitch.midi(note) : groove.engine.Pitch.hz(note));
+                    }
+                }
+            }
+            Graph graph = GSON.fromJson(tree, Graph.class);
             if (graph == null) throw new IllegalArgumentException("Empty patch");
             if (compile) GraphCompiler.compile(graph);
             else {
@@ -85,7 +107,8 @@ public final class GraphJson {
                 var ids = new java.util.HashSet<String>();
                 for (var node : graph.nodes()) {
                     if (node.id() == null || !node.id().matches("[a-zA-Z0-9_-]{1,32}") || node.type() == null || !ids.add(node.id())) throw new IllegalArgumentException("Invalid draft node");
-                    if (node.params().size() > 8 || node.params().values().stream().anyMatch(v -> !Double.isFinite(v))) throw new IllegalArgumentException("Invalid draft parameters");
+                    int maxParams = node.type().isSignalNode() ? 16 : node.type() == NodeType.SCALE_SEQUENCE ? 12 : 8;
+                    if (node.params().size() > maxParams || node.params().values().stream().anyMatch(v -> !Double.isFinite(v))) throw new IllegalArgumentException("Invalid draft parameters");
                 }
                 for (var edge : graph.edges()) if (!ids.contains(edge.fromNode()) || !ids.contains(edge.toNode()) || edge.fromPort() == null || edge.toPort() == null) throw new IllegalArgumentException("Invalid draft edge");
             }

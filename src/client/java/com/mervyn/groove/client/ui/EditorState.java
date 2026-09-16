@@ -301,6 +301,10 @@ public final class EditorState {
         if (node == null) return;
         Map<String, Double> params = new LinkedHashMap<>(node.params());
         params.put(param, clampParam(node.type(), param, raw, params));
+        if (node.type() == NodeType.CHORD && param.equals(NodeParam.CHORD)) {
+            params.put(NodeParam.INVERSION, clampParam(node.type(), NodeParam.INVERSION,
+                    params.getOrDefault(NodeParam.INVERSION, 0.0), params));
+        }
         if (node.type() == NodeType.EUCLID && param.equals(NodeParam.STEPS)) {
             params.put(NodeParam.PULSES, Math.min(params.get(NodeParam.STEPS),
                     params.getOrDefault(NodeParam.PULSES, defaultParams(NodeType.EUCLID).get(NodeParam.PULSES))));
@@ -321,7 +325,7 @@ public final class EditorState {
         double current = node.params().getOrDefault(param, defaultParams(node.type()).getOrDefault(param, 0.0));
         double step = (max - min) * (fine ? 0.002 : 0.02);
         // Quantized controls need at least one whole unit or rounding swallows the key.
-        if (integerParam(param)) step = Math.max(1, step);
+        if (integerParam(param) || node.type() == NodeType.SCALE_SEQUENCE) step = Math.max(1, step);
         setKnobValue(nodeId, param, current + Math.signum(direction) * step);
     }
 
@@ -336,11 +340,26 @@ public final class EditorState {
         applyParamValue(nodeId, param, value);
     }
 
+    /** Note names may be entered in tone frequency and scale root fields. */
+    public void setKnobText(String nodeId, String param, String text) {
+        Graph.Node node = nodes.get(nodeId);
+        String value = text.trim();
+        if (node != null && value.matches("[A-Ga-g].*")) {
+            if (node.type() == NodeType.TONE && param.equals(NodeParam.FREQUENCY)) {
+                setKnobValue(nodeId, param, groove.engine.Pitch.hz(value)); return;
+            }
+            if (node.type() == NodeType.SCALE_SEQUENCE && param.equals(NodeParam.ROOT)) {
+                setKnobValue(nodeId, param, groove.engine.Pitch.midi(value)); return;
+            }
+        }
+        setKnobValue(nodeId, param, Double.parseDouble(value));
+    }
+
     private static boolean integerParam(String param) {
         return switch (param) {
             case NodeParam.SYNC, NodeParam.MODE, NodeParam.WAVE, NodeParam.STEPS,
                     NodeParam.FRAMES, NodeParam.SEED, NodeParam.STEPS_PER_CYCLE,
-                    NodeParam.PULSES, NodeParam.ROTATION -> true;
+                    NodeParam.PULSES, NodeParam.ROTATION, NodeParam.ROOT, NodeParam.CHORD, NodeParam.INVERSION -> true;
             default -> false;
         };
     }
@@ -371,9 +390,23 @@ public final class EditorState {
     }
 
     public static double clampParam(NodeType type, String param, double value, Map<String, Double> existingParams) {
+        if (type == NodeType.SCALE_SEQUENCE) return switch (param) {
+            case NodeParam.ROOT -> Math.max(0, Math.min(127, Math.rint(value)));
+            case NodeParam.SCALE -> Math.max(0, Math.min(groove.engine.Pitch.Scale.values().length - 1, Math.rint(value)));
+            case NodeParam.STEPS -> Math.max(1, Math.min(8, Math.rint(value)));
+            case NodeParam.STEPS_PER_CYCLE -> Math.max(1, Math.min(64, Math.rint(value)));
+            default -> Math.max(-64, Math.min(64, Math.rint(value)));
+        };
+        if (type == NodeType.CHORD) {
+            if (param.equals(NodeParam.CHORD)) return Math.max(0, Math.min(groove.engine.Pitch.Chord.values().length - 1, Math.rint(value)));
+            int chord = existingParams == null ? 0 : (int)(double)existingParams.getOrDefault(NodeParam.CHORD, 0.0);
+            chord = Math.max(0, Math.min(groove.engine.Pitch.Chord.values().length - 1, chord));
+            return Math.max(0, Math.min(groove.engine.Pitch.Chord.values()[chord].size() - 1, Math.rint(value)));
+        }
         if (type.isSignalNode()) return switch (param) {
             case NodeParam.RATE -> Math.max(type == NodeType.STEP_SEQUENCE ? .125 : .001, Math.min(type == NodeType.STEP_SEQUENCE ? 16 : 40, value));
-            case NodeParam.SYNC, NodeParam.MODE -> Math.max(0, Math.min(1, Math.rint(value)));
+            case NodeParam.SYNC -> Math.max(0, Math.min(1, Math.rint(value)));
+            case NodeParam.MODE -> Math.max(0, Math.min(type == NodeType.FILTER ? 3 : 1, Math.rint(value)));
             case NodeParam.WAVE -> Math.max(0, Math.min(3, Math.rint(value)));
             case NodeParam.STEPS -> Math.max(1, Math.min(8, Math.rint(value)));
             case NodeParam.FRAMES -> Math.max(64, Math.min(48000, Math.rint(value)));
@@ -386,6 +419,7 @@ public final class EditorState {
             default -> Math.max(-1,Math.min(1,value));
         };
         return switch (param) {
+            case NodeParam.SEMITONES -> Math.max(-48, Math.min(48, value));
             case NodeParam.CHANCE -> Math.max(0, Math.min(1, value));
             case NodeParam.SEED -> Math.max(0, Math.min(65535, Math.rint(value)));
             case NodeParam.STEPS_PER_CYCLE -> Math.max(1, Math.min(64, Math.rint(value)));
@@ -408,6 +442,15 @@ public final class EditorState {
 
     public static Map<String, Double> defaultParams(NodeType type) {
         return switch (type) {
+            case TRANSPOSE -> Map.of(NodeParam.SEMITONES, 0.0);
+            case CHORD -> Map.of(NodeParam.CHORD, 0.0, NodeParam.INVERSION, 0.0);
+            case SCALE_SEQUENCE -> {
+                Map<String, Double> params = new LinkedHashMap<>();
+                params.put(NodeParam.ROOT, 60.0); params.put(NodeParam.SCALE, 0.0);
+                params.put(NodeParam.STEPS, 4.0); params.put(NodeParam.STEPS_PER_CYCLE, 4.0);
+                for (int i = 0; i < 8; i++) params.put(NodeParam.VALUES[i], 0.0);
+                yield params;
+            }
             case PROBABILITY -> Map.of(NodeParam.CHANCE, .5, NodeParam.SEED, 0.0);
             case POLYMETER -> Map.of(NodeParam.STEPS_PER_CYCLE, 4.0);
             case LFO -> Map.of(NodeParam.RATE,1.0,NodeParam.SYNC,0.0,NodeParam.WAVE,0.0);
@@ -416,7 +459,7 @@ public final class EditorState {
             case STEP_SEQUENCE -> Map.ofEntries(Map.entry(NodeParam.STEPS,4.0),Map.entry(NodeParam.RATE,1.0),Map.entry(NodeParam.GATE,.5),
                     Map.entry("value0",1.0),Map.entry("value1",0.0),Map.entry("value2",.5),Map.entry("value3",0.0),
                     Map.entry("value4",0.0),Map.entry("value5",0.0),Map.entry("value6",0.0),Map.entry("value7",0.0));
-            case FILTER -> Map.of(NodeParam.CUTOFF_HZ,20000.0,NodeParam.RESONANCE_Q,groove.engine.Biquad.DEFAULT_Q);
+            case FILTER -> Map.of(NodeParam.CUTOFF_HZ,20000.0,NodeParam.RESONANCE_Q,groove.engine.Biquad.DEFAULT_Q,NodeParam.MODE,0.0);
             case DELAY -> Map.of(NodeParam.FRAMES,64.0);
             case MIX_BUS -> Map.of(NodeParam.GAIN,1.0);
             case GENERATOR_SAMPLE -> {

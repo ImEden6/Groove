@@ -170,7 +170,7 @@ public final class SignalGraph {
             case STEP_SEQUENCE -> Set.of(NodeParam.STEPS, NodeParam.RATE, NodeParam.GATE, "value0", "value1", "value2", "value3", "value4", "value5", "value6", "value7");
             case ENVELOPE -> Set.of(NodeParam.ATTACK, NodeParam.DECAY, NodeParam.SUSTAIN, NodeParam.RELEASE, NodeParam.MODE);
             case ATTENUVERTER -> Set.of(NodeParam.SCALE, NodeParam.OFFSET);
-            case FILTER -> Set.of(NodeParam.CUTOFF_HZ, NodeParam.RESONANCE_Q);
+            case FILTER -> Set.of(NodeParam.CUTOFF_HZ, NodeParam.RESONANCE_Q, NodeParam.MODE);
             case DELAY -> Set.of(NodeParam.FRAMES);
             case MIX_BUS -> Set.of(NodeParam.GAIN);
             case AUDIO_RENDER, TRIGGER_RENDER -> Set.of();
@@ -188,7 +188,7 @@ public final class SignalGraph {
                 range(n,NodeParam.RELEASE,.1,0,8,false); range(n,NodeParam.MODE,0,0,1,true);
             }
             case ATTENUVERTER -> { range(n,NodeParam.SCALE,1,-20000,20000,false); range(n,NodeParam.OFFSET,0,-20000,20000,false); }
-            case FILTER -> { range(n,NodeParam.CUTOFF_HZ,20000,20,20000,false); range(n,NodeParam.RESONANCE_Q,Biquad.DEFAULT_Q,.1,20,false); }
+            case FILTER -> { range(n,NodeParam.CUTOFF_HZ,20000,20,20000,false); range(n,NodeParam.RESONANCE_Q,Biquad.DEFAULT_Q,.1,20,false); range(n,NodeParam.MODE,0,0,3,true); }
             case DELAY -> range(n,NodeParam.FRAMES,64,CONTROL_FRAMES,MAX_DELAY_FRAMES,true);
             case MIX_BUS -> range(n,NodeParam.GAIN,1,0,1,false);
             default -> { }
