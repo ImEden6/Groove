@@ -83,7 +83,7 @@ public final class SignalGraph {
         require(renders.size() <= MAX_AUDIO_SOURCES, "At most eight audio_render sources supported");
         require(triggers.size() <= MAX_TRIGGER_SOURCES, "At most eight trigger_render sources supported");
         require(delayFrames <= MAX_TOTAL_DELAY_FRAMES,
-                "Delay memory budget exceeded: " + delayFrames + " frames (max " + MAX_TOTAL_DELAY_FRAMES + " at 30 BPM; division 1/2 requires 192000 frames alone)");
+                "Delay memory budget exceeded: " + delayFrames + " frames (max " + MAX_TOTAL_DELAY_FRAMES + "; synced delays count at 30 BPM)");
         Set<Graph.Edge> unique = new HashSet<>();
         for (Graph.Edge e : graph.edges()) {
             require(ids.containsKey(e.fromNode()) && ids.containsKey(e.toNode()), "Dangling edge");
