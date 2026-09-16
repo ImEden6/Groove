@@ -7,6 +7,7 @@ import net.minecraft.nbt.CompoundTag;
 import net.minecraft.network.RegistryFriendlyByteBuf;
 import java.util.List;
 import java.util.UUID;
+import static com.mervyn.groove.music.TestSupport.*;
 
 final class SpeakerLinkTests {
     static void run() {
@@ -221,10 +222,5 @@ final class SpeakerLinkTests {
             org.lwjgl.system.MemoryUtil.memFree(last);
             check(stream.readQueued(com.mervyn.groove.client.music.GrooveAudioStream.CHUNK_FRAMES * 4, 0) == null, "A closed stream reads no further data");
         } finally { stream.close(); }
-    }
-    private static void check(boolean condition, String message) { if (!condition) throw new AssertionError(message); }
-    private static void reject(Runnable action, String message) {
-        try { action.run(); } catch (IllegalArgumentException expected) { return; }
-        throw new AssertionError(message);
     }
 }

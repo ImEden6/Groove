@@ -275,7 +275,7 @@ public final class BackendTests {
         } finally { buf.release(); }
         System.out.println("Passed graph JSON and Minecraft packet checks.");
     }
-    private static void check(boolean value, String message) { if (!value) throw new AssertionError(message); }
+    private static void check(boolean value, String message) { TestSupport.check(value, message); }
     private static void editorChecks(Graph graph) {
         var editor = new com.mervyn.groove.client.ui.EditorState(graph);
         var original = graph.nodes().stream().filter(n -> n.sample() != null).findFirst().orElseThrow();
@@ -578,7 +578,6 @@ public final class BackendTests {
         check(editor.edges().contains(new Graph.Edge("range","out","filter","cutoff")), "Pointer targets second named socket");
     }
     private static void invalid(Runnable action) {
-        try { action.run(); } catch (IllegalArgumentException expected) { return; }
-        throw new AssertionError("Expected invalid JSON rejection");
+        TestSupport.reject(action, "Expected invalid JSON rejection");
     }
 }

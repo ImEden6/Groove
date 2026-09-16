@@ -6,6 +6,7 @@ import net.minecraft.core.RegistryAccess;
 import net.minecraft.network.RegistryFriendlyByteBuf;
 import io.netty.buffer.Unpooled;
 import java.util.*;
+import static com.mervyn.groove.music.TestSupport.*;
 
 final class EditorSessionTests {
     static void run() {
@@ -112,10 +113,5 @@ final class EditorSessionTests {
                 reject(() -> EditorPackets.AllowlistState.CODEC.decode(wire), "Invalid wire count rejected before reading entries");
             }
         } finally { wire.release(); }
-    }
-    private static void check(boolean value, String message) { if (!value) throw new AssertionError(message); }
-    private static void reject(Runnable action, String message) {
-        try { action.run(); } catch (IllegalArgumentException expected) { return; }
-        throw new AssertionError(message);
     }
 }
