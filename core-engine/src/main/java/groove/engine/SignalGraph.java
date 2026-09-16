@@ -108,7 +108,11 @@ public final class SignalGraph {
         List<Event> events = preview.query(new Arc(0, 1));
         require(events.size() <= GraphCompiler.MAX_EVENTS, "Too many combined source events");
         events.sort(Comparator.comparingDouble(e -> e.whole().start()));
-        return new LoopPlan(events, preview, cost).withSignals(new SignalGraph(graph, sorted, ids, output, renders, plans, triggers, triggerPlans));
+        Set<groove.engine.samples.SampleVoice> voices = new HashSet<>();
+        for (LoopPlan plan : allPlans) voices.addAll(plan.sampleVoices());
+        require(voices.size() <= groove.engine.samples.PreparedSamples.MAX_VOICES, "Too many sample voice variants");
+        return new LoopPlan(events, preview, cost).withSampleVoices(voices)
+                .withSignals(new SignalGraph(graph, sorted, ids, output, renders, plans, triggers, triggerPlans));
     }
 
     private record SourceBatch(List<LoopPlan> plans, int cost) {}

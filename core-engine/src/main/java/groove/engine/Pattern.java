@@ -8,6 +8,20 @@ import java.util.List;
 public interface Pattern {
     List<Event> query(Arc arc);
 
+    /** Select an equal-sized region of each sample, without changing event timing. */
+    default Pattern slice(int slices, int index, boolean reverse) {
+        new groove.engine.samples.SampleRegion(0, 0, slices, index, reverse);
+        return arc -> {
+            checkQuery(arc);
+            List<Event> events = new ArrayList<>();
+            for (Event e : query(arc)) {
+                if (e.sample() == null) throw new IllegalArgumentException("Sample slicing requires sample events");
+                events.add(new Event(e.whole(), e.part(), null, e.sample().slice(slices, index, reverse)));
+            }
+            return events;
+        };
+    }
+
     /** Pitch mapping runs only during control-thread queries, preserving event identity/timing. */
     default Pattern transpose(double semitones) {
         if (!Double.isFinite(semitones) || Math.abs(semitones) > 48)

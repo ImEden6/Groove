@@ -5,8 +5,8 @@
 | Stage | Scope | Status |
 | --- | --- | --- |
 | 1 | Note names, scale-degree sequences, transpose, chords, filter modes | Implemented; automated checks pass |
-| 2 | Shared voice DSP, offline samples, sample regions and slicing | Next |
-| 3 | Reverse, swing, pulse/PWM, tempo-synced delay | Planned |
+| 2 | Shared voice DSP, offline samples, sample regions and slicing | Implemented; automated checks pass |
+| 3 | Pattern reverse, swing, pulse/PWM, tempo-synced delay | Next |
 | 4 | Reverb, sustained sample loops, measured performance improvements | Planned |
 
 ## Stage 1 usage
@@ -122,3 +122,95 @@ Automated signal tests do not replace in-game listening or a two-machine
 multiplayer check. This stage makes no new polyphony or real-time performance
 claim; the existing worst-case resampling benchmark can still exceed its
 audio time budget on this machine.
+
+## Stage 2 usage
+
+### Sample regions and slicing
+
+`generator/sample` now accepts `startFrame`, `endFrame`, and `reverse`.
+The interval is expressed in **source frames**, not output frames or individual
+channel values. Start is inclusive; end is exclusive. Both default to zero,
+with end=0 meaning the end of the asset. `reverse` is 0 for forward (default),
+or 1 for reverse. Existing patches therefore retain whole-asset forward playback.
+
+The editor palette includes `sample_slice`, with one sample-only `PATTERN`
+input. Its controls are `slices` (1..64, default 8), `index` (0..slices-1,
+default 0), and `reverse` (0/1, default 0). It selects a slice within each
+input voice's source interval. Integer boundaries distribute remainder frames
+without gaps or overlaps. Every slice must contain at least one source frame.
+Actual asset bounds are checked when PCM is resolved on the compiler worker.
+
+Slice selection and direction replace an earlier slice selection/direction;
+stacking slice nodes does not subdivide recursively. Explicit start/end frame
+bounds are retained. Slicing changes the audio content and its playback length,
+not event arcs or trigger timing. Pitch still changes both duration and pitch;
+there is no time stretching. A 1 ms attack and 5 ms release soften boundaries.
+
+To rearrange a break, connect one sample to several `sample_slice` nodes,
+choose their indices, and connect those to `polymeter.in` in playback order.
+For example, four slices at four steps per cycle can play in order 0, 2, 1, 3,
+with the last slice reversed. The existing event budget and 32-voice pool
+still apply, including overlapping one-shot tails.
+
+Each selected region is copied (and optionally reversed) on the control
+thread, then gets its own prefiltered resampling levels. This prevents
+neighboring slices from bleeding through interpolation or prefiltering.
+Identical resolved regions share PCM even when gain, pan, pitch, or filter
+settings differ. All sample variants from later/probabilistic graph branches
+are discovered during compilation and prepared before publication.
+
+Current and pending programs prepared by the app share one **32 MiB PCM
+payload budget**, covering original assets and isolated regions with all
+prefiltered levels. Up to 128 distinct sample voice settings are supported
+per prepared bank. Memory is checked before copying a region; preparation
+fails rather than allocating beyond the budget. Stereo payload is counted
+for both channels. Metadata and array headers are additional but bounded by
+the asset/variant caps. During a playback replacement, the outgoing timeline
+can remain pinned through its crossfade, so two such banks can coexist. The
+decoded asset cache, other playback sessions, and audio buffers have their
+own existing limits; 32 MiB is not a process-wide heap limit.
+
+### Offline samples and shared voice DSP
+
+Live and offline renderers now use `VoiceDsp` for oscillator evaluation,
+voice filtering, envelopes, and panning. Their schedulers remain separate:
+offline timing uses integer output frames; live timing supports clock slew
+and seeks. Both retain the existing limiter and bounded stealing fades.
+
+Offline scores accept an immutable sample-bank snapshot:
+
+```java
+AssetRef ref = FactorySamples.ref("factory:basic/snare.wav");
+SampleData pcm = WavDecoder.decode(FactorySamples.bytes(ref.assetId()));
+Pattern sample = Pattern.sample(new SampleVoice(ref, 1, .6, 0))
+        .slice(4, 0, true).fast(4);
+Score score = Score.compile(sample, new Transport(48000, 120, 4), 4,
+        Map.of(ref, pcm));
+Renderer renderer = new Renderer(score, 32);
+```
+
+`Score.compile` resolves samples, validates regions, and rejects missing
+assets before playback. Sample note end frames come from the region's pitched
+duration, independently of musical event duration. `score.frames()` remains
+the requested export length; render additional frames explicitly if an export
+should include tails beyond it. Unsupported sample conversions above 16 source
+frames per output frame fail during score compilation. Offline **pattern**
+samples are supported; full offline signal-graph/effects export is not added.
+
+For direct sample playback, call `SampleVoice.prepare(pcm)` once on the control
+thread and then `SamplePlayback.value(...)`. The legacy `SampleVoice.value`
+convenience remains for whole forward assets and rejects region voices to
+prevent accidental unprepared playback. Engine renderers use a deduplicated,
+bounded `PreparedSamples` bank instead of preparing each voice separately.
+
+Run `gradlew.bat -p core-engine renderSampleDemo --offline` to write
+`core-engine/build/sample-demo.wav`: an eight-second mix of sliced factory
+drums, reversed snare, and a synthesized bass. No external assets are needed.
+
+Stage 2 tests cover exact boundaries and remainder frames, stereo reversal,
+absence of neighboring-slice bleed at all resampling levels, region memory
+accounting/deduplication, future-branch validation, mixed live/offline playback,
+block-size independence, natural and stolen voice tails, late joins and seeks,
+independent audio sources, zero callback allocations, editor controls/undo,
+and JSON/network round trips. In-game listening and multiplayer checks remain
+manual validation.

@@ -14,6 +14,7 @@ public final class LiveRenderer {
         private final SessionState state;
         private final LoopPlan plan;
         private final java.util.Map<groove.engine.samples.AssetRef, groove.engine.samples.SampleData> samples;
+        private final groove.engine.samples.PreparedSamples preparedSamples;
         private final LookaheadScheduler scheduler;
         private final Program[] sources;
         private final Program[] triggers;
@@ -23,20 +24,22 @@ public final class LiveRenderer {
         private final boolean isTriggerSource;
         public Program(SessionState state, LoopPlan plan) { this(state, plan, java.util.Map.of()); }
         public Program(SessionState state, LoopPlan plan, java.util.Map<groove.engine.samples.AssetRef, groove.engine.samples.SampleData> samples) {
-            this(state, plan, samples, false);
+            this(state, plan, samples, false, null);
         }
         /** isTriggerSource picks the scheduler's lookback strategy: a trigger source needs a
          *  fixed cycle-bounded lookback (so a still-releasing ENVELOPE voice's onset stays
          *  visible) rather than the sample-duration-based history an audio source uses. */
-        private Program(SessionState state, LoopPlan plan, java.util.Map<groove.engine.samples.AssetRef, groove.engine.samples.SampleData> samples, boolean isTriggerSource) {
+        private Program(SessionState state, LoopPlan plan, java.util.Map<groove.engine.samples.AssetRef, groove.engine.samples.SampleData> samples, boolean isTriggerSource,
+                        groove.engine.samples.PreparedSamples prepared) {
             this.state = state; this.plan = plan; this.samples = java.util.Map.copyOf(samples);
+            preparedSamples = prepared == null ? new groove.engine.samples.PreparedSamples(this.samples, plan.sampleVoices()) : prepared;
             this.isTriggerSource = isTriggerSource;
             SignalGraph signals = plan.signals();
             if (signals != null) {
                 sources = new Program[signals.sourceCount()];
-                for (int i = 0; i < sources.length; i++) sources[i] = new Program(state, signals.sourcePlan(i), this.samples, false);
+                for (int i = 0; i < sources.length; i++) sources[i] = new Program(state, signals.sourcePlan(i), this.samples, false, preparedSamples);
                 triggers = new Program[signals.triggerCount()];
-                for (int i = 0; i < triggers.length; i++) triggers[i] = new Program(state, signals.triggerPlan(i), this.samples, true);
+                for (int i = 0; i < triggers.length; i++) triggers[i] = new Program(state, signals.triggerPlan(i), this.samples, true, preparedSamples);
                 scheduler = null;
             } else {
                 sources = null;
@@ -56,6 +59,7 @@ public final class LiveRenderer {
         public SessionState state() { return state; }
         public LoopPlan plan() { return plan; }
         public java.util.Map<groove.engine.samples.AssetRef, groove.engine.samples.SampleData> samples() { return samples; }
+        public long preparedSampleBytes() { return preparedSamples.bytes(); }
         public void prepare(long serverNanos) {
             if (sources != null) for (Program source : sources) source.prepare(serverNanos);
             if (triggers != null) for (Program trigger : triggers) trigger.prepare(serverNanos);
@@ -63,6 +67,15 @@ public final class LiveRenderer {
         }
     }
     public record Timeline(Program current, Program pending) {
+        /** Resolve current and pending programs against one combined, bounded region bank. */
+        public static Timeline withSamples(Timeline template, java.util.Map<groove.engine.samples.AssetRef, groove.engine.samples.SampleData> samples) {
+            var bank = java.util.Map.copyOf(samples);
+            var voices = new java.util.HashSet<>(template.current.plan.sampleVoices());
+            if (template.pending != null) voices.addAll(template.pending.plan.sampleVoices());
+            var prepared = new groove.engine.samples.PreparedSamples(bank, voices);
+            return new Timeline(new Program(template.current.state, template.current.plan, bank, false, prepared),
+                    template.pending == null ? null : new Program(template.pending.state, template.pending.plan, bank, false, prepared));
+        }
         /** Call periodically from one worker, including before late-join publication. */
         public void prepare(long serverNanos) { current.prepare(serverNanos); if (pending != null) pending.prepare(serverNanos); }
         public static Timeline compile(SessionTimeline.Snapshot snapshot) {
@@ -86,7 +99,7 @@ public final class LiveRenderer {
         boolean recovering;
         long recoveryOrigin, recoveryFrame;
         double recoveryGain = 1;
-        final java.util.Map<groove.engine.samples.AssetRef, groove.engine.samples.SampleData> samples;
+        final groove.engine.samples.PreparedSamples samples;
         final ActiveVoice[] voices;
         final ActiveVoice[] tails;
         final int[] events;
@@ -100,7 +113,7 @@ public final class LiveRenderer {
          *  program.sources is null. Derived from Program's own isTriggerSource rather than
          *  passed as a second, separately-named flag, so the two can't drift out of sync. */
         VoiceProgram(Program program) {
-            state = program.state(); plan = program.plan(); samples = program.samples(); scheduler = program.scheduler;
+            state = program.state(); plan = program.plan(); samples = program.preparedSamples; scheduler = program.scheduler;
             signals = plan.signals() == null ? null : plan.signals().runtime(state);
             boolean stateful = false;
             if (plan.signals() != null) for (Graph.Node node : plan.signals().nodes)
@@ -140,14 +153,11 @@ public final class LiveRenderer {
         Event data;
         double onset;
         boolean wanted;
-        final Biquad left = new Biquad(), right = new Biquad();
-        void start(Event e, int index, double cycle) {
+        final VoiceDsp dsp = new VoiceDsp();
+        void start(Event e, int index, double cycle, groove.engine.samples.SamplePlayback sample) {
             event = index; onset = cycle; fadeFrame = 0;
             data = e;
-            double cutoff = e.tone() != null ? e.tone().cutoffHz() : e.sample().cutoffHz();
-            double q = e.tone() != null ? e.tone().resonanceQ() : e.sample().resonanceQ();
-            left.reset(); right.reset();
-            left.setLowPass(cutoff, q, SAMPLE_RATE); right.setLowPass(cutoff, q, SAMPLE_RATE);
+            dsp.start(e.tone(), sample, SAMPLE_RATE);
         }
     }
     private static final int STEAL_FRAMES = 120;
@@ -364,7 +374,8 @@ public final class LiveRenderer {
             for (ActiveVoice v : program.voices)
                 if (matches(v, program, i)) { exists = true; break; }
             if (!exists) for (ActiveVoice v : program.voices) if (v.event < 0) {
-                v.start(program.data[i], program.events[i], program.onsets[i]); break;
+                Event event = program.data[i];
+                v.start(event, program.events[i], program.onsets[i], event.sample() == null ? null : program.samples.get(event.sample())); break;
             }
         }
         out[0] = 0; out[1] = 0;
@@ -407,8 +418,8 @@ public final class LiveRenderer {
 
     private static double eventDuration(VoiceProgram program, Event event, double secondsPerCycle) {
         if (event.sample() == null) return (event.whole().end() - event.whole().start()) * secondsPerCycle;
-        var pcm = program.samples.get(event.sample().asset());
-        return pcm == null ? -1 : pcm.duration() / event.sample().pitchRatio();
+        var sample = program.samples.get(event.sample());
+        return sample == null ? -1 : sample.duration();
     }
 
     private static boolean matches(ActiveVoice voice, VoiceProgram program, int index) {
@@ -422,28 +433,8 @@ public final class LiveRenderer {
                           double fade, double[] out) {
         Event event = v.data;
         double age = (cycles - v.onset) * secondsPerCycle;
-        if (event.sample() != null) {
-            var voice = event.sample();
-            var pcm = program.samples.get(voice.asset());
-            out[0] += v.left.process(voice.value(pcm, age, 0, SAMPLE_RATE)) * fade;
-            out[1] += v.right.process(voice.value(pcm, age, 1, SAMPLE_RATE)) * fade;
-            return;
-        }
-        Tone tone = event.tone();
-        double remaining = (event.whole().end() - event.whole().start()) * secondsPerCycle - age;
-        double oscillator = age * tone.frequency();
+        double oscillator = event.tone() == null ? 0 : age * event.tone().frequency();
         oscillator -= Math.floor(oscillator);
-        double raw = remaining <= 0 ? 0 : tone.wave() == Tone.Wave.SINE ? Math.sin(2 * Math.PI * oscillator)
-                : 2 * oscillator - 1 - polyBlep(oscillator, tone.frequency() / SAMPLE_RATE);
-        double envelope = Math.max(0, Math.min(1, Math.min(age / .005, remaining / .020)));
-        double mono = v.left.process(raw) * tone.gain() * envelope * fade;
-        double angle = (tone.pan() + 1) * Math.PI / 4;
-        out[0] += mono * Math.cos(angle); out[1] += mono * Math.sin(angle);
-    }
-
-    private static double polyBlep(double t, double dt) {
-        if (t < dt) { double x = t / dt; return 2 * x - x * x - 1; }
-        if (t > 1 - dt) { double x = (t - 1) / dt; return x * x + 2 * x + 1; }
-        return 0;
+        v.dsp.add(age, (event.whole().end() - event.whole().start()) * secondsPerCycle, oscillator, fade, out);
     }
 }

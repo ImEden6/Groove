@@ -61,7 +61,7 @@ workaround.
 
 ## Graph format
 
-Sample nodes require graph `version: 2`; version-1 tone graphs still load. Use the
+Sample nodes require graph `version: 2` or `3`; version-1 tone graphs still load. Use the
 reference copied by `/groove-samples ref` in the node's `sample` field:
 
 ```json
@@ -81,6 +81,15 @@ followed by `/groove save` gives a complete valid graph to edit. Connect samples
 through the existing Euclid, fast, stack, and output nodes. Pitch is a playback
 rate ratio from 0.25–4, gain is 0–1, and pan is -1–1. One-shot tails cross rhythm
 steps and cycle boundaries while sharing the 32-voice limit.
+
+`generator/sample` also supports source-frame `startFrame`/`endFrame` bounds
+(end=0 means asset end) and `reverse` (0/1). The `sample_slice` pattern node
+selects an equal region with `slices`, `index`, and `reverse`; connect several
+slices to `polymeter` to rearrange a break. These controls are in the editor.
+Regions are isolated and prefiltered before playback, with a combined memory
+budget. Invalid regions or region-budget overflow reject preparation of the
+replacement program. See [Stage 2](ENGINE-UPGRADE-STAGES.md#stage-2-usage) for
+semantics, limits, offline rendering, and a sample demo.
 
 SHA-256 covers the exact encoded bytes. A different file with the same ID is never
 silently substituted. An exact cached copy or verified server copy can satisfy
@@ -107,7 +116,7 @@ budget failures remain silent and expose a status. Failed requests have a
 | Each catalog (user packs, managed downloads, or server) | 256 assets including factory kit / 32 MiB encoded |
 | Combined client catalog | Up to 512 references / 64 MiB encoded; duplicate factory entries are shared in the combined view |
 | Decoded LRU cache | 64 MiB |
-| Current + pending graph bank | 32 MiB unique decoded PCM |
+| Current + pending graph bank | 32 MiB source + isolated-region PCM, including prefiltered levels; 128 voice settings |
 | Received encoded cache | 32 MiB |
 
 Verified downloads are persisted under

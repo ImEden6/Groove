@@ -9,20 +9,23 @@ import java.nio.file.Path;
 public final class Demo {
     public static void main(String[] args) throws Exception {
         Path path = Path.of(args.length == 0 ? "demo.wav" : args[0]);
-        Files.createDirectories(path.toAbsolutePath().getParent());
         Transport transport = new Transport(48000, 128, 4);
         Pattern pattern = Pattern.stack(
                 Pattern.tone(new Tone(Tone.Wave.SINE, 65.406, .55, 0, 20000)).euclid(8, 4, 0),
                 Pattern.tone(new Tone(Tone.Wave.SAW, 261.626, .14, -.55, 900)).euclid(16, 5, 0),
                 Pattern.tone(new Tone(Tone.Wave.SINE, 391.995, .23, .55, 20000)).euclid(16, 7, 2));
         Score score = Score.compile(pattern, transport, 4);
+        write(path, score);
+    }
+    static void write(Path path, Score score) throws java.io.IOException {
+        Files.createDirectories(path.toAbsolutePath().getParent());
         Renderer renderer = new Renderer(score, 32);
         float[] buffer = new float[1024];
         int bytes = Math.toIntExact(score.frames() * 4);
         try (DataOutputStream out = new DataOutputStream(new BufferedOutputStream(Files.newOutputStream(path)))) {
             out.writeBytes("RIFF"); le32(out, 36 + bytes); out.writeBytes("WAVEfmt ");
-            le32(out, 16); le16(out, 1); le16(out, 2); le32(out, transport.sampleRate());
-            le32(out, transport.sampleRate() * 4); le16(out, 4); le16(out, 16);
+            le32(out, 16); le16(out, 1); le16(out, 2); le32(out, score.sampleRate());
+            le32(out, score.sampleRate() * 4); le16(out, 4); le16(out, 16);
             out.writeBytes("data"); le32(out, bytes);
             while (renderer.position() < score.frames()) {
                 int frames = (int) Math.min(512, score.frames() - renderer.position());

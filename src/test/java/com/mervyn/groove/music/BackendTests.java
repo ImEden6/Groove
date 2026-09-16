@@ -153,6 +153,7 @@ public final class BackendTests {
         EditorSessionTests.run();
         knobEntryChecks();
         PitchEntryTests.run();
+        SampleSliceEntryTests.run();
         sampleTreeChecks();
         HeadphoneLinkTests.run();
         SpeakerLinkTests.run();
@@ -444,8 +445,10 @@ public final class BackendTests {
         var knobEuclid = new Graph.Node("rhythm", NodeType.EUCLID, java.util.Map.of(NodeParam.STEPS, 8.0));
         check(com.mervyn.groove.client.ui.KnobScale.angle(knobEuclid, NodeParam.PULSES, 8) == 135,
                 "Pulses knob uses current steps as maximum");
-        check(com.mervyn.groove.client.ui.EditorState.defaultParams(NodeType.GENERATOR_SAMPLE).size() == 3,
-                "Samples expose knobs even when saved parameters are omitted");
+        check(com.mervyn.groove.client.ui.EditorState.defaultParams(NodeType.GENERATOR_SAMPLE).equals(java.util.Map.of(
+                        NodeParam.PITCH_RATIO,1.0,NodeParam.GAIN,.8,NodeParam.PAN,0.0,
+                        NodeParam.START_FRAME,0.0,NodeParam.END_FRAME,0.0,NodeParam.REVERSE,0.0)),
+                "Legacy samples expose playback and region controls with whole-forward defaults");
         var timeline = new SessionTimeline(graph, 128, 0);
         timeline.schedule(graph, 128, true, 0, 0);
         invalid(() -> timeline.schedule(graph, 128, true, 0, 1));

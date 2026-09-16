@@ -1,6 +1,8 @@
 package groove.engine;
 
 import java.util.*;
+import groove.engine.samples.SampleRegion;
+import groove.engine.samples.SampleVoice;
 
 /** Strict, bounded v1/v2/v3 compiler. Run on a control/worker thread, never an audio callback. */
 public final class GraphCompiler {
@@ -10,15 +12,22 @@ public final class GraphCompiler {
     private final Map<String, Compiled> compiled = new HashMap<>();
     private final Set<String> visiting = new HashSet<>();
     // Bounds cover every branch, including branches absent from the cycle-zero preview.
-    private record Compiled(Pattern pattern, int cost, double minHz, double maxHz, boolean samples) {}
+    private record Compiled(Pattern pattern, int cost, double minHz, double maxHz, boolean samples, Set<SampleVoice> sampleVoices) {
+        Compiled(Pattern pattern, int cost, double minHz, double maxHz, boolean samples) {
+            this(pattern, cost, minHz, maxHz, samples, Set.of());
+        }
+    }
 
     private static Compiled derived(Pattern pattern, int cost, List<Compiled> children) {
         double min = Double.POSITIVE_INFINITY, max = 0;
         boolean samples = false;
+        Set<SampleVoice> voices = new HashSet<>();
         for (Compiled child : children) {
             min = Math.min(min, child.minHz); max = Math.max(max, child.maxHz); samples |= child.samples;
+            voices.addAll(child.sampleVoices);
+            require(voices.size() <= groove.engine.samples.PreparedSamples.MAX_VOICES, "Too many sample voice variants");
         }
-        return new Compiled(pattern, cost, min, max, samples);
+        return new Compiled(pattern, cost, min, max, samples, Set.copyOf(voices));
     }
 
     private static void pitchBounds(double min, double max) {
@@ -65,7 +74,7 @@ public final class GraphCompiler {
         List<Event> events = result.pattern.query(new Arc(0, 1));
         require(events.size() <= MAX_EVENTS, "Too many events");
         events.sort(Comparator.comparingDouble(e -> e.whole().start()));
-        return new LoopPlan(events, result.pattern, result.cost);
+        return new LoopPlan(events, result.pattern, result.cost).withSampleVoices(result.sampleVoices);
     }
 
     private Compiled visit(String id, int depth) {
@@ -76,7 +85,9 @@ public final class GraphCompiler {
         List<String> links = inputs.get(id);
         Set<String> allowed = switch (node.type()) {
             case TONE -> Set.of(NodeParam.FREQUENCY, NodeParam.GAIN, NodeParam.PAN, NodeParam.WAVE, NodeParam.CUTOFF_HZ, NodeParam.RESONANCE_Q);
-            case GENERATOR_SAMPLE -> Set.of(NodeParam.PITCH_RATIO, NodeParam.GAIN, NodeParam.PAN, NodeParam.CUTOFF_HZ, NodeParam.RESONANCE_Q);
+            case GENERATOR_SAMPLE -> Set.of(NodeParam.PITCH_RATIO, NodeParam.GAIN, NodeParam.PAN, NodeParam.CUTOFF_HZ, NodeParam.RESONANCE_Q,
+                    NodeParam.START_FRAME, NodeParam.END_FRAME, NodeParam.REVERSE);
+            case SAMPLE_SLICE -> Set.of(NodeParam.SLICES, NodeParam.INDEX, NodeParam.REVERSE);
             case FAST -> Set.of(NodeParam.FACTOR);
             case EUCLID -> Set.of(NodeParam.STEPS, NodeParam.PULSES, NodeParam.ROTATION);
             case STACK, ALTERNATE, OUTPUT -> Set.of();
@@ -103,9 +114,23 @@ public final class GraphCompiler {
                     number(node, NodeParam.GAIN, .25), number(node, NodeParam.PAN, 0), cutoffHz, number(node, NodeParam.RESONANCE_Q, Biquad.DEFAULT_Q))), 1, frequency, frequency, false);
         }
         case GENERATOR_SAMPLE -> {
-            yield new Compiled(Pattern.sample(new groove.engine.samples.SampleVoice(node.sample(),
+            SampleVoice voice = new SampleVoice(node.sample(),
                     number(node, NodeParam.PITCH_RATIO, 1), number(node, NodeParam.GAIN, .8), number(node, NodeParam.PAN, 0), number(node, NodeParam.CUTOFF_HZ, 20000),
-                    number(node, NodeParam.RESONANCE_Q, Biquad.DEFAULT_Q))), 1, Double.POSITIVE_INFINITY, 0, true);
+                    number(node, NodeParam.RESONANCE_Q, Biquad.DEFAULT_Q), new SampleRegion(
+                    integer(node, NodeParam.START_FRAME, 0, 0, groove.engine.samples.SampleData.MAX_FLOATS - 1),
+                    integer(node, NodeParam.END_FRAME, 0, 0, groove.engine.samples.SampleData.MAX_FLOATS), 1, 0,
+                    integer(node, NodeParam.REVERSE, 0, 0, 1) == 1));
+            yield new Compiled(Pattern.sample(voice), 1, Double.POSITIVE_INFINITY, 0, true, Set.of(voice));
+        }
+        case SAMPLE_SLICE -> {
+            Compiled child = children.getFirst();
+            require(child.samples && child.maxHz == 0, "Sample slicing requires sample-only input");
+            int slices = integer(node, NodeParam.SLICES, 8, 1, 64);
+            int index = integer(node, NodeParam.INDEX, 0, 0, slices - 1);
+            boolean reverse = integer(node, NodeParam.REVERSE, 0, 0, 1) == 1;
+            Set<SampleVoice> voices = new HashSet<>();
+            for (SampleVoice voice : child.sampleVoices) voices.add(voice.slice(slices, index, reverse));
+            yield new Compiled(child.pattern.slice(slices, index, reverse), child.cost, child.minHz, child.maxHz, true, Set.copyOf(voices));
         }
         case TRANSPOSE -> {
             Compiled child = children.getFirst();

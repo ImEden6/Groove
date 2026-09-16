@@ -13,7 +13,8 @@ and tests, [samples and packs](docs/SAMPLES.md) for WAV/OGG playback and auditio
 [future work](docs/FUTURE-WORK.md) for what's not implemented yet.
 
 See [engine upgrade stages](docs/ENGINE-UPGRADE-STAGES.md) for note names,
-scale sequences, chords, transposition, filter modes, and the remaining roadmap.
+scale sequences, chords, transposition, filter modes, sample slicing/reverse,
+offline sample rendering, and the remaining roadmap.
 
 Run the engine without downloading Minecraft:
 

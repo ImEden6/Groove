@@ -305,6 +305,16 @@ public final class EditorState {
             params.put(NodeParam.INVERSION, clampParam(node.type(), NodeParam.INVERSION,
                     params.getOrDefault(NodeParam.INVERSION, 0.0), params));
         }
+        if (node.type() == NodeType.SAMPLE_SLICE && param.equals(NodeParam.SLICES)) {
+            params.put(NodeParam.INDEX, Math.min(params.getOrDefault(NodeParam.INDEX, 0.0), params.get(NodeParam.SLICES) - 1));
+        }
+        if (node.type() == NodeType.GENERATOR_SAMPLE && (param.equals(NodeParam.START_FRAME) || param.equals(NodeParam.END_FRAME))) {
+            double start = params.getOrDefault(NodeParam.START_FRAME, 0.0), end = params.getOrDefault(NodeParam.END_FRAME, 0.0);
+            if (end != 0 && end <= start) {
+                if (param.equals(NodeParam.START_FRAME)) params.put(NodeParam.END_FRAME, start + 1);
+                else params.put(NodeParam.START_FRAME, Math.max(0, end - 1));
+            }
+        }
         if (node.type() == NodeType.EUCLID && param.equals(NodeParam.STEPS)) {
             params.put(NodeParam.PULSES, Math.min(params.get(NodeParam.STEPS),
                     params.getOrDefault(NodeParam.PULSES, defaultParams(NodeType.EUCLID).get(NodeParam.PULSES))));
@@ -359,7 +369,8 @@ public final class EditorState {
         return switch (param) {
             case NodeParam.SYNC, NodeParam.MODE, NodeParam.WAVE, NodeParam.STEPS,
                     NodeParam.FRAMES, NodeParam.SEED, NodeParam.STEPS_PER_CYCLE,
-                    NodeParam.PULSES, NodeParam.ROTATION, NodeParam.ROOT, NodeParam.CHORD, NodeParam.INVERSION -> true;
+                    NodeParam.PULSES, NodeParam.ROTATION, NodeParam.ROOT, NodeParam.CHORD, NodeParam.INVERSION,
+                    NodeParam.START_FRAME, NodeParam.END_FRAME, NodeParam.SLICES, NodeParam.INDEX, NodeParam.REVERSE -> true;
             default -> false;
         };
     }
@@ -420,6 +431,11 @@ public final class EditorState {
         };
         return switch (param) {
             case NodeParam.SEMITONES -> Math.max(-48, Math.min(48, value));
+            case NodeParam.START_FRAME -> Math.max(0, Math.min(groove.engine.samples.SampleData.MAX_FLOATS - 1, Math.rint(value)));
+            case NodeParam.END_FRAME -> Math.max(0, Math.min(groove.engine.samples.SampleData.MAX_FLOATS, Math.rint(value)));
+            case NodeParam.REVERSE -> Math.max(0, Math.min(1, Math.rint(value)));
+            case NodeParam.SLICES -> Math.max(1, Math.min(64, Math.rint(value)));
+            case NodeParam.INDEX -> Math.max(0, Math.min((existingParams == null ? 8 : existingParams.getOrDefault(NodeParam.SLICES, 8.0)) - 1, Math.rint(value)));
             case NodeParam.CHANCE -> Math.max(0, Math.min(1, value));
             case NodeParam.SEED -> Math.max(0, Math.min(65535, Math.rint(value)));
             case NodeParam.STEPS_PER_CYCLE -> Math.max(1, Math.min(64, Math.rint(value)));
@@ -442,6 +458,7 @@ public final class EditorState {
 
     public static Map<String, Double> defaultParams(NodeType type) {
         return switch (type) {
+            case SAMPLE_SLICE -> Map.of(NodeParam.SLICES, 8.0, NodeParam.INDEX, 0.0, NodeParam.REVERSE, 0.0);
             case TRANSPOSE -> Map.of(NodeParam.SEMITONES, 0.0);
             case CHORD -> Map.of(NodeParam.CHORD, 0.0, NodeParam.INVERSION, 0.0);
             case SCALE_SEQUENCE -> {
@@ -465,6 +482,7 @@ public final class EditorState {
             case GENERATOR_SAMPLE -> {
                 Map<String, Double> m = new LinkedHashMap<>();
                 m.put(NodeParam.PITCH_RATIO, 1.0); m.put(NodeParam.GAIN, .8); m.put(NodeParam.PAN, 0.0);
+                m.put(NodeParam.START_FRAME, 0.0); m.put(NodeParam.END_FRAME, 0.0); m.put(NodeParam.REVERSE, 0.0);
                 yield m;
             }
             case TONE -> {

@@ -149,9 +149,7 @@ public final class SampleLibrary {
                 if ("MISSING".equals(error.getMessage()) || "HASH_MISMATCH".equals(error.getMessage())) needed.add(ref);
             }
         }
-        var current = new LiveRenderer.Program(bare.current().state(), bare.current().plan(), bank);
-        var pending = bare.pending() == null ? null : new LiveRenderer.Program(bare.pending().state(), bare.pending().plan(), bank);
-        return new Prepared(new LiveRenderer.Timeline(current, pending), Map.copyOf(status), List.copyOf(needed));
+        return new Prepared(LiveRenderer.Timeline.withSamples(bare, bank), Map.copyOf(status), List.copyOf(needed));
     }
     private record SpeakerAssets(List<AssetRef> needed, Set<AssetRef> refs) {}
     private static final Map<net.minecraft.core.BlockPos, SpeakerAssets> speakerAssets = new HashMap<>();

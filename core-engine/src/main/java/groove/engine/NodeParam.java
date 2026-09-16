@@ -12,6 +12,11 @@ public final class NodeParam {
     public static final String CUTOFF_HZ = "cutoffHz";
     public static final String RESONANCE_Q = "resonanceQ";
     public static final String PITCH_RATIO = "pitchRatio";
+    public static final String START_FRAME = "startFrame";
+    public static final String END_FRAME = "endFrame";
+    public static final String SLICES = "slices";
+    public static final String INDEX = "index";
+    public static final String REVERSE = "reverse";
     public static final String FACTOR = "factor";
     public static final String STEPS = "steps";
     public static final String PULSES = "pulses";

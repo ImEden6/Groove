@@ -7,8 +7,11 @@ public final class SampleData {
     private final float[] pcm;
     private final float[][] levels;
     public SampleData(int rate, int channels, float[] pcm) {
+        this(rate, channels, pcm, false);
+    }
+    private SampleData(int rate, int channels, float[] pcm, boolean owned) {
         validate(rate, channels, pcm.length);
-        this.rate = rate; this.channels = channels; this.pcm = pcm.clone();
+        this.rate = rate; this.channels = channels; this.pcm = owned ? pcm : pcm.clone();
         for (float value : this.pcm)
             if (!Float.isFinite(value) || Math.abs(value) > 1) throw new IllegalArgumentException("Invalid PCM amplitude");
         levels = buildLevels(this.pcm, channels);
@@ -23,6 +26,25 @@ public final class SampleData {
     public int frames() { return pcm.length / channels; }
     public long bytes() { long size = 0; for (float[] level : levels) size += level.length * 4L; return size; }
     public double duration() { return (double) frames() / rate; }
+    /** Exact PCM payload estimate, including all five levels; call before allocating a region. */
+    public static long storageBytes(int frames, int channels) {
+        if (frames < 1 || (channels != 1 && channels != 2) || (long)frames * channels > MAX_FLOATS)
+            throw new IllegalArgumentException("Invalid sample dimensions");
+        long bytes = 0;
+        for (int level = 0; level < 5; level++) { bytes += (long)frames * channels * Float.BYTES; frames = (frames + 1) / 2; }
+        return bytes;
+    }
+    /** Control-thread only. Filtering starts from isolated PCM, so neighboring slices cannot leak. */
+    public SampleData copyRegion(int start, int end, boolean reverse) {
+        if (start < 0 || end > frames() || start >= end) throw new IllegalArgumentException("Invalid sample region");
+        if (start == 0 && end == frames() && !reverse) return this;
+        float[] data = new float[(end - start) * channels];
+        for (int frame = 0; frame < end - start; frame++) {
+            int source = reverse ? end - 1 - frame : start + frame;
+            for (int channel = 0; channel < channels; channel++) data[frame * channels + channel] = pcm[source * channels + channel];
+        }
+        return new SampleData(rate, channels, data, true);
+    }
     public float at(double frame, int channel) {
         if (!Double.isFinite(frame) || frame < 0 || frame >= frames()) return 0;
         int index = (int) frame;

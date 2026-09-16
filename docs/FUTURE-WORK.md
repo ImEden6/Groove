@@ -141,6 +141,11 @@ $$\text{frequency} = 440 \times 2^{\frac{\text{scaleInterval} - 69}{12}}$$
 
 ### 3. Granular Sample Chopping & Slicing (`chop` / `slice`)
 
+**Stage 2 update:** source-frame regions, the `sample_slice` node, reversed
+sample playback, and offline pattern sample rendering are implemented.
+See [engine upgrade stages](ENGINE-UPGRADE-STAGES.md#stage-2-usage). Live slice-index
+modulation, granular time stretching, and sustained sample loops remain future work.
+
 One of Strudel’s most famous live-coding tricks is breakbeat slicing (jungle/drum & bass chops on the Amen break):
 
 * *Strudel Concept:* `s("amen").slice(8, "0 3 2 5 6 1 4 7")` chops an audio sample into 8 equal slices and rearranges their trigger order.
@@ -191,6 +196,6 @@ You have clipboard Base64 JSON and world transactional files, but no physical su
 | --- | --- | --- | --- |
 | **Rhythm** | Euclid, Fast/Slow, Alternate, Probability, Polymeter | Euclidean, alternation, degradation, polymeter | Implemented; dedicated input reordering UI deferred |
 | **Pitch** | Raw Frequency (Hz) / Pitch Ratio | Notes (`c3`, `eb4`), Scales, Chords, Microtuning | `ScaleQuantizer` & `ChordGen` nodes |
-| **Sampling** | Trigger full one-shot from start | Chopping (`chop`), Slicing (`slice`), Looping (`loopAt`) | `SampleSlicer` node & start-offset DSP parameter |
+| **Sampling** | One-shots, source regions, equal slicing, reverse, offline pattern rendering | Live slice modulation, time stretching, sustained looping | Extend the bounded region/playback model |
 | **Environment** | Static in-game blocks | N/A (Browser-based) | `SunClock`, `WeatherMod`, and `Proximity` sensory nodes |
 | **Progression** | Operator commands (`/groove`) | Text files / URL sharing | Physical craftable Discs / Cartridges for survival trading |
