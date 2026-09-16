@@ -305,14 +305,22 @@ the graph compiler charges every synced delay line its worst-case frames at 30 B
 ($96,000 \times \text{beatRatio}$ frames). The total delay budget across all lines
 in a single `SignalGraph` is capped at **192,000 stereo frames** (~3.07 MB).
 Graphs exceeding this cap are rejected at compilation with an explicit error:
-`"Delay memory budget exceeded: <frames> frames (max 192000 at 30 BPM; division 1/2 requires 192000 frames alone)"`.
+`"Delay memory budget exceeded: <frames> frames (max 192000; synced delays count at 30 BPM)"`.
 Free delays remain individually capped at 48,000 frames (up to four lines).
+A single 1/2-note synced delay uses the whole budget on its own.
 
 #### Runtime allocation and tempo transitions
-Delay ring buffers allocate during session state creation and enforce bounds
-($64 \le \text{frames} \le 192,000$). Buffer traversal in `SignalRuntime.process`
-remains completely allocation-free. On tempo transitions, history replay reconstructs
-feedback tails up to the 48,000-frame limit, smoothly crossfading into the new delay time.
+Delay ring buffers are sized from the program's BPM when a timeline is published to
+`LiveRenderer` (the control thread builds `SignalRuntime`), and synced lengths are checked
+against $64 \le \text{frames} \le 192,000$. Buffer traversal in `SignalRuntime.process`
+is allocation-free.
+
+A tempo change publishes a new program whose delay lines start empty. History replay
+only covers time since the new program's anchor cycle (at most one second), so right
+after a switch it replays roughly one block, not the old echo tail. The outgoing
+program's audio fades out over the 240-frame program crossfade, then the synced delay
+stays silent until one full new delay length of input has passed through it (24,000
+frames for a 1/8 note at 60 BPM). `SignalTests.delaySync` asserts this gap.
 
 ### Audio demonstrations
 
