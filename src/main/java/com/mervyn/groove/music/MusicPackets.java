@@ -13,7 +13,30 @@ import groove.engine.samples.AssetRef;
 import groove.engine.samples.SampleData;
 import groove.engine.samples.SampleTransfer;
 
+import net.fabricmc.fabric.api.networking.v1.ServerConfigurationNetworking;
+import net.minecraft.network.FriendlyByteBuf;
+import net.minecraft.network.protocol.Packet;
+import net.minecraft.server.network.ConfigurationTask;
+
 public final class MusicPackets {
+    public record Protocol(int version) implements CustomPacketPayload {
+        public static final Type<Protocol> TYPE = new Type<>(GrooveMod.id("protocol"));
+        public static final StreamCodec<FriendlyByteBuf, Protocol> CODEC = new StreamCodec<>() {
+            public Protocol decode(FriendlyByteBuf buf) { return new Protocol(buf.readVarInt()); }
+            public void encode(FriendlyByteBuf buf, Protocol packet) { buf.writeVarInt(packet.version()); }
+        };
+        public Type<? extends CustomPacketPayload> type() { return TYPE; }
+    }
+    public record ProtocolTask(int version) implements ConfigurationTask {
+        public static final ConfigurationTask.Type TYPE = new ConfigurationTask.Type("modid:protocol");
+        @Override
+        public void start(java.util.function.Consumer<Packet<?>> sender) {
+            sender.accept(ServerConfigurationNetworking.createS2CPacket(new Protocol(version)));
+        }
+        @Override
+        public ConfigurationTask.Type type() { return TYPE; }
+    }
+
     public record WireState(long revision, long at, double cycle, double bpm, boolean playing, String graph) {
         WireState(SessionState state) {
             this(state.revision(), state.effectiveNanos(), state.anchorCycle(), state.bpm(), state.playing(), GraphJson.encode(state.graph()));
@@ -63,6 +86,8 @@ public final class MusicPackets {
         public Type<? extends CustomPacketPayload> type() { return TYPE; }
     }
     public static void register() {
+        PayloadTypeRegistry.configurationC2S().register(Protocol.TYPE, Protocol.CODEC);
+        PayloadTypeRegistry.configurationS2C().register(Protocol.TYPE, Protocol.CODEC);
         PayloadTypeRegistry.playC2S().register(Submit.TYPE, Submit.CODEC);
         PayloadTypeRegistry.playS2C().register(SubmitResult.TYPE, SubmitResult.CODEC);
         PayloadTypeRegistry.playS2C().register(Snapshot.TYPE, Snapshot.CODEC);

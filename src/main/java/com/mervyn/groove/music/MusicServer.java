@@ -5,6 +5,8 @@ import com.mojang.brigadier.arguments.DoubleArgumentType;
 import groove.engine.*;
 import net.fabricmc.fabric.api.command.v2.CommandRegistrationCallback;
 import net.fabricmc.fabric.api.event.lifecycle.v1.ServerLifecycleEvents;
+import net.fabricmc.fabric.api.networking.v1.ServerConfigurationConnectionEvents;
+import net.fabricmc.fabric.api.networking.v1.ServerConfigurationNetworking;
 import net.fabricmc.fabric.api.networking.v1.ServerPlayConnectionEvents;
 import net.fabricmc.fabric.api.networking.v1.ServerPlayNetworking;
 import net.minecraft.commands.CommandSourceStack;
@@ -66,6 +68,23 @@ public final class MusicServer {
         HeadphoneServer.register();
         SpeakerServer.register();
         SampleServer.register();
+        ServerConfigurationConnectionEvents.CONFIGURE.register((handler, server) -> {
+            GrooveProtocol.handleConfigure(
+                    ServerConfigurationNetworking.canSend(handler, MusicPackets.Protocol.TYPE),
+                    handler.getOwner().getName(),
+                    handler::disconnect,
+                    handler::addTask
+            );
+        });
+        ServerConfigurationNetworking.registerGlobalReceiver(MusicPackets.Protocol.TYPE, (packet, context) -> {
+            var handler = context.networkHandler();
+            GrooveProtocol.handlePacket(
+                    packet.version(),
+                    handler.getOwner().getName(),
+                    handler::disconnect,
+                    () -> handler.completeTask(MusicPackets.ProtocolTask.TYPE)
+            );
+        });
         ServerLifecycleEvents.SERVER_STARTED.register(server -> active = new MusicServer(server));
         ServerLifecycleEvents.SERVER_STOPPED.register(server -> {
             MusicServer session = active;

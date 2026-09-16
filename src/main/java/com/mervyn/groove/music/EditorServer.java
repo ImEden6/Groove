@@ -50,44 +50,23 @@ public final class EditorServer {
                 if (!(player.serverLevel().getBlockEntity(packet.pos()) instanceof EditorBlockEntity found))
                     throw new IllegalArgumentException("Editor no longer exists");
                 editor = found;
-                // Blocks placed before session support have no recorded placer.
-                if (!editor.hasOwner() && player.hasPermissions(2) && packet.action() == EditorPackets.OPEN)
-                    editor.setOwner(player.getUUID());
-                if (!editor.canEdit(player.getUUID())) throw new IllegalArgumentException("Editing requires owner or allowlist access");
-                if (packet.action() != EditorPackets.OPEN && !editor.sessionId().equals(packet.session()))
-                    throw new IllegalArgumentException("Editor session changed; reopen it");
                 if (packet.action() == EditorPackets.OPEN) {
                     var key = new ViewerKey(player.serverLevel().dimension(), packet.pos(), editor.sessionId());
                     removeViewer(player.getUUID());
                     viewers.keySet().removeIf(k -> k.dimension().equals(key.dimension()) && k.pos().equals(packet.pos()) && !k.equals(key));
                     viewers.computeIfAbsent(key, k -> new HashSet<>()).add(player.getUUID());
-                } else if (packet.action() == EditorPackets.DRAFT) {
-                    editor.session().edit(GraphJson.decodeDraft(packet.graph()), packet.bpm(), packet.playing());
-                    editor.setChanged();
-                } else if (packet.action() == EditorPackets.COMMIT) {
-                    for (var node : editor.session().draft().nodes())
-                        if (node.sample() != null && !SampleServer.hasAsset(node.sample()))
-                            throw new IllegalArgumentException("Server lacks exact sample " + node.sample().assetId());
-                    editor.session().commit(packet.revision(), now);
-                    editor.setChanged();
                 }
-                accepted = true;
-                message = packet.action() == EditorPackets.COMMIT ? "Committed for the safe downbeat" : "Draft saved";
             } catch (RuntimeException error) {
-                // Validation rejections are expected; retain diagnostics for unexpected failures.
                 if (!(error instanceof IllegalArgumentException))
                     com.mervyn.groove.GrooveMod.LOGGER.error("Unexpected editor action failure at {} for player {}",
                             packet.pos(), player.getUUID(), error);
                 message = error.getMessage() != null ? error.getMessage() : "Editor action failed";
             }
             boolean visible = editor != null && editor.canEdit(player.getUUID());
-            var session = visible ? editor.session() : null;
             var otherViewers = new ArrayList<String>();
             if (visible) {
                 var players = viewers.get(new ViewerKey(player.serverLevel().dimension(), packet.pos(), editor.sessionId()));
                 if (players != null) {
-                    // Revoked or displaced viewers must not accumulate beyond the packet's
-                    // allowlist-sized bound, even when a client never sends CLOSE.
                     var iterator = players.iterator();
                     while (iterator.hasNext()) {
                         UUID id = iterator.next();
@@ -100,11 +79,11 @@ public final class EditorServer {
                 }
                 otherViewers.sort(String.CASE_INSENSITIVE_ORDER);
             }
-            ServerPlayNetworking.send(player, new EditorPackets.State(packet.pos(), visible ? editor.sessionId() : packet.session(),
-                    packet.request(), accepted, message.substring(0, Math.min(512, message.length())),
-                    session == null ? 0 : session.revision(), session == null ? "" : GraphJson.encode(session.draft()),
-                    session == null ? 128 : session.bpm(), session != null && session.playing(), otherViewers));
-            if (accepted && packet.action() == EditorPackets.OPEN) sendAllowlist(player, editor, UUID.randomUUID(), true, "");
+            var state = handleAction(editor != null ? editor.project() : null, packet.pos(), player.getUUID(),
+                    player.hasPermissions(2), packet, now, otherViewers);
+            if (state.accepted() && packet.action() != EditorPackets.OPEN && editor != null) editor.setChanged();
+            ServerPlayNetworking.send(player, state);
+            if (state.accepted() && packet.action() == EditorPackets.OPEN) sendAllowlist(player, editor, UUID.randomUUID(), true, "");
         }));
         ServerPlayNetworking.registerGlobalReceiver(EditorPackets.AllowlistRequest.TYPE, (packet, context) -> context.server().execute(() -> {
             var player = context.player();
@@ -187,5 +166,52 @@ public final class EditorServer {
         names.sort(String.CASE_INSENSITIVE_ORDER);
         ServerPlayNetworking.send(player, new EditorPackets.AllowlistState(editor.getBlockPos(), editor.sessionId(), request,
                 accepted, message, isOwner, ownerName, List.copyOf(names)));
+    }
+
+    public static EditorPackets.State handleAction(EditorProject project, net.minecraft.core.BlockPos pos,
+                                                  UUID playerId, boolean hasAdminPermissions,
+                                                  EditorPackets.Request packet, long now,
+                                                  List<String> otherViewers) {
+        if (project == null) {
+            return new EditorPackets.State(pos, packet.session(), packet.request(), false,
+                    "Editor no longer exists", 0, "", 128, false, List.of());
+        }
+        if (!project.hasOwner() && hasAdminPermissions && packet.action() == EditorPackets.OPEN)
+            project.setOwner(playerId);
+        if (!project.canEdit(playerId))
+            return new EditorPackets.State(pos, packet.session(), packet.request(), false,
+                    "Editing requires owner or allowlist access", 0, "", 128, false, List.of());
+        if (packet.action() != EditorPackets.OPEN && !project.sessionId().equals(packet.session()))
+            return new EditorPackets.State(pos, packet.session(), packet.request(), false,
+                    "Editor session changed; reopen it", 0, "", 128, false, List.of());
+
+        boolean accepted = false;
+        String message;
+        try {
+            if (packet.action() == EditorPackets.OPEN) {
+                // Open request does not mutate
+            } else if (project.isUnreadable()) {
+                throw new IllegalArgumentException("This project needs a newer Groove version");
+            } else if (packet.action() == EditorPackets.DRAFT) {
+                project.session().edit(GraphJson.decodeDraft(packet.graph()), packet.bpm(), packet.playing());
+            } else if (packet.action() == EditorPackets.COMMIT) {
+                for (var node : project.session().draft().nodes())
+                    if (node.sample() != null && !SampleServer.hasAsset(node.sample()))
+                        throw new IllegalArgumentException("Server lacks exact sample " + node.sample().assetId());
+                project.session().commit(packet.revision(), now);
+            }
+            accepted = true;
+            message = packet.action() == EditorPackets.COMMIT ? "Committed for the safe downbeat" : "Draft saved";
+        } catch (RuntimeException error) {
+            message = error.getMessage() != null ? error.getMessage() : "Editor action failed";
+        }
+        boolean unreadable = project.isUnreadable();
+        String replyMsg = unreadable ? "This project needs a newer Groove version" : message.substring(0, Math.min(512, message.length()));
+        var session = project.session();
+        String replyGraph = unreadable ? "" : (session == null ? "" : GraphJson.encode(session.draft()));
+        return new EditorPackets.State(pos, project.sessionId(),
+                packet.request(), accepted, replyMsg,
+                session == null ? 0 : session.revision(), replyGraph,
+                session == null ? 128 : session.bpm(), session != null && session.playing(), otherViewers);
     }
 }

@@ -17,6 +17,8 @@ import groove.engine.SessionState;
 import groove.engine.SessionTimeline;
 import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientLifecycleEvents;
 import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents;
+import com.mervyn.groove.music.GrooveProtocol;
+import net.fabricmc.fabric.api.client.networking.v1.ClientConfigurationNetworking;
 import net.fabricmc.fabric.api.client.networking.v1.ClientPlayConnectionEvents;
 import net.fabricmc.fabric.api.client.networking.v1.ClientPlayNetworking;
 import net.minecraft.client.Minecraft;
@@ -93,6 +95,9 @@ public final class MusicClient {
                 }
             }
         }, 0, 50, TimeUnit.MILLISECONDS);
+        ClientConfigurationNetworking.registerGlobalReceiver(MusicPackets.Protocol.TYPE, (packet, context) -> {
+            context.responseSender().sendPacket(new MusicPackets.Protocol(GrooveProtocol.VERSION));
+        });
         ClientPlayNetworking.registerGlobalReceiver(MusicPackets.SubmitResult.TYPE, (packet, context) -> {
             if (context.client().screen instanceof com.mervyn.groove.client.ui.GrooveEditorScreen editor) editor.submissionResult(packet);
         });

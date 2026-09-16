@@ -54,7 +54,7 @@ public final class HeadphoneServer {
             if (last != null && now - last < 250_000_000L) return;
             previews.put(player.getUUID(), now);
             var editor = previewEditor(player);
-            if (editor == null) {
+            if (!isAvailable(editor != null ? editor.project() : null)) {
                 ServerPlayNetworking.send(player, new HeadphonePackets.Draft(packet.request(), false, "", 128, false, 0, new UUID(0, 0), now, 0));
             } else {
                 var state = editor.session().preview();
@@ -66,6 +66,9 @@ public final class HeadphoneServer {
         net.fabricmc.fabric.api.event.lifecycle.v1.ServerTickEvents.END_SERVER_TICK.register(server -> {
             for (var player : server.getPlayerList().getPlayers()) previewEditor(player);
         });
+    }
+    public static boolean isAvailable(EditorProject project) {
+        return project != null && !project.isUnreadable();
     }
     private static EditorBlockEntity previewEditor(net.minecraft.server.level.ServerPlayer player) {
         var worn = wornHeadphones(player);
@@ -97,7 +100,10 @@ public final class HeadphoneServer {
     }
     static boolean allowsAsset(net.minecraft.server.level.ServerPlayer player, groove.engine.samples.AssetRef ref) {
         var editor = previewEditor(player);
-        return editor != null && editor.session().draft().nodes().stream().anyMatch(node -> ref.equals(node.sample()));
+        if (editor == null) return false;
+        if (editor.project().preservesAsset(ref)) return true;
+        if (editor.project().isUnreadable()) return false;
+        return editor.session().draft().nodes().stream().anyMatch(node -> ref.equals(node.sample()));
     }
     /** Only a worn pair counts (see EDITOR-BLOCK-DESIGN.md: holding it only binds). */
     private static Optional<net.minecraft.world.item.ItemStack> wornHeadphones(net.minecraft.server.level.ServerPlayer player) {

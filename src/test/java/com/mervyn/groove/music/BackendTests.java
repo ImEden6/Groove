@@ -161,6 +161,9 @@ public final class BackendTests {
         persistenceChecks();
         typedCompatibilityChecks();
         signalChecks();
+        protocolChecks();
+        unreadableProjectChecks();
+        fixtureChecks();
         var searchCache = new com.mervyn.groove.client.ui.SampleSearch();
         var catalog = groove.engine.samples.SampleCatalog.scan(null);
         var rows = searchCache.filter(catalog, "@factory");
@@ -526,6 +529,23 @@ public final class BackendTests {
             } catch (java.io.IOException expected) { }
             invalid(() -> new SessionStore.Saved(Graph.demo(), Double.NaN));
 
+            // Session store backup: a corrupt file gets a .bak with the original bytes before any write;
+            // a second corrupt read does not overwrite an existing .bak.
+            var sessionFile = root.resolve(SessionStore.FILE);
+            var bakFile = root.resolve(SessionStore.FILE + ".bak");
+            java.nio.file.Files.deleteIfExists(bakFile);
+            String corrupt1 = "{\"corrupt\": 1}";
+            java.nio.file.Files.writeString(sessionFile, corrupt1);
+            var fresh = new SessionStore.Saved(Graph.demo(), 120);
+            SessionStore.write(root, fresh);
+            check(java.nio.file.Files.exists(bakFile), "Corrupt file backed up to .bak on write");
+            check(java.nio.file.Files.readString(bakFile).equals(corrupt1), "Backup preserves original corrupt bytes");
+            check(SessionStore.read(root).equals(fresh), "New write succeeds and is readable");
+            String corrupt2 = "{\"corrupt\": 2}";
+            java.nio.file.Files.writeString(sessionFile, corrupt2);
+            SessionStore.write(root, fresh);
+            check(java.nio.file.Files.readString(bakFile).equals(corrupt1), "Second corrupt save never overwrites existing .bak");
+
         } finally {
             try (var files = java.nio.file.Files.list(root)) {
                 for (var file : files.toList()) java.nio.file.Files.delete(file);
@@ -582,6 +602,206 @@ public final class BackendTests {
         input.mouseUp(port.x(),port.y(),(x,y)->true);
         check(editor.edges().contains(new Graph.Edge("range","out","filter","cutoff")), "Pointer targets second named socket");
     }
+
+    private static void protocolChecks() {
+        var completed = new java.util.concurrent.atomic.AtomicBoolean(false);
+        var disconnected = new java.util.concurrent.atomic.AtomicReference<String>(null);
+        var taskAdded = new java.util.concurrent.atomic.AtomicReference<MusicPackets.ProtocolTask>(null);
+
+        // 1. Configure phase with protocol capability
+        GrooveProtocol.handleConfigure(true, "TestPlayer",
+                comp -> disconnected.set(comp.getString()),
+                taskAdded::set);
+        check(disconnected.get() == null, "Capable client is not disconnected during configure");
+        check(taskAdded.get() != null && taskAdded.get().version() == GrooveProtocol.VERSION, "Protocol task added with current version");
+
+        // 2. Configure phase without protocol capability (client lacks channel)
+        disconnected.set(null);
+        taskAdded.set(null);
+        GrooveProtocol.handleConfigure(false, "LegacyPlayer",
+                comp -> disconnected.set(comp.getString()),
+                taskAdded::set);
+        check(taskAdded.get() == null, "Legacy client without protocol channel gets no task");
+        check("This server requires Groove protocol 4. Update Groove.".equals(disconnected.get()),
+                "Missing channel disconnects with exact required message");
+
+        // 3. Packet response: equal version completes configuration
+        disconnected.set(null);
+        completed.set(false);
+        GrooveProtocol.handlePacket(GrooveProtocol.VERSION, "TestPlayer",
+                comp -> disconnected.set(comp.getString()),
+                () -> completed.set(true));
+        check(completed.get(), "Matching protocol version completes configuration");
+        check(disconnected.get() == null, "Matching protocol version does not disconnect");
+
+        // 4. Packet response: mismatched version disconnects
+        disconnected.set(null);
+        completed.set(false);
+        GrooveProtocol.handlePacket(3, "MismatchedPlayer",
+                comp -> disconnected.set(comp.getString()),
+                () -> completed.set(true));
+        check(!completed.get(), "Mismatched protocol version does not complete configuration");
+        check("Groove version mismatch: server 4, client 3".equals(disconnected.get()),
+                "Mismatched version disconnects with exact mismatch message");
+
+        // Wire codec roundtrip test for MusicPackets.Protocol
+        var protocolPacket = new MusicPackets.Protocol(GrooveProtocol.VERSION);
+        var buf = new RegistryFriendlyByteBuf(Unpooled.buffer(), RegistryAccess.EMPTY);
+        try {
+            MusicPackets.Protocol.CODEC.encode(buf, protocolPacket);
+            check(MusicPackets.Protocol.CODEC.decode(buf).equals(protocolPacket), "Protocol packet round trips on wire");
+        } finally { buf.release(); }
+    }
+
+    private static void unreadableProjectChecks() {
+        var sampleRef = groove.engine.samples.FactorySamples.ref("factory:basic/kick.wav");
+        String unreadableDraftJson = """
+        {
+          "version": 3,
+          "nodes": [
+            {"id": "sample", "type": "generator/sample", "params": {},
+             "sample": {"assetId": "factory:basic/kick.wav", "sha256": "%s"}},
+            {"id": "future_synth", "type": "future_node_type", "params": {}},
+            {"id": "out", "type": "output", "params": {}}
+          ],
+          "edges": [{"fromNode": "future_synth", "fromPort": "out", "toNode": "out", "toPort": "in"}]
+        }
+        """.formatted(sampleRef.sha256());
+
+        String outOfRangePublishedJson = """
+        {
+          "version": 3,
+          "nodes": [
+            {"id": "tone", "type": "tone", "params": {}},
+            {"id": "rhythm", "type": "euclid", "params": {"steps": 100.0, "pulses": 4.0}},
+            {"id": "out", "type": "output", "params": {}}
+          ],
+          "edges": [
+            {"fromNode": "tone", "fromPort": "out", "toNode": "rhythm", "toPort": "in"},
+            {"fromNode": "rhythm", "fromPort": "out", "toNode": "out", "toPort": "in"}
+          ]
+        }
+        """;
+
+        var tag = new net.minecraft.nbt.CompoundTag();
+        tag.putUUID("SessionId", UUID.randomUUID());
+        tag.putString("Draft", unreadableDraftJson);
+        tag.putDouble("DraftBpm", 130.0);
+        tag.putBoolean("DraftPlaying", true);
+        tag.putString("Published", outOfRangePublishedJson);
+        tag.putDouble("PublishedBpm", 140.0);
+        tag.putBoolean("PublishedPlaying", true);
+
+        var project = new EditorProject();
+        project.load(tag);
+
+        check(project.isDraftUnreadable(), "Unknown node type flags draft as unreadable");
+        check(project.isPublishedUnreadable(), "Out-of-range parameter flags published as unreadable");
+        check(project.isUnreadable(), "Project is unreadable when either field is unreadable");
+        check(project.draftError() != null && !project.draftError().isEmpty(), "Draft error recorded");
+        check(project.publishedError() != null && !project.publishedError().isEmpty(), "Published error recorded");
+
+        // Independent flagging
+        var draftOnlyValid = new net.minecraft.nbt.CompoundTag();
+        draftOnlyValid.putString("Draft", GraphJson.encode(Graph.demo()));
+        draftOnlyValid.putString("Published", outOfRangePublishedJson);
+        var p1 = new EditorProject();
+        p1.load(draftOnlyValid);
+        check(!p1.isDraftUnreadable() && p1.isPublishedUnreadable(), "Only published is flagged when draft is valid");
+
+        var publishedOnlyValid = new net.minecraft.nbt.CompoundTag();
+        publishedOnlyValid.putString("Draft", unreadableDraftJson);
+        publishedOnlyValid.putString("Published", GraphJson.encode(Graph.demo()));
+        var p2 = new EditorProject();
+        p2.load(publishedOnlyValid);
+        check(p2.isDraftUnreadable() && !p2.isPublishedUnreadable(), "Only draft is flagged when published is valid");
+
+        check(project.preservesAsset(sampleRef), "Unreadable project preserves sample references from raw JSON");
+
+        // Save and re-read yields byte-identical raw strings
+        var savedTag = new net.minecraft.nbt.CompoundTag();
+        project.save(savedTag);
+        check(savedTag.getString("Draft").equals(unreadableDraftJson), "Save preserves unreadable draft byte-for-byte");
+        check(savedTag.getString("Published").equals(outOfRangePublishedJson), "Save preserves unreadable published byte-for-byte");
+
+        var reloaded = new EditorProject();
+        reloaded.load(savedTag);
+        check(reloaded.isDraftUnreadable() && reloaded.isPublishedUnreadable(), "Reloaded project remains unreadable");
+        var resavedTag = new net.minecraft.nbt.CompoundTag();
+        reloaded.save(resavedTag);
+        check(resavedTag.getString("Draft").equals(unreadableDraftJson), "Re-read and save yields byte-identical draft");
+        check(resavedTag.getString("Published").equals(outOfRangePublishedJson), "Re-read and save yields byte-identical published");
+
+        // Mutating packets: DRAFT, COMMIT, etc. are rejected
+        var owner = UUID.randomUUID();
+        project.setOwner(owner);
+        var pos = new net.minecraft.core.BlockPos(10, 20, 30);
+        long now = System.nanoTime();
+
+        var openReq = new EditorPackets.Request(pos, project.sessionId(), UUID.randomUUID(), EditorPackets.OPEN, 0, "", 128, false);
+        var openState = EditorServer.handleAction(project, pos, owner, false, openReq, now, java.util.List.of());
+        check(openState.accepted(), "Open action accepted on unreadable project");
+        check("This project needs a newer Groove version".equals(openState.message()), "Open action provides unreadable message");
+        check(openState.graph().isEmpty(), "Open action returns empty graph for unreadable project");
+
+        var draftReq = new EditorPackets.Request(pos, project.sessionId(), UUID.randomUUID(), EditorPackets.DRAFT, 1,
+                GraphJson.encode(Graph.demo()), 120, true);
+        var draftState = EditorServer.handleAction(project, pos, owner, false, draftReq, now, java.util.List.of());
+        check(!draftState.accepted(), "DRAFT packet rejected on unreadable project");
+        check("This project needs a newer Groove version".equals(draftState.message()), "DRAFT rejection has unreadable message");
+
+        var commitReq = new EditorPackets.Request(pos, project.sessionId(), UUID.randomUUID(), EditorPackets.COMMIT, 1,
+                "", 120, true);
+        var commitState = EditorServer.handleAction(project, pos, owner, false, commitReq, now, java.util.List.of());
+        check(!commitState.accepted(), "COMMIT packet rejected on unreadable project");
+        check("This project needs a newer Groove version".equals(commitState.message()), "COMMIT rejection has unreadable message");
+
+        check(!SpeakerServer.isAvailable(project), "Speaker answers unavailable for unreadable project");
+        check(!HeadphoneServer.isAvailable(project), "Headphone answers unavailable for unreadable project");
+    }
+
+    private static void fixtureChecks() throws Exception {
+        var srcDir = java.nio.file.Path.of("src/test/resources/fixtures/phase3");
+        var coreDir = java.nio.file.Path.of("core-engine/src/test/resources/fixtures/phase3");
+        java.nio.file.Files.createDirectories(srcDir);
+        java.nio.file.Files.createDirectories(coreDir);
+
+        var signalDelayGraph = groove.engine.SignalDemo.graph();
+        var sampleSlicesGraph = new Graph(3, java.util.List.of(
+                new Graph.Node("sample", NodeType.GENERATOR_SAMPLE,
+                        java.util.Map.of("startFrame", 64.0, "endFrame", 1024.0, "reverse", 1.0),
+                        groove.engine.samples.FactorySamples.ref("factory:basic/kick.wav")),
+                new Graph.Node("slice", NodeType.SAMPLE_SLICE, java.util.Map.of("slices", 4.0, "index", 2.0, "reverse", 1.0)),
+                new Graph.Node("out", NodeType.OUTPUT, java.util.Map.of())),
+                java.util.List.of(Graph.edge("sample", "slice"), Graph.edge("slice", "out")));
+        var patternV2Graph = groove.engine.samples.FactorySamples.demo();
+
+        var expectedGraphs = java.util.Map.of(
+                "signal_delay.json", signalDelayGraph,
+                "sample_slices.json", sampleSlicesGraph,
+                "pattern_v2.json", patternV2Graph
+        );
+
+        for (var entry : expectedGraphs.entrySet()) {
+            var file = srcDir.resolve(entry.getKey());
+            var coreFile = coreDir.resolve(entry.getKey());
+            if (!java.nio.file.Files.exists(file)) {
+                java.nio.file.Files.writeString(file, GraphJson.encode(entry.getValue()));
+            }
+            if (!java.nio.file.Files.exists(coreFile)) {
+                java.nio.file.Files.writeString(coreFile, GraphJson.encode(entry.getValue()));
+            }
+        }
+
+        for (String name : expectedGraphs.keySet()) {
+            String json = java.nio.file.Files.readString(srcDir.resolve(name));
+            Graph decoded = GraphJson.decode(json);
+            check(decoded != null, "Decoded fixture " + name + " is non-null");
+            GraphCompiler.compile(decoded);
+            check(GraphJson.decode(GraphJson.encode(decoded)).equals(decoded), "Fixture " + name + " survives JSON round-trip");
+        }
+    }
+
     private static void invalid(Runnable action) {
         TestSupport.reject(action, "Expected invalid JSON rejection");
     }

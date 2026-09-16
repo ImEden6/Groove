@@ -17,6 +17,7 @@ public final class EditorBlockEntity extends BlockEntity {
     public EditorSession session() { return project.session(); }
     public UUID owner() { return project.owner(); }
     public java.util.Set<UUID> editors() { return project.editors(); }
+    public EditorProject project() { return project; }
     public boolean hasOwner() { return project.hasOwner(); }
     public void setOwner(UUID player) { project.setOwner(player); setChanged(); }
     public boolean canEdit(UUID player) { return project.canEdit(player); }
@@ -28,5 +29,9 @@ public final class EditorBlockEntity extends BlockEntity {
     @Override protected void loadAdditional(CompoundTag tag, HolderLookup.Provider registries) {
         super.loadAdditional(tag, registries);
         project.load(tag);
+        if (project.isUnreadable()) {
+            com.mervyn.groove.GrooveMod.LOGGER.warn("Unreadable editor project at {}: draft error: [{}], published error: [{}]",
+                    getBlockPos(), project.draftError(), project.publishedError());
+        }
     }
 }

@@ -1,0 +1,125 @@
+{
+  "version": 3,
+  "nodes": [
+    {
+      "id": "tone",
+      "type": "tone",
+      "params": {
+        "frequency": 110.0,
+        "gain": 0.15,
+        "wave": 1.0
+      }
+    },
+    {
+      "id": "rhythm",
+      "type": "euclid",
+      "params": {
+        "pulses": 3.0,
+        "steps": 8.0
+      }
+    },
+    {
+      "id": "render",
+      "type": "audio_render",
+      "params": {}
+    },
+    {
+      "id": "lfo",
+      "type": "lfo",
+      "params": {
+        "rate": 0.2
+      }
+    },
+    {
+      "id": "range",
+      "type": "attenuverter",
+      "params": {
+        "offset": 1800.0,
+        "scale": 1500.0
+      }
+    },
+    {
+      "id": "filter",
+      "type": "filter",
+      "params": {
+        "resonanceQ": 1.5
+      }
+    },
+    {
+      "id": "mix",
+      "type": "mix_bus",
+      "params": {
+        "gain": 0.65
+      }
+    },
+    {
+      "id": "delay",
+      "type": "delay",
+      "params": {
+        "division": 2.0,
+        "sync": 1.0
+      }
+    },
+    {
+      "id": "out",
+      "type": "output",
+      "params": {}
+    }
+  ],
+  "edges": [
+    {
+      "fromNode": "tone",
+      "fromPort": "out",
+      "toNode": "rhythm",
+      "toPort": "in"
+    },
+    {
+      "fromNode": "rhythm",
+      "fromPort": "out",
+      "toNode": "render",
+      "toPort": "in"
+    },
+    {
+      "fromNode": "render",
+      "fromPort": "out",
+      "toNode": "filter",
+      "toPort": "in"
+    },
+    {
+      "fromNode": "lfo",
+      "fromPort": "out",
+      "toNode": "range",
+      "toPort": "in"
+    },
+    {
+      "fromNode": "range",
+      "fromPort": "out",
+      "toNode": "filter",
+      "toPort": "cutoff"
+    },
+    {
+      "fromNode": "filter",
+      "fromPort": "out",
+      "toNode": "mix",
+      "toPort": "in"
+    },
+    {
+      "fromNode": "delay",
+      "fromPort": "out",
+      "toNode": "mix",
+      "toPort": "in"
+    },
+    {
+      "fromNode": "mix",
+      "fromPort": "out",
+      "toNode": "delay",
+      "toPort": "in"
+    },
+    {
+      "fromNode": "mix",
+      "fromPort": "out",
+      "toNode": "out",
+      "toPort": "audio"
+    }
+  ]
+}

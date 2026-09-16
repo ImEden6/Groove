@@ -1,0 +1,83 @@
+{
+  "version": 2,
+  "nodes": [
+    {
+      "id": "kick",
+      "type": "generator/sample",
+      "params": {},
+      "sample": {
+        "assetId": "factory:basic/kick.wav",
+        "sha256": "d72a49df776970fb7f9bd380cddceb24577bbc0d8d477d8253ca72d354f8b625"
+      }
+    },
+    {
+      "id": "beat",
+      "type": "euclid",
+      "params": {
+        "pulses": 4.0,
+        "steps": 8.0
+      }
+    },
+    {
+      "id": "hat",
+      "type": "generator/sample",
+      "params": {
+        "gain": 0.4
+      },
+      "sample": {
+        "assetId": "factory:basic/hat.wav",
+        "sha256": "865e5a1f0c4c96119701779ebdaebae1228bd240e6482f45552b4425241b6dcd"
+      }
+    },
+    {
+      "id": "hats",
+      "type": "euclid",
+      "params": {
+        "pulses": 7.0,
+        "steps": 16.0
+      }
+    },
+    {
+      "id": "mix",
+      "type": "stack",
+      "params": {}
+    },
+    {
+      "id": "out",
+      "type": "output",
+      "params": {}
+    }
+  ],
+  "edges": [
+    {
+      "fromNode": "kick",
+      "fromPort": "out",
+      "toNode": "beat",
+      "toPort": "in"
+    },
+    {
+      "fromNode": "hat",
+      "fromPort": "out",
+      "toNode": "hats",
+      "toPort": "in"
+    },
+    {
+      "fromNode": "beat",
+      "fromPort": "out",
+      "toNode": "mix",
+      "toPort": "in"
+    },
+    {
+      "fromNode": "hats",
+      "fromPort": "out",
+      "toNode": "mix",
+      "toPort": "in"
+    },
+    {
+      "fromNode": "mix",
+      "fromPort": "out",
+      "toNode": "out",
+      "toPort": "in"
+    }
+  ]
+}

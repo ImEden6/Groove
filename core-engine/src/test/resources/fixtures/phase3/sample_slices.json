@@ -1,0 +1,46 @@
+{
+  "version": 3,
+  "nodes": [
+    {
+      "id": "sample",
+      "type": "generator/sample",
+      "params": {
+        "reverse": 1.0,
+        "startFrame": 64.0,
+        "endFrame": 1024.0
+      },
+      "sample": {
+        "assetId": "factory:basic/kick.wav",
+        "sha256": "d72a49df776970fb7f9bd380cddceb24577bbc0d8d477d8253ca72d354f8b625"
+      }
+    },
+    {
+      "id": "slice",
+      "type": "sample_slice",
+      "params": {
+        "index": 2.0,
+        "slices": 4.0,
+        "reverse": 1.0
+      }
+    },
+    {
+      "id": "out",
+      "type": "output",
+      "params": {}
+    }
+  ],
+  "edges": [
+    {
+      "fromNode": "sample",
+      "fromPort": "out",
+      "toNode": "slice",
+      "toPort": "in"
+    },
+    {
+      "fromNode": "slice",
+      "fromPort": "out",
+      "toNode": "out",
+      "toPort": "in"
+    }
+  ]
+}

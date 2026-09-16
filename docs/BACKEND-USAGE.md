@@ -10,6 +10,11 @@ and Fabric API on both server and clients. This version has one shared session
 for the whole server, played as a stereo monitor through the Jukebox/Note Blocks
 volume category. No blocks or node editor are required.
 
+> [!WARNING]
+> **Compatibility note:** Groove saves are forward-only. Downgrading a world or patch from Phase 4
+> to Phase 3 is unsupported (Phase 3 will discard unrecognised Phase 4 patch data). Always back up
+> your world before downgrading Groove.
+
 ## Commands
 
 Enable cheats in a test single-player world, or use an operator account on a server.

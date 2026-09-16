@@ -61,6 +61,22 @@ final class SessionStore {
                 StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE));
     }
     static void write(Path root, Saved saved, Commit commit) throws IOException {
+        Path current = root.resolve(FILE);
+        if (Files.exists(current)) {
+            boolean corrupt = false;
+            try {
+                read(root);
+            } catch (Exception error) {
+                corrupt = true;
+            }
+            if (corrupt) {
+                Path bak = root.resolve(FILE + ".bak");
+                if (!Files.exists(bak)) {
+                    Files.copy(current, bak);
+                    com.mervyn.groove.GrooveMod.LOGGER.warn("Corrupt session store file backed up to {}", bak);
+                }
+            }
+        }
         String graph = GraphJson.encode(saved.graph());
         GraphJson.decode(graph);
         byte[] bytes = GSON.toJson(new Envelope(1, saved.bpm(), graph)).getBytes(StandardCharsets.UTF_8);

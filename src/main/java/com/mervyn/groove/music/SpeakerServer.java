@@ -103,9 +103,14 @@ public final class SpeakerServer {
             if (player.serverLevel().getBlockEntity(packet.pos()) instanceof SpeakerBlockEntity speaker
                     && !player.serverLevel().getBlockState(packet.pos().below()).is(GrooveBlocks.SPEAKER))
                 editor = linkedEditor(player.serverLevel(), speaker);
-            ServerPlayNetworking.send(player, new SpeakerPackets.CommittedState(packet.pos(), packet.request(), editor != null,
-                    editor == null ? null : new MusicPackets.Snapshot(editor.sessionId(), editor.session().committed(now))));
+            boolean available = isAvailable(editor != null ? editor.project() : null);
+            ServerPlayNetworking.send(player, new SpeakerPackets.CommittedState(packet.pos(), packet.request(), available,
+                    available ? new MusicPackets.Snapshot(editor.sessionId(), editor.session().committed(now)) : null));
         }));
+    }
+
+    public static boolean isAvailable(EditorProject project) {
+        return project != null && !project.isUnreadable();
     }
 
     static boolean allowPoll(UUID player, BlockPos pos, long now) {
@@ -188,6 +193,8 @@ public final class SpeakerServer {
                     || level.getBlockState(pos.below()).is(GrooveBlocks.SPEAKER)) continue;
             var editor = linkedEditor(level, speaker);
             if (editor == null) continue;
+            if (editor.project().preservesAsset(ref)) return true;
+            if (editor.project().isUnreadable()) continue;
             var snapshot = editor.session().committed(now);
             if (references(snapshot, ref)) return true;
         }
