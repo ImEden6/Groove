@@ -4,7 +4,7 @@ package groove.engine;
 public final class Renderer {
     private static final class Voice {
         Score.Note note;
-        double phase, increment;
+        double phase, increment, duration;
         int fadeFrame;
         final VoiceDsp dsp = new VoiceDsp();
     }
@@ -53,8 +53,7 @@ public final class Renderer {
                 long age = frame - voice.note.start();
                 long remaining = voice.note.end() - frame;
                 double fade = tail ? stealFade[voice.fadeFrame] : 1;
-                double duration = voice.note.sample() == null ? (voice.note.end() - voice.note.start()) / (double)score.sampleRate() : voice.note.sample().duration();
-                voice.dsp.add(age / (double)score.sampleRate(), duration, voice.phase, fade, stereo);
+                voice.dsp.add(age / (double)score.sampleRate(), voice.duration, voice.phase, fade, stereo);
                 if (tail) {
                     voice.fadeFrame++;
                     if (voice.fadeFrame == stealFade.length || (voice.note.sample() == null && remaining <= 0)) voice.note = null;
@@ -78,6 +77,7 @@ public final class Renderer {
             for (int i = 0; i < voices.length; i++) if (voices[i] == selected) { selected = retire(i); break; }
         }
         selected.note = note;
+        selected.duration = note.sample() == null ? (note.end() - note.start()) / (double)score.sampleRate() : note.sample().duration();
         selected.phase = 0;
         selected.increment = note.tone() == null ? 0 : note.tone().frequency() / score.sampleRate();
         selected.dsp.start(note.tone(), note.sample(), score.sampleRate());

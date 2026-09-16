@@ -24,7 +24,8 @@ final class VoiceDsp {
         }
     }
 
-    /** phase is supplied by the scheduler: accumulated offline, absolute-time for live seeks. */
+    /** phase is supplied by the scheduler: accumulated offline, absolute-time for live seeks.
+     *  duration bounds the tone envelope; samples carry their own half-open lifetime. */
     void add(double age, double duration, double phase, double fade, double[] out) {
         if (sample != null) {
             out[0] += leftFilter.process(sample.value(age, 0, sampleRate)) * fade;

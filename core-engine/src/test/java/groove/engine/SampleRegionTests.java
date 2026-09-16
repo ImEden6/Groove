@@ -7,7 +7,7 @@ import java.util.*;
 final class SampleRegionTests {
     private static final AssetRef REF = FactorySamples.ref("factory:basic/kick.wav");
     static void run() {
-        boundaries(); memory(); validation(); rendering(); signalSources(); offlineSteal(); allocation();
+        boundaries(); memory(); validation(); rendering(); signalSources(); offlineSteal(); voiceLifetimes(); allocation();
         System.out.println("Sample region, reverse, offline/live parity, bounds and allocation regressions passed.");
     }
     private static void boundaries() {
@@ -157,7 +157,51 @@ final class SampleRegionTests {
         long id=Thread.currentThread().threadId(),before=counter.getThreadAllocatedBytes(id);
         for(int i=2000;i<4000;i++) { live.render(block,64,Math.round(i*64*1e9/48000)); offline.render(block,0,64); }
         long bytes=counter.getThreadAllocatedBytes(id)-before;
-        check(bytes==0 && live.scheduleMisses()==0,"Sample callbacks allocate zero bytes: "+bytes);
+        check(bytes==0 && live.scheduleMisses()==0,"Sample callbacks allocate zero bytes across 2,000 64-frame blocks: "+bytes);
+    }
+    private static void voiceLifetimes() {
+        float[] shortPcm = new float[2400]; Arrays.fill(shortPcm, 0.5f);
+        SampleData shortData = new SampleData(48000, 1, shortPcm);
+        SampleVoice shortV = new SampleVoice(REF, 1, 0.8, 0, 20000, Biquad.DEFAULT_Q);
+        Score scoreShort = Score.compile(Pattern.sample(shortV), new Transport(48000, 120, 4), 1, Map.of(REF, shortData));
+        check(scoreShort.note(0).end() == 2400, "Short sample note end uses sample duration, not event arc");
+        float[] outShort = new float[9600 * 2];
+        new Renderer(scoreShort, 1).render(outShort, 0, 9600);
+        for (int i = 2400 + 120; i < 9600; i++) {
+            check(outShort[i * 2] == 0 && outShort[i * 2 + 1] == 0, "Short sample voice ends without lingering to event arc end");
+        }
+        float[] longPcm = new float[96000]; Arrays.fill(longPcm, 0.5f);
+        SampleData longData = new SampleData(48000, 1, longPcm);
+        SampleVoice longV = new SampleVoice(REF, 1, 0.8, 0, 20000, Biquad.DEFAULT_Q);
+        Score scoreLong = Score.compile(Pattern.sample(longV).fast(4), new Transport(48000, 120, 4), 1, Map.of(REF, longData));
+        check(scoreLong.note(0).end() == 96000, "Long sample note end extends to sample duration across fast event arcs");
+        float[] outLong = new float[30000 * 2];
+        new Renderer(scoreLong, 4).render(outLong, 0, 30000);
+        // Each arc is 24,000 frames, so a voice truncated at its arc would leave one voice sounding throughout.
+        check(outLong[12000 * 2] > 0 && outLong[26000 * 2] > outLong[12000 * 2] * 1.5,
+                "Long sample voice outlives its event arc and stacks with the next trigger");
+        float[] resonantPcm = new float[1000]; Arrays.fill(resonantPcm, 0.8f);
+        SampleData resonantData = new SampleData(48000, 1, resonantPcm);
+        SampleVoice resonantVoice = new SampleVoice(REF, 1, 1.0, 0, 500, 10.0);
+        Score resonantScore = Score.compile(Pattern.sample(resonantVoice), new Transport(48000, 120, 4), 1, Map.of(REF, resonantData));
+        float[] resonantOut = new float[2000 * 2];
+        new Renderer(resonantScore, 1).render(resonantOut, 0, 2000);
+        double tailEnergy = 0;
+        for (int i = 1000; i < 1120; i++) tailEnergy += resonantOut[i * 2] * resonantOut[i * 2];
+        check(tailEnergy > 1e-6, "Resonant sample filter rings out into steal fade rather than hard cutting to zero");
+        check(resonantOut[1200 * 2] == 0, "Resonant filter finishes cleanly after steal fade");
+        Graph g = graph(1.0, false);
+        LoopPlan plan = GraphCompiler.compile(g);
+        var prog = new LiveRenderer.Program(state(g), plan, Map.of(REF, fixture()));
+        LiveRenderer live = new LiveRenderer();
+        live.publish(new LiveRenderer.Timeline(prog, null));
+        float[] liveBuf = new float[1024];
+        prog.prepare(3_000_000_000L);
+        live.resynchronize();
+        live.render(liveBuf, 512, 3_000_000_000L);
+        double liveEnergy = 0;
+        for (float v : liveBuf) liveEnergy += v * v;
+        check(liveEnergy > 0.01 && live.scheduleMisses() == 0, "Late join with cached duration renders audible sound without schedule miss");
     }
     private static void signalSources() {
         Graph graph=new Graph(3,List.of(sampleNode("sample",Map.of()),n("slice",NodeType.SAMPLE_SLICE,Map.of("slices",2.0,"index",1.0,"reverse",1.0)),

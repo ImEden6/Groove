@@ -151,12 +151,12 @@ public final class LiveRenderer {
     private static final class ActiveVoice {
         int event = -1, fadeFrame;
         Event data;
-        double onset;
+        double onset, duration;
         boolean wanted;
         final VoiceDsp dsp = new VoiceDsp();
-        void start(Event e, int index, double cycle, groove.engine.samples.SamplePlayback sample) {
+        void start(Event e, int index, double cycle, double duration, groove.engine.samples.SamplePlayback sample) {
             event = index; onset = cycle; fadeFrame = 0;
-            data = e;
+            data = e; this.duration = duration;
             dsp.start(e.tone(), sample, SAMPLE_RATE);
         }
     }
@@ -373,9 +373,14 @@ public final class LiveRenderer {
             boolean exists = false;
             for (ActiveVoice v : program.voices)
                 if (matches(v, program, i)) { exists = true; break; }
-            if (!exists) for (ActiveVoice v : program.voices) if (v.event < 0) {
-                Event event = program.data[i];
-                v.start(event, program.events[i], program.onsets[i], event.sample() == null ? null : program.samples.get(event.sample())); break;
+            if (exists) continue;
+            Event event = program.data[i];
+            // One source of truth for duration, so a missing asset stays silent here too.
+            double duration = eventDuration(program, event, secondsPerCycle);
+            if (duration < 0) continue;
+            for (ActiveVoice v : program.voices) if (v.event < 0) {
+                v.start(event, program.events[i], program.onsets[i], duration,
+                        event.sample() == null ? null : program.samples.get(event.sample())); break;
             }
         }
         out[0] = 0; out[1] = 0;
@@ -435,6 +440,6 @@ public final class LiveRenderer {
         double age = (cycles - v.onset) * secondsPerCycle;
         double oscillator = event.tone() == null ? 0 : age * event.tone().frequency();
         oscillator -= Math.floor(oscillator);
-        v.dsp.add(age, (event.whole().end() - event.whole().start()) * secondsPerCycle, oscillator, fade, out);
+        v.dsp.add(age, v.duration, oscillator, fade, out);
     }
 }
