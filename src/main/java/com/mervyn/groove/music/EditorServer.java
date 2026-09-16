@@ -37,9 +37,7 @@ public final class EditorServer {
             long now = System.nanoTime();
             Long last = requests.get(player.getUUID());
 
-            EditorBlockEntity editor = null;
-            boolean accepted = false;
-            String message;
+            EditorBlockEntity editor;
             try {
                 if (last != null && now - last < 100_000_000L) throw new IllegalArgumentException("Please wait before submitting again");
                 requests.put(player.getUUID(), now);
@@ -60,7 +58,11 @@ public final class EditorServer {
                 if (!(error instanceof IllegalArgumentException))
                     com.mervyn.groove.GrooveMod.LOGGER.error("Unexpected editor action failure at {} for player {}",
                             packet.pos(), player.getUUID(), error);
-                message = error.getMessage() != null ? error.getMessage() : "Editor action failed";
+                String message = error.getMessage() != null ? error.getMessage() : "Editor action failed";
+                ServerPlayNetworking.send(player, new EditorPackets.State(packet.pos(), packet.session(),
+                        packet.request(), false, message.substring(0, Math.min(512, message.length())),
+                        0, "", 128, false, List.of()));
+                return;
             }
             boolean visible = editor != null && editor.canEdit(player.getUUID());
             var otherViewers = new ArrayList<String>();
