@@ -47,7 +47,7 @@ public record RotaryKnob(String param, int x, int y, int width) {
                 ? SCALE_NAMES[Math.max(0, Math.min(8, (int)value))]
                 : node.type() == groove.engine.NodeType.CHORD && param.equals(NodeParam.CHORD)
                 ? CHORD_NAMES[Math.max(0, Math.min(7, (int)value))]
-                : param.equals(NodeParam.WAVE) ? (value < .5 ? "Sine" : "Saw")
+                : param.equals(NodeParam.WAVE) ? (value < .5 ? "Sine" : value < 1.5 ? "Saw" : "Pulse")
                 : value == Math.rint(value) ? Long.toString((long) value)
                 : String.format(java.util.Locale.ROOT, "%.2f", value);
         text = font.plainSubstrByWidth(text, Math.max(0, width - 4));

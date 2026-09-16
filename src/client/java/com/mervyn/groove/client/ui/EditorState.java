@@ -384,6 +384,7 @@ public final class EditorState {
             case NodeParam.PAN -> 0.01;
             case NodeParam.PITCH_RATIO -> 0.02;
             case NodeParam.WAVE -> 0.05;
+            case NodeParam.PULSE_WIDTH -> 0.01;
             case NodeParam.CHANCE -> .01;
             case NodeParam.SEED -> 1.0;
             case NodeParam.STEPS_PER_CYCLE -> .3;
@@ -451,7 +452,8 @@ public final class EditorState {
             case NodeParam.GAIN -> Math.max(0.0, Math.min(1.0, value));
             case NodeParam.PAN -> Math.max(-1.0, Math.min(1.0, value));
             case NodeParam.PITCH_RATIO -> Math.max(0.25, Math.min(4.0, value));
-            case NodeParam.WAVE -> Math.max(0.0, Math.min(1.0, Math.round(value)));
+            case NodeParam.WAVE -> Math.max(0.0, Math.min(2.0, Math.round(value)));
+            case NodeParam.PULSE_WIDTH -> Math.max(0.01, Math.min(0.99, value));
             case NodeParam.FACTOR -> Math.max(.25, Math.min(16.0, Math.round(value * 100.0) / 100.0));
             case NodeParam.STEPS -> Math.max(1.0, Math.min(64.0, Math.round(value)));
             case NodeParam.PULSES -> {
@@ -495,6 +497,7 @@ public final class EditorState {
             case TONE -> {
                 Map<String, Double> m = new LinkedHashMap<>();
                 m.put(NodeParam.FREQUENCY, 220.0); m.put(NodeParam.GAIN, 0.25); m.put(NodeParam.PAN, 0.0); m.put(NodeParam.WAVE, 0.0); m.put(NodeParam.CUTOFF_HZ, 20000.0);
+                m.put(NodeParam.PULSE_WIDTH, 0.5);
                 yield m;
             }
             case EUCLID -> {

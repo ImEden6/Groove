@@ -11,12 +11,15 @@ final class PitchTests {
         for (String bad : new String[]{"C", "H4", "C##4", "C10", "Cb-1", "G#9", "NaN", "C4junk"}) invalid(() -> Pitch.hz(bad));
         check(Pitch.Scale.MAJOR.semitones(-1) == -1 && Pitch.Scale.MAJOR.semitones(-7) == -12, "Negative degrees wrap downwards");
         for (Pitch.Scale scale : Pitch.Scale.values()) check(Pitch.degreeHz(60, scale, 0) == Pitch.hz("C4"), "Scale root");
-        Tone tone = new Tone(Tone.Wave.SAW, 220, .6, -.3, 2300, 2);
+        Tone tone = new Tone(Tone.Wave.SAW, 220, .6, -.3, 2300, 2, 0.5);
         Pattern source = Pattern.tone(tone);
         Tone octave = source.transpose(12).query(new Arc(0, 1)).getFirst().tone();
-        check(octave.frequency() == 440 && octave.gain() == .6 && octave.pan() == -.3 && octave.resonanceQ() == 2, "Transpose preserves voice settings");
+        check(octave.frequency() == 440 && octave.gain() == .6 && octave.pan() == -.3 && octave.resonanceQ() == 2 && octave.pulseWidth() == 0.5, "Transpose preserves voice settings");
+        Tone pulseTone = new Tone(Tone.Wave.PULSE, 220, .6, 0, 2000, 1, 0.25);
+        Tone transposedPulse = Pitch.withFrequency(pulseTone, 440);
+        check(transposedPulse.pulseWidth() == 0.25 && transposedPulse.wave() == Tone.Wave.PULSE, "withFrequency preserves pulseWidth");
         List<Event> chord = source.chord(Pitch.Chord.MINOR, 1).query(new Arc(0, 1));
-        check(chord.size() == 3 && Math.abs(chord.getFirst().tone().frequency() - 220*Math.pow(2,3/12.0)) < 1e-9, "Minor first inversion");
+        check(chord.size() == 3 && Math.abs(chord.getFirst().tone().frequency() - 220*Math.pow(2,3/12.0)) < 1e-9 && chord.getFirst().tone().pulseWidth() == 0.5, "Minor first inversion");
         check(chord.getLast().tone().frequency() == 440 && Math.abs(chord.stream().mapToDouble(e -> e.tone().gain()).sum() - .6) < 1e-12, "Chord gain budget");
         int[] degrees = {0, 2, -1};
         Pattern sequence = source.scaleSequence(60, Pitch.Scale.MAJOR, 2, degrees);

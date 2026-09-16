@@ -56,7 +56,7 @@ public interface Pattern {
                 for (double ratio : ratios) {
                     Tone t = Pitch.withFrequency(e.tone(), e.tone().frequency() * ratio);
                     events.add(new Event(e.whole(), e.part(), new Tone(t.wave(), t.frequency(),
-                            t.gain() / ratios.length, t.pan(), t.cutoffHz(), t.resonanceQ())));
+                            t.gain() / ratios.length, t.pan(), t.cutoffHz(), t.resonanceQ(), t.pulseWidth())));
                 }
             }
             return events;

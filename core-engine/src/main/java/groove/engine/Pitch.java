@@ -59,6 +59,6 @@ public final class Pitch {
         if (tone == null) throw new IllegalArgumentException("Pitch transforms require tone events");
         if (!Double.isFinite(frequency) || frequency < 20 || frequency > 16000)
             throw new IllegalArgumentException("Transformed frequency must be 20..16000 Hz");
-        return new Tone(tone.wave(), frequency, tone.gain(), tone.pan(), tone.cutoffHz(), tone.resonanceQ());
+        return new Tone(tone.wave(), frequency, tone.gain(), tone.pan(), tone.cutoffHz(), tone.resonanceQ(), tone.pulseWidth());
     }
 }

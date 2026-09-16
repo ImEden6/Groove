@@ -84,7 +84,7 @@ public final class GraphCompiler {
         Graph.Node node = nodes.get(id);
         List<String> links = inputs.get(id);
         Set<String> allowed = switch (node.type()) {
-            case TONE -> Set.of(NodeParam.FREQUENCY, NodeParam.GAIN, NodeParam.PAN, NodeParam.WAVE, NodeParam.CUTOFF_HZ, NodeParam.RESONANCE_Q);
+            case TONE -> Set.of(NodeParam.FREQUENCY, NodeParam.GAIN, NodeParam.PAN, NodeParam.WAVE, NodeParam.CUTOFF_HZ, NodeParam.RESONANCE_Q, NodeParam.PULSE_WIDTH);
             case GENERATOR_SAMPLE -> Set.of(NodeParam.PITCH_RATIO, NodeParam.GAIN, NodeParam.PAN, NodeParam.CUTOFF_HZ, NodeParam.RESONANCE_Q,
                     NodeParam.START_FRAME, NodeParam.END_FRAME, NodeParam.REVERSE);
             case SAMPLE_SLICE -> Set.of(NodeParam.SLICES, NodeParam.INDEX, NodeParam.REVERSE);
@@ -108,11 +108,13 @@ public final class GraphCompiler {
         case TONE -> {
             double frequency = number(node, NodeParam.FREQUENCY, 220);
             require(frequency >= 20 && frequency <= 16000, "Frequency must be 20..16000 Hz");
-            int wave = integer(node, NodeParam.WAVE, 0, 0, 1);
+            int wave = integer(node, NodeParam.WAVE, 0, 0, 2);
             double cutoffHz = number(node, NodeParam.CUTOFF_HZ, 20000);
             require(cutoffHz >= 20 && cutoffHz <= 20000, "cutoffHz must be 20..20000 Hz");
+            double pulseWidth = number(node, NodeParam.PULSE_WIDTH, 0.5);
+            require(pulseWidth >= 0.01 && pulseWidth <= 0.99, "pulseWidth must be 0.01..0.99");
             yield new Compiled(Pattern.tone(new Tone(Tone.Wave.values()[wave], frequency,
-                    number(node, NodeParam.GAIN, .25), number(node, NodeParam.PAN, 0), cutoffHz, number(node, NodeParam.RESONANCE_Q, Biquad.DEFAULT_Q))), 1, frequency, frequency, false);
+                    number(node, NodeParam.GAIN, .25), number(node, NodeParam.PAN, 0), cutoffHz, number(node, NodeParam.RESONANCE_Q, Biquad.DEFAULT_Q), pulseWidth)), 1, frequency, frequency, false);
         }
         case GENERATOR_SAMPLE -> {
             SampleVoice voice = new SampleVoice(node.sample(),

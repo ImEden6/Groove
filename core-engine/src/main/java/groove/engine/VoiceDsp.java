@@ -33,14 +33,23 @@ final class VoiceDsp {
             return;
         }
         double remaining = duration - age;
-        double raw = remaining <= 0 ? 0 : oscillator(tone.wave(), phase, increment);
+        double raw = remaining <= 0 ? 0 : oscillator(tone.wave(), phase, increment, tone.pulseWidth());
         double envelope = Math.max(0, Math.min(1, Math.min(age / .005, remaining / .020)));
         double mono = leftFilter.process(raw) * tone.gain() * envelope * fade;
         out[0] += mono * leftPan; out[1] += mono * rightPan;
     }
 
-    private static double oscillator(Tone.Wave wave, double phase, double step) {
-        return wave == Tone.Wave.SINE ? Math.sin(2 * Math.PI * phase) : 2 * phase - 1 - polyBlep(phase, step);
+    private static double oscillator(Tone.Wave wave, double phase, double step, double pulseWidth) {
+        return switch (wave) {
+            case SINE -> Math.sin(2 * Math.PI * phase);
+            case SAW -> 2 * phase - 1 - polyBlep(phase, step);
+            case PULSE -> {
+                double d = Math.max(step, Math.min(1.0 - step, pulseWidth));
+                double naive = phase < d ? 1.0 : -1.0;
+                double phaseD = phase >= d ? phase - d : phase - d + 1.0;
+                yield naive + polyBlep(phase, step) - polyBlep(phaseD, step) - (2 * d - 1);
+            }
+        };
     }
     private static double polyBlep(double phase, double step) {
         if (phase < step) { double x = phase / step; return x + x - x * x - 1; }

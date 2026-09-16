@@ -26,7 +26,10 @@ final class DspTests {
         }
         check(b > a * 20, "Q produces a resonance peak");
         invalid(() -> normal.setLowPass(500, Double.NaN, 48000));
-        invalid(() -> new Tone(Tone.Wave.SINE, 220, .2, 0, 500, 21));
+        invalid(() -> new Tone(Tone.Wave.SINE, 220, .2, 0, 500, 21, 0.5));
+        invalid(() -> new Tone(Tone.Wave.PULSE, 220, .2, 0, 500, 1, 0.005));
+        invalid(() -> new Tone(Tone.Wave.PULSE, 220, .2, 0, 500, 1, 0.995));
+        invalid(() -> new Tone(Tone.Wave.PULSE, 220, .2, 0, 500, 1, Double.NaN));
         for (int version : new int[]{1, 2}) {
             Graph g = graph(version, NodeType.TONE, Map.of(NodeParam.RESONANCE_Q, 3.0), null);
             check(GraphCompiler.compile(g).event(0).tone().resonanceQ() == 3, "Q accepted without schema bump");
@@ -62,6 +65,7 @@ final class DspTests {
         SampleData constant = new SampleData(48000, 1, dc);
         check(Math.abs(constant.at(2048.25, 0, 4) - .5) < 1e-6, "Sinc has unity DC gain");
         stealFade();
+        pulseRegressions();
         System.out.println("Phase 1 DSP regressions passed.");
     }
     private static void stealFade() {
@@ -122,4 +126,69 @@ final class DspTests {
     private static double energy(float[] data, int start) { double sum = 0; for (int i = start; i < data.length; i++) sum += data[i]*data[i]; return sum; }
     private static void check(boolean value, String message) { if (!value) throw new AssertionError(message); }
     private static void invalid(Runnable r) { try { r.run(); } catch (IllegalArgumentException expected) { return; } throw new AssertionError("Expected rejection"); }
+    private static void pulseRegressions() {
+        for (double d : new double[]{0.05, 0.1, 0.25, 0.5, 0.75, 0.9, 0.95}) {
+            VoiceDsp v = new VoiceDsp();
+            Tone pulse = new Tone(Tone.Wave.PULSE, 480, 1.0, 0.0, 24000, 1.0, d);
+            v.start(pulse, null, 48000);
+            double sum = 0;
+            double[] out = new double[2];
+            for (int i = 0; i < 1000; i++) {
+                out[0] = 0; out[1] = 0;
+                double phase = (i % 100) / 100.0;
+                v.add(0.01, 1.0, phase, 1.0, out);
+                sum += out[0];
+            }
+            double mean = sum / 1000;
+            check(Math.abs(mean) < 1e-10, "Pulse wave DC null for duty " + d + ", mean=" + mean);
+        }
+
+        Tone pTone = new Tone(Tone.Wave.PULSE, 440, .6, 0, 20000, Biquad.DEFAULT_Q, 0.35);
+        Pattern pPat = Pattern.tone(pTone).fast(2);
+        Score score = Score.compile(pPat, new Transport(48000, 120, 4), 1);
+        int frames = 24000;
+        float[] full = new float[frames * 2], chunked = new float[frames * 2];
+        new Renderer(score, 16).render(full, 0, frames);
+        Renderer rChunk = new Renderer(score, 16);
+        for (int at = 0; at < frames; at += 127) rChunk.render(chunked, at, Math.min(127, frames - at));
+        check(Arrays.equals(full, chunked), "Pulse offline rendering is block-size independent");
+
+        Graph g = new Graph(3, List.of(new Graph.Node("p", NodeType.TONE, Map.of(
+                NodeParam.FREQUENCY, 440.0, NodeParam.GAIN, 0.6, NodeParam.PAN, 0.0,
+                NodeParam.WAVE, 2.0, NodeParam.CUTOFF_HZ, 20000.0, NodeParam.PULSE_WIDTH, 0.35)),
+                new Graph.Node("f", NodeType.FAST, Map.of(NodeParam.FACTOR, 2.0)),
+                new Graph.Node("out", NodeType.OUTPUT, Map.of())),
+                List.of(Graph.edge("p", "f"), Graph.edge("f", "out")));
+        LoopPlan plan = GraphCompiler.compile(g);
+        var program = new LiveRenderer.Program(new SessionState(1, 0, 0, 120, true, g), plan);
+        LiveRenderer live = new LiveRenderer();
+        live.publish(new LiveRenderer.Timeline(program, null));
+        float[] block = new float[1024];
+        double maxErr = 0;
+        for (int at = 0; at < frames; at += 512) {
+            int count = Math.min(512, frames - at);
+            long now = Math.round(at * 1e9 / 48000);
+            program.prepare(now);
+            live.render(block, count, now);
+            for (int i = 0; i < count * 2; i++) {
+                if (at * 2 + i >= 1000) maxErr = Math.max(maxErr, Math.abs(block[i] - full[at * 2 + i]));
+            }
+        }
+        check(maxErr < .001, "Pulse live/offline parity max error: " + maxErr);
+
+        float[] warmup = new float[128];
+        for (int i = 0; i < 2000; i++) {
+            live.render(warmup, 64, Math.round((frames + i * 64) * 1e9 / 48000));
+        }
+        var bean = java.lang.management.ManagementFactory.getThreadMXBean();
+        if (bean instanceof com.sun.management.ThreadMXBean counter && counter.isThreadAllocatedMemorySupported()) {
+            counter.setThreadAllocatedMemoryEnabled(true);
+            long id = Thread.currentThread().threadId(), before = counter.getThreadAllocatedBytes(id);
+            for (int i = 2000; i < 4000; i++) {
+                live.render(warmup, 64, Math.round((frames + i * 64) * 1e9 / 48000));
+            }
+            long bytes = counter.getThreadAllocatedBytes(id) - before;
+            check(bytes == 0 && live.scheduleMisses() == 0, "Pulse live render callback allocation: " + bytes);
+        }
+    }
 }

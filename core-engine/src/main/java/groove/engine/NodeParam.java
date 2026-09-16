@@ -11,6 +11,7 @@ public final class NodeParam {
     public static final String WAVE = "wave";
     public static final String CUTOFF_HZ = "cutoffHz";
     public static final String RESONANCE_Q = "resonanceQ";
+    public static final String PULSE_WIDTH = "pulseWidth";
     public static final String PITCH_RATIO = "pitchRatio";
     public static final String START_FRAME = "startFrame";
     public static final String END_FRAME = "endFrame";
