@@ -33,6 +33,10 @@ Ranked by impact on gameplay, creative expressiveness, and multiplayer usability
 
 The following items from earlier roadmaps are fully implemented and verified in the codebase:
 
+- **Engine Upgrade Stages 1, 2, and 3 ([ENGINE-UPGRADE-STAGES.md](ENGINE-UPGRADE-STAGES.md))**:
+  - **Stage 1**: Note names (`C4`), scale-degree sequences (`scale_sequence`), transposition (`transpose`), chord voicings (`chord`), and multi-mode biquad filtering (HP, BP, notch).
+  - **Stage 2**: Shared `VoiceDsp` foundation, sample region bounds and slicing (`sample_slice`), reversed sample playback, offline pattern sample compilation, and 32 MiB bank memory budget.
+  - **Stage 3**: Continuous groove swing (`swing`), pattern cycle mirroring (`reverse`), bandlimited pulse wave oscillator with PWM (`Tone.Wave.PULSE`), and tempo-synced delay with musical divisions and 192,000-frame worst-case memory budgeting.
 - **Independent Audio Sources ([PHASE-2-SIGNALS.md](PHASE-2-SIGNALS.md))**:
   - Up to eight independent pattern-to-audio pipelines with private voice pools and scheduler windows.
   - Separate filter/delay routes, shared upstream patterns, and a combined 128-event cost budget.

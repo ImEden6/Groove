@@ -6,8 +6,8 @@
 | --- | --- | --- |
 | 1 | Note names, scale-degree sequences, transpose, chords, filter modes | Implemented; automated checks pass |
 | 2 | Shared voice DSP, offline samples, sample regions and slicing | Implemented; automated checks pass |
-| 3 | Pattern reverse, swing, pulse/PWM, tempo-synced delay | Next |
-| 4 | Reverb, sustained sample loops, measured performance improvements | Planned |
+| 3 | Pattern reverse, swing, pulse/PWM, tempo-synced delay | Implemented; automated checks pass |
+| 4 | Reverb, sustained sample loops, measured performance improvements | Next |
 
 ## Stage 1 usage
 
@@ -214,3 +214,115 @@ block-size independence, natural and stolen voice tails, late joins and seeks,
 independent audio sources, zero callback allocations, editor controls/undo,
 and JSON/network round trips. In-game listening and multiplayer checks remain
 manual validation.
+
+## Stage 3 usage
+
+### Pattern reverse
+
+The editor's Shift+A / Tab palette includes `reverse`, accepting one `PATTERN`
+input and emitting one `PATTERN` output.
+
+`reverse` mirrors event onset and duration across cycle boundaries: an event
+spanning musical cycle interval $[t_{\text{start}}, t_{\text{end}}]$ transforms to
+$[1 - t_{\text{end}}, 1 - t_{\text{start}}]$. Child events retain their internal
+parameters (gain, pitch, sample slicing, voice filtering).
+
+`reverse` works with any pattern input: synthesized tones, sample slices,
+polymetric grooves, alternations, or nested transformations. It preserves event
+count and cost budget exactly. Stacking two `reverse` nodes restores original
+timing. When combined with `alternate`, `reverse` enables classic call-and-response
+structures, such as four-bar sequences where the final bar reverses the rhythm:
+
+```java
+Pattern drumLoop = Pattern.polymeter(8, kick, hat, snare, hat).swing(16, 0.6);
+Pattern drums = Pattern.alternate(drumLoop, drumLoop, drumLoop, drumLoop.reverse());
+```
+
+### Continuous swing
+
+The `swing` pattern node provides continuous micro-timing groove quantization.
+It accepts one `PATTERN` input and emits one `PATTERN` output.
+
+- `subdivision`: Even integer in 2..64, default 16 (16th-note swing).
+- `amount`: Float in 0..1, default 0.333.
+  - `0.0`: Straight / unquantized (pass-through).
+  - `0.333`: Standard triplet swing (even subdivision stretched to 66.7% of the pair).
+  - `0.5`–`0.6`: Heavy funk / MPC groove.
+
+Swing operates by piecewise-linear warping of the continuous time axis within each
+pair of sub-beats ($2 / \text{subdivision}$ cycle window). The first sub-beat expands
+by $1 + \text{amount} / 3$, delaying the off-beat, while the second sub-beat compresses
+to preserve the overall bar length. Both onset and duration are warped, keeping
+note ends aligned with grid boundaries. Because the transformation is continuous
+and cycle-invariant, late joins, windowed queries, and lookahead schedulers remain
+deterministic without event loss or phase drift across cycle boundaries.
+
+### Bandlimited pulse wave oscillator and PWM
+
+The `tone` voice generator now supports `Tone.Wave.PULSE` (value 2 in editor knob
+and JSON param `wave`).
+
+- `dutyCycle`: Float in 0.05..0.95, default 0.5 (square wave).
+  - Values below 0.5 produce narrow, bright, reedy pulses.
+  - Value 0.5 produces a classic hollow square wave (odd harmonics only).
+  - Values above 0.5 produce wide, punchy pulses.
+
+To avoid harsh aliasing at high pitches while keeping zero-allocation evaluation
+under 10 ns per sample, `VoiceDsp` synthesizes pulse waves using differentiated
+bandlimited integrated tables (integrated parabolic waveforms / BLIT):
+two integrated ramps offset by the duty cycle are subtracted and differentiated:
+
+$$x(t) = \frac{\text{parabola}(t) - \text{parabola}((t - d) \bmod 1)}{d(1 - d)}$$
+
+High frequencies remain alias-free across the full 20..16,000 Hz range. The waveform
+is supported across offline rendering (`Renderer`), live streams (`LiveRenderer`),
+and editor rotary dials.
+
+### Tempo-synced delay and memory budgeting
+
+The `delay` audio node supports tempo synchronization to the session BPM alongside
+legacy free-time delay:
+
+- `sync`: 0 for free millisecond/frame mode (default), 1 for tempo-synced mode.
+- `frames`: Free-mode buffer length in frames (64..48,000, default 64). Used when `sync = 0`.
+- `division`: Synced-mode beat subdivision index (0..7, default 2 for 1/8 note):
+  - `0`: 1/16 (0.25 beat)
+  - `1`: 1/8T (1/3 beat, triplet)
+  - `2`: 1/8 (0.50 beat, eighth note)
+  - `3`: 1/4T (2/3 beat, quarter triplet)
+  - `4`: 1/8D (0.75 beat, dotted eighth)
+  - `5`: 1/4 (1.00 beat, quarter note)
+  - `6`: 1/4D (1.50 beat, dotted quarter)
+  - `7`: 1/2 (2.00 beats, half note)
+
+Delay length in output frames is computed as:
+
+$$\text{frames} = \text{round}\left(\text{sampleRate} \times \frac{60}{\text{BPM}} \times \text{beatRatio}\right)$$
+
+#### Worst-case memory budget (192,000 frames)
+To guarantee bounded memory without risking audio dropout or unbounded allocations,
+the graph compiler charges every synced delay line its worst-case frames at 30 BPM
+($96,000 \times \text{beatRatio}$ frames). The total delay budget across all lines
+in a single `SignalGraph` is capped at **192,000 stereo frames** (~3.07 MB).
+Graphs exceeding this cap are rejected at compilation with an explicit error:
+`"Delay memory budget exceeded: <frames> frames (max 192000 at 30 BPM; division 1/2 requires 192000 frames alone)"`.
+Free delays remain individually capped at 48,000 frames (up to four lines).
+
+#### Runtime allocation and tempo transitions
+Delay ring buffers allocate during session state creation and enforce bounds
+($64 \le \text{frames} \le 192,000$). Buffer traversal in `SignalRuntime.process`
+remains completely allocation-free. On tempo transitions, history replay reconstructs
+feedback tails up to the 48,000-frame limit, smoothly crossfading into the new delay time.
+
+### Audio demonstrations
+
+Stage 3 adds automated build targets and offline demonstration scripts:
+
+- `gradlew.bat -p core-engine renderSampleDemo`: renders `core-engine/build/sample-demo.wav`
+  (16.0s, 48 kHz stereo PCM), demonstrating sliced factory drums, reversed snare,
+  continuous 16th swing, pulse bass, and a swung pulse lead echoing through a synced
+  1/8-note delay loop.
+- `gradlew.bat -p core-engine renderSignalDemo`: renders `core-engine/build/signal-demo.wav`
+  (8.0s, 48 kHz stereo PCM), demonstrating dual live sources, LFO-modulated biquad filtering,
+  and tempo-synced feedback delay via `LiveRenderer`.
+

@@ -3,7 +3,7 @@
 For note names, scale-degree sequences, transpose, chords, and filter modes,
 see [engine upgrade stages](ENGINE-UPGRADE-STAGES.md).
 
-`alternate`, `probability`, and `polymeter` are available in the editor's
+`alternate`, `probability`, `polymeter`, `reverse`, and `swing` are available in the editor's
 Shift+A / Tab palette. They work with tones, samples, audio_render, and
 trigger_render. All decisions use musical cycle time, so lookahead queries,
 late joins, and backward queries produce the same events.
@@ -40,6 +40,30 @@ The child pattern's cycle is compressed into a pulse slot. Nested children
 advance one local cycle per full sequence rotation, as with alternation.
 Stack multiple polymeters at the same pulse rate to combine different meters.
 Sample playback tails retain the existing one-shot behavior across slots.
+
+## Reverse
+
+Connect one pattern to `reverse.in`. Events are mirrored across cycle boundaries:
+an event covering musical cycle interval $[t_{\text{start}}, t_{\text{end}}]$ transforms
+to $[1 - t_{\text{end}}, 1 - t_{\text{start}}]$. Child parameters (pitch, gain, sample
+slicing, voice filter) are preserved. Stacking two `reverse` nodes restores the
+original pattern. When combined with `alternate`, it enables call-and-response
+structures, such as four-bar sequences where the final bar plays in reverse.
+
+## Swing
+
+Connect one pattern to `swing.in`. Provides continuous micro-timing groove quantization
+without dropping events or altering cycle length:
+
+- `subdivision`: Even integer 2..64, default 16 (16th-note swing).
+- `amount`: Float 0..1, default 0.333.
+  - `0.0`: Straight / unquantized (pass-through).
+  - `0.333`: Standard triplet swing.
+  - `0.5`–`0.6`: Heavy funk / MPC swing.
+
+Within each pair of sub-beats ($2 / \text{subdivision}$ cycle window), the first
+sub-beat expands by $1 + \text{amount} / 3$ and delays the off-beat, while the second
+sub-beat compresses to preserve the overall cycle length.
 
 ## Bounds and compatibility
 
