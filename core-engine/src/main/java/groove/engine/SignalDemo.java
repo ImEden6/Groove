@@ -1,11 +1,21 @@
 package groove.engine;
 
+import java.nio.file.Path;
 import java.util.List;
 import java.util.Map;
 
 /** Slow shared-clock filter sweep with quiet, 250 ms feedback echoes. */
 public final class SignalDemo {
     private SignalDemo() {}
+    public static void main(String[] args) throws Exception {
+        Path path = Path.of(args.length == 0 ? "signal-demo.wav" : args[0]);
+        Graph graph = multipleSources();
+        SessionState state = new SessionState(1, 0, 0, 120, true, graph);
+        LiveRenderer renderer = new LiveRenderer();
+        LiveRenderer.Program program = new LiveRenderer.Program(state, GraphCompiler.compile(graph));
+        renderer.publish(new LiveRenderer.Timeline(program, null));
+        Demo.write(path, renderer, LiveRenderer.SAMPLE_RATE, LiveRenderer.SAMPLE_RATE * 8);
+    }
     /** Independent dry lead alongside the filtered bass/feedback source. */
     public static Graph multipleSources() {
         Graph bass = graph();

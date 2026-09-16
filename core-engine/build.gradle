@@ -48,3 +48,10 @@ tasks.register('renderSampleDemo', JavaExec) {
     mainClass = 'groove.engine.SampleDemo'
     args layout.buildDirectory.file('sample-demo.wav').get().asFile.absolutePath
 }
+
+tasks.register('renderSignalDemo', JavaExec) {
+    dependsOn classes
+    classpath = sourceSets.main.runtimeClasspath
+    mainClass = 'groove.engine.SignalDemo'
+    args layout.buildDirectory.file('signal-demo.wav').get().asFile.absolutePath
+}
