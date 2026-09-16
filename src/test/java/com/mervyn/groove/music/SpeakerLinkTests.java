@@ -201,24 +201,26 @@ final class SpeakerLinkTests {
         timeline.prepare(now);
         renderer.publish(timeline);
         var stream = new com.mervyn.groove.client.music.GrooveAudioStream(renderer, clock);
-        int fadeFrames = com.mervyn.groove.client.music.GrooveAudioStream.CHUNK_FRAMES + 100;
-        stream.fadeOut(fadeFrames);
-        int totalFrames = 0, safety = 0;
-        java.nio.ByteBuffer last = null;
-        while (safety++ < 8) {
-            var buf = stream.readQueued(com.mervyn.groove.client.music.GrooveAudioStream.CHUNK_FRAMES * 4, 0);
-            if (buf == null) break;
-            totalFrames += buf.remaining() / 4;
-            if (last != null) org.lwjgl.system.MemoryUtil.memFree(last);
-            last = buf;
-        }
-        check(stream.closed(), "Fading out the full window closes the stream");
-        check(totalFrames >= fadeFrames, "The armed fade window is fully consumed before closing");
-        check(last != null, "At least one buffer is produced while fading");
-        int lastFrameOffset = last.remaining() - 4;
-        check(last.getShort(lastFrameOffset) == 0 && last.getShort(lastFrameOffset + 2) == 0, "Fully faded tail is silent");
-        org.lwjgl.system.MemoryUtil.memFree(last);
-        check(stream.readQueued(com.mervyn.groove.client.music.GrooveAudioStream.CHUNK_FRAMES * 4, 0) == null, "A closed stream reads no further data");
+        try {
+            int fadeFrames = com.mervyn.groove.client.music.GrooveAudioStream.CHUNK_FRAMES + 100;
+            stream.fadeOut(fadeFrames);
+            int totalFrames = 0, safety = 0;
+            java.nio.ByteBuffer last = null;
+            while (safety++ < 8) {
+                var buf = stream.readQueued(com.mervyn.groove.client.music.GrooveAudioStream.CHUNK_FRAMES * 4, 0);
+                if (buf == null) break;
+                totalFrames += buf.remaining() / 4;
+                if (last != null) org.lwjgl.system.MemoryUtil.memFree(last);
+                last = buf;
+            }
+            check(stream.closed(), "Fading out the full window closes the stream");
+            check(totalFrames >= fadeFrames, "The armed fade window is fully consumed before closing");
+            check(last != null, "At least one buffer is produced while fading");
+            int lastFrameOffset = last.remaining() - 4;
+            check(last.getShort(lastFrameOffset) == 0 && last.getShort(lastFrameOffset + 2) == 0, "Fully faded tail is silent");
+            org.lwjgl.system.MemoryUtil.memFree(last);
+            check(stream.readQueued(com.mervyn.groove.client.music.GrooveAudioStream.CHUNK_FRAMES * 4, 0) == null, "A closed stream reads no further data");
+        } finally { stream.close(); }
     }
     private static void check(boolean condition, String message) { if (!condition) throw new AssertionError(message); }
     private static void reject(Runnable action, String message) {
