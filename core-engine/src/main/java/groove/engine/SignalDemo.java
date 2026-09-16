@@ -30,7 +30,7 @@ public final class SignalDemo {
                 new Graph.Node("range",NodeType.ATTENUVERTER,Map.of("scale",1500.0,"offset",1800.0)),
                 new Graph.Node("filter",NodeType.FILTER,Map.of("resonanceQ",1.5)),
                 new Graph.Node("mix",NodeType.MIX_BUS,Map.of("gain",.65)),
-                new Graph.Node("delay",NodeType.DELAY,Map.of("frames",12000.0)),
+                new Graph.Node("delay",NodeType.DELAY,Map.of(NodeParam.SYNC, 1.0, NodeParam.DIVISION, 2.0)),
                 new Graph.Node("out",NodeType.OUTPUT,Map.of())), List.of(
                 Graph.edge("tone","rhythm"),Graph.edge("rhythm","render"),Graph.edge("render","filter"),
                 Graph.edge("lfo","range"),new Graph.Edge("range","out","filter","cutoff"),

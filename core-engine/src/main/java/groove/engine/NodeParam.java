@@ -41,6 +41,7 @@ public final class NodeParam {
     public static final String STEPS_PER_CYCLE = "stepsPerCycle";
     public static final String SUBDIVISION = "subdivision";
     public static final String AMOUNT = "amount";
+    public static final String DIVISION = "division";
 
     private NodeParam() {}
 }

@@ -4,8 +4,8 @@ import java.util.*;
 
 final class SignalTests {
     static void run() {
-        validation(); modulation(); feedback(); filter(); live(); historyRecovery(); constantSampleRecovery(); overlappingRecoveryFade(); multipleSources(); multipleSourceLifecycle(); triggerRenderPlumbing(); arbitraryTriggerEnvelope(); allocation();
-        System.out.println("Signal graph modulation, feedback, live and allocation checks passed.");
+        validation(); modulation(); feedback(); filter(); live(); historyRecovery(); constantSampleRecovery(); overlappingRecoveryFade(); multipleSources(); multipleSourceLifecycle(); triggerRenderPlumbing(); arbitraryTriggerEnvelope(); allocation(); delaySync();
+        System.out.println("Signal graph modulation, feedback, live, delay sync and allocation checks passed.");
     }
     private static Graph.Node n(String id,NodeType type,Map<String,Double> params) { return new Graph.Node(id,type,params); }
     private static Graph base(List<Graph.Node> nodes,List<Graph.Edge> edges) {
@@ -591,6 +591,188 @@ final class SignalTests {
         for (int i=2000;i<4000;i++) triggerRenderer.render(block,64,Math.round(i*64*1e9/48000));
         bytes=allocation.getThreadAllocatedBytes(id)-before;
         check(bytes==0 && triggerRenderer.scheduleMisses()==0,"Trigger-render envelope allocation/starvation: "+bytes);
+    }
+    private static void delaySync() {
+        // 1. Validation & Range Checking
+        Graph valid = feedbackGraph(64); GraphCompiler.compile(valid);
+        Graph synced = base(List.of(n("mix",NodeType.MIX_BUS,Map.of("gain",.5)),
+                n("delay",NodeType.DELAY,Map.of(NodeParam.SYNC,1.0,NodeParam.DIVISION,2.0))),
+                List.of(Graph.edge("render","mix"),Graph.edge("mix","delay"),Graph.edge("delay","mix"),out("mix")));
+        GraphCompiler.compile(synced);
+
+        invalid(() -> GraphCompiler.compile(replace(synced,"delay",Map.of(NodeParam.SYNC,-1.0,NodeParam.DIVISION,2.0))));
+        invalid(() -> GraphCompiler.compile(replace(synced,"delay",Map.of(NodeParam.SYNC,2.0,NodeParam.DIVISION,2.0))));
+        invalid(() -> GraphCompiler.compile(replace(synced,"delay",Map.of(NodeParam.SYNC,0.5,NodeParam.DIVISION,2.0))));
+
+        invalid(() -> GraphCompiler.compile(replace(synced,"delay",Map.of(NodeParam.SYNC,1.0,NodeParam.DIVISION,-1.0))));
+        invalid(() -> GraphCompiler.compile(replace(synced,"delay",Map.of(NodeParam.SYNC,1.0,NodeParam.DIVISION,8.0))));
+        invalid(() -> GraphCompiler.compile(replace(synced,"delay",Map.of(NodeParam.SYNC,1.0,NodeParam.DIVISION,2.5))));
+
+        // 2. Compile-Time Worst-Case Budget Checks (192k Cap at 30 BPM)
+        Graph halfNote = replace(synced,"delay",Map.of(NodeParam.SYNC,1.0,NodeParam.DIVISION,7.0));
+        GraphCompiler.compile(halfNote);
+
+        var overHalfNodes = new ArrayList<>(halfNote.nodes());
+        overHalfNodes.add(n("extraDelay",NodeType.DELAY,Map.of(NodeParam.FRAMES,64.0)));
+        var overHalfEdges = new ArrayList<>(halfNote.edges());
+        overHalfEdges.add(Graph.edge("render","extraDelay"));
+        overHalfEdges.add(Graph.edge("extraDelay","mix"));
+        invalid(() -> GraphCompiler.compile(new Graph(3, overHalfNodes, overHalfEdges)));
+
+        Graph quarterNote = replace(synced,"delay",Map.of(NodeParam.SYNC,1.0,NodeParam.DIVISION,5.0));
+        var twoQuarterNodes = new ArrayList<>(quarterNote.nodes());
+        twoQuarterNodes.add(n("secondDelay",NodeType.DELAY,Map.of(NodeParam.SYNC,1.0,NodeParam.DIVISION,5.0)));
+        var twoQuarterEdges = new ArrayList<>(quarterNote.edges());
+        twoQuarterEdges.add(Graph.edge("render","secondDelay"));
+        twoQuarterEdges.add(Graph.edge("secondDelay","mix"));
+        GraphCompiler.compile(new Graph(3, twoQuarterNodes, twoQuarterEdges));
+
+        twoQuarterNodes.set(twoQuarterNodes.size()-1, n("secondDelay",NodeType.DELAY,Map.of(NodeParam.FRAMES,48000.0)));
+        twoQuarterNodes.add(n("thirdDelay",NodeType.DELAY,Map.of(NodeParam.FRAMES,48000.0)));
+        twoQuarterEdges.add(Graph.edge("render","thirdDelay"));
+        twoQuarterEdges.add(Graph.edge("thirdDelay","mix"));
+        GraphCompiler.compile(new Graph(3, twoQuarterNodes, twoQuarterEdges));
+
+        twoQuarterNodes.add(n("fourthDelay",NodeType.DELAY,Map.of(NodeParam.FRAMES,48000.0)));
+        twoQuarterEdges.add(Graph.edge("render","fourthDelay"));
+        twoQuarterEdges.add(Graph.edge("fourthDelay","mix"));
+        invalid(() -> GraphCompiler.compile(new Graph(3, twoQuarterNodes, twoQuarterEdges)));
+
+        var freeDelays = new ArrayList<Graph.Node>(); var chain = new ArrayList<Graph.Edge>();
+        String from="render";
+        for (int i=0;i<4;i++) { String id="free"+i; freeDelays.add(n(id,NodeType.DELAY,Map.of(NodeParam.FRAMES,48000.0))); chain.add(Graph.edge(from,id)); from=id; }
+        chain.add(out(from));
+        GraphCompiler.compile(base(freeDelays,chain));
+        freeDelays.add(n("free4",NodeType.DELAY,Map.of(NodeParam.FRAMES,48000.0)));
+        chain.add(Graph.edge(from,"free4"));
+        invalid(() -> GraphCompiler.compile(base(freeDelays,chain)));
+
+        // 3. Exact Impulse Timing Across Tempos
+        for (int div = 0; div < 8; div++) {
+            Graph dGraph = base(List.of(n("delay",NodeType.DELAY,Map.of(NodeParam.SYNC,1.0,NodeParam.DIVISION,(double)div))),
+                    List.of(Graph.edge("render","delay"),out("delay")));
+            double beatRatio = SignalGraph.DELAY_DIVISION_BEATS[div];
+
+            int expectedFrames120 = (int)Math.round(24000.0 * beatRatio);
+            SignalRuntime dsp120 = runtime(dGraph, state(dGraph, 0, 0, 120));
+            double[] frame = new double[2];
+            for (int f = 0; f <= expectedFrames120 + 10; f++) {
+                frame[0] = f == 0 ? 1.0 : 0.0;
+                frame[1] = f == 0 ? 1.0 : 0.0;
+                dsp120.process(frame, Math.round(f * 1e9 / 48000));
+                if (f == expectedFrames120) {
+                    close(frame[0], 1.0, 1e-12, "Impulse delayed exactly at 120 BPM div " + div);
+                } else {
+                    close(frame[0], 0.0, 1e-12, "Pre/post impulse silence at 120 BPM div " + div + " frame " + f);
+                }
+            }
+
+            int expectedFrames60 = (int)Math.round(48000.0 * beatRatio);
+            SignalRuntime dsp60 = runtime(dGraph, state(dGraph, 0, 0, 60));
+            for (int f = 0; f <= expectedFrames60 + 10; f++) {
+                frame[0] = f == 0 ? 1.0 : 0.0;
+                frame[1] = f == 0 ? 1.0 : 0.0;
+                dsp60.process(frame, Math.round(f * 1e9 / 48000));
+                if (f == expectedFrames60) {
+                    close(frame[0], 1.0, 1e-12, "Impulse delayed exactly at 60 BPM div " + div);
+                } else {
+                    close(frame[0], 0.0, 1e-12, "Pre/post impulse silence at 60 BPM div " + div + " frame " + f);
+                }
+            }
+        }
+
+        // 4. Tempo Transition Behavior & Recovery Replay Bounds (with Real Teeth)
+        Graph tempoGraph = new Graph(3, List.of(
+                n("tone", NodeType.TONE, Map.of(NodeParam.FREQUENCY, 440.0, NodeParam.GAIN, 0.5)),
+                n("render", NodeType.AUDIO_RENDER, Map.of()),
+                n("delay", NodeType.DELAY, Map.of(NodeParam.SYNC, 1.0, NodeParam.DIVISION, 2.0)),
+                n("out", NodeType.OUTPUT, Map.of())),
+                List.of(Graph.edge("tone", "render"), Graph.edge("render", "delay"), out("delay")));
+
+        var plan120 = GraphCompiler.compile(tempoGraph);
+        var state120 = state(tempoGraph, 0, 0, 120);
+        var prog120 = new LiveRenderer.Program(state120, plan120);
+        var live = new LiveRenderer();
+        live.publish(new LiveRenderer.Timeline(prog120, null));
+
+        int blockSize = 512;
+        float[] blockData = new float[blockSize * 2];
+
+        // Render 200 blocks at 120 BPM to reach steady state
+        double block199Energy = 0;
+        for (int b = 0; b < 200; b++) {
+            long now = Math.round((long) b * blockSize * 1e9 / 48000);
+            prog120.prepare(now);
+            live.render(blockData, blockSize, now);
+            if (b == 199) {
+                for (int i = 0; i < blockSize * 2; i++) block199Energy += blockData[i] * blockData[i];
+            }
+        }
+        check(block199Energy > 10.0, "Steady output energy before tempo switch: " + block199Energy);
+
+        // Switch tempo from 120 BPM to 60 BPM (effective at block 199, so block 200 lands 1 block past effectiveNanos)
+        long switchNanos = Math.round(199L * blockSize * 1e9 / 48000);
+        double switchCycle = state120.cycleAt(switchNanos);
+        var state60 = new SessionState(2, switchNanos, switchCycle, 60.0, true, tempoGraph);
+        var prog60 = new LiveRenderer.Program(state60, plan120);
+        var revisedTimeline = new LiveRenderer.Timeline(prog60, null);
+        live.publish(revisedTimeline);
+
+        // Render block 200
+        long now200 = switchNanos;
+        revisedTimeline.prepare(now200);
+        live.render(blockData, blockSize, now200);
+        double block200Energy = 0;
+        for (int i = 0; i < blockSize * 2; i++) block200Energy += blockData[i] * blockData[i];
+        check(block200Energy > 5.0, "Block 200 carries outgoing audio during crossfade: " + block200Energy);
+
+        // Assert that recovery was bounded to ~1 block (<= 1024 frames), NOT 48,000 frames
+        check(live.historyRecoveries() == 1, "Exactly one history recovery on tempo switch: " + live.historyRecoveries());
+        check(live.historyFrames() <= 1024, "History replay bounded by anchorCycle clamp (got " + live.historyFrames() + " frames, <= 1024)");
+
+        // Render block 201 (crossfade completes over 240 frames)
+        long now201 = Math.round(201L * blockSize * 1e9 / 48000);
+        revisedTimeline.prepare(now201);
+        live.render(blockData, blockSize, now201);
+        double block201Energy = 0;
+        for (int i = 0; i < blockSize * 2; i++) block201Energy += blockData[i] * blockData[i];
+        check(block201Energy < block200Energy, "Energy drops as crossfade finishes: " + block201Energy);
+
+        // At 60 BPM, 1/8 note (div 2) is 24,000 frames = 46.875 blocks of 512.
+        // Blocks 202 to 245: delay line is refilling -> total silence / delay dropout hole!
+        for (int b = 202; b < 245; b++) {
+            long now = Math.round((long) b * blockSize * 1e9 / 48000);
+            revisedTimeline.prepare(now);
+            live.render(blockData, blockSize, now);
+            double holeEnergy = 0;
+            for (int i = 0; i < blockSize * 2; i++) holeEnergy += blockData[i] * blockData[i];
+            check(holeEnergy < 1e-4, "Delay hole silence at block " + b + ": " + holeEnergy);
+        }
+
+        // By block 250, the 24,000 frames (46.875 blocks) have elapsed,
+        // newly rendered audio propagates through the delay line and echo returns!
+        for (int b = 245; b <= 250; b++) {
+            long now = Math.round((long) b * blockSize * 1e9 / 48000);
+            revisedTimeline.prepare(now);
+            live.render(blockData, blockSize, now);
+        }
+        double block250Energy = 0;
+        for (int i = 0; i < blockSize * 2; i++) block250Energy += blockData[i] * blockData[i];
+        check(block250Energy > 10.0, "Echo output returns after delay buffer refill at block 250: " + block250Energy);
+
+        // 5. Zero-Allocation Callback Check
+        var bean = java.lang.management.ManagementFactory.getThreadMXBean();
+        if (bean instanceof com.sun.management.ThreadMXBean allocation && allocation.isThreadAllocatedMemorySupported()) {
+            allocation.setThreadAllocatedMemoryEnabled(true);
+            SignalRuntime syncDsp = runtime(synced, state(synced, 0, 0, 120));
+            double[] syncFrame = new double[2];
+            for (int i = 0; i < 1000; i++) syncDsp.process(syncFrame, Math.round(i * 1e9 / 48000));
+            long tid = Thread.currentThread().threadId();
+            long before = allocation.getThreadAllocatedBytes(tid);
+            for (int i = 1000; i < 3000; i++) syncDsp.process(syncFrame, Math.round(i * 1e9 / 48000));
+            long allocated = allocation.getThreadAllocatedBytes(tid) - before;
+            check(allocated == 0, "Synced delay audio callback allocated " + allocated + " bytes");
+        }
     }
     private static void close(double actual,double expected,double tolerance,String message) { check(Math.abs(actual-expected)<=tolerance,message+": "+actual+" != "+expected); }
     private static void check(boolean condition,String message) { if (!condition) throw new AssertionError(message); }

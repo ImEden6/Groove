@@ -28,7 +28,16 @@ public final class SignalRuntime {
         for (int i=0;i<size;i++) {
             Graph.Node n = graph.nodes[i];
             if (n.type() == NodeType.DELAY) {
-                int frames = (int)p(n,NodeParam.FRAMES,64);
+                boolean sync = p(n, NodeParam.SYNC, 0) == 1;
+                int frames;
+                if (sync) {
+                    int division = (int) p(n, NodeParam.DIVISION, 2);
+                    frames = (int) Math.round(LiveRenderer.SAMPLE_RATE * 60.0 / state.bpm() * SignalGraph.DELAY_DIVISION_BEATS[division]);
+                    if (frames < SignalGraph.CONTROL_FRAMES || frames > SignalGraph.MAX_SYNC_DELAY_FRAMES)
+                        throw new IllegalArgumentException("Synced delay frames out of bounds: " + frames);
+                } else {
+                    frames = (int) p(n, NodeParam.FRAMES, 64);
+                }
                 delayLeft[i] = new double[frames]; delayRight[i] = new double[frames];
             }
             if (n.type() == NodeType.FILTER) {

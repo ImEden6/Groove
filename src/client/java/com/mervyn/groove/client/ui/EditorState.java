@@ -370,7 +370,7 @@ public final class EditorState {
             case NodeParam.SYNC, NodeParam.MODE, NodeParam.WAVE, NodeParam.STEPS,
                     NodeParam.FRAMES, NodeParam.SEED, NodeParam.STEPS_PER_CYCLE,
                     NodeParam.PULSES, NodeParam.ROTATION, NodeParam.ROOT, NodeParam.CHORD, NodeParam.INVERSION,
-                    NodeParam.START_FRAME, NodeParam.END_FRAME, NodeParam.SLICES, NodeParam.INDEX, NodeParam.REVERSE, NodeParam.SUBDIVISION -> true;
+                    NodeParam.START_FRAME, NodeParam.END_FRAME, NodeParam.SLICES, NodeParam.INDEX, NodeParam.REVERSE, NodeParam.SUBDIVISION, NodeParam.DIVISION -> true;
             default -> false;
         };
     }
@@ -394,7 +394,7 @@ public final class EditorState {
             case NodeParam.SUBDIVISION -> 0.3;
             case NodeParam.AMOUNT -> 0.01;
             case NodeParam.RATE -> .05;
-            case NodeParam.SYNC, NodeParam.MODE -> .05;
+            case NodeParam.SYNC, NodeParam.MODE, NodeParam.DIVISION -> .05;
             case NodeParam.ATTACK, NodeParam.DECAY, NodeParam.RELEASE, NodeParam.SUSTAIN, NodeParam.GATE -> .005;
             case "value0", "value1", "value2", "value3", "value4", "value5", "value6", "value7" -> .01;
             case NodeParam.OFFSET -> 40;
@@ -420,6 +420,7 @@ public final class EditorState {
         if (type.isSignalNode()) return switch (param) {
             case NodeParam.RATE -> Math.max(type == NodeType.STEP_SEQUENCE ? .125 : .001, Math.min(type == NodeType.STEP_SEQUENCE ? 16 : 40, value));
             case NodeParam.SYNC -> Math.max(0, Math.min(1, Math.rint(value)));
+            case NodeParam.DIVISION -> Math.max(0, Math.min(7, Math.rint(value)));
             case NodeParam.MODE -> Math.max(0, Math.min(type == NodeType.FILTER ? 3 : 1, Math.rint(value)));
             case NodeParam.WAVE -> Math.max(0, Math.min(3, Math.rint(value)));
             case NodeParam.STEPS -> Math.max(1, Math.min(8, Math.rint(value)));
@@ -486,7 +487,13 @@ public final class EditorState {
                     Map.entry("value0",1.0),Map.entry("value1",0.0),Map.entry("value2",.5),Map.entry("value3",0.0),
                     Map.entry("value4",0.0),Map.entry("value5",0.0),Map.entry("value6",0.0),Map.entry("value7",0.0));
             case FILTER -> Map.of(NodeParam.CUTOFF_HZ,20000.0,NodeParam.RESONANCE_Q,groove.engine.Biquad.DEFAULT_Q,NodeParam.MODE,0.0);
-            case DELAY -> Map.of(NodeParam.FRAMES,64.0);
+            case DELAY -> {
+                Map<String, Double> m = new LinkedHashMap<>();
+                m.put(NodeParam.FRAMES, 64.0);
+                m.put(NodeParam.SYNC, 0.0);
+                m.put(NodeParam.DIVISION, 2.0);
+                yield m;
+            }
             case MIX_BUS -> Map.of(NodeParam.GAIN,1.0);
             case GENERATOR_SAMPLE -> {
                 Map<String, Double> m = new LinkedHashMap<>();

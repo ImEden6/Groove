@@ -15,6 +15,7 @@ public record RotaryKnob(String param, int x, int y, int width) {
     private static final String[] SCALE_NAMES = {"Major", "Minor", "Dorian", "Phrygian", "Lydian", "Mixolydian", "Min Pent", "Blues", "Whole Tone"};
     private static final String[] CHORD_NAMES = {"Major", "Minor", "7", "Maj7", "Min7", "Sus4", "Dim", "9"};
     private static final String[] LFO_WAVE_NAMES = {"Sine", "Triangle", "Square", "Saw"};
+    private static final String[] DELAY_DIVISION_NAMES = {"1/16", "1/8T", "1/8", "1/4T", "1/8D", "1/4", "1/4D", "1/2"};
 
     public boolean contains(double px, double py) {
         return px >= x && px < x + width && py >= y && py < y + HEIGHT;
@@ -52,6 +53,10 @@ public record RotaryKnob(String param, int x, int y, int width) {
                 ? (value < .5 ? "Sine" : value < 1.5 ? "Saw" : "Pulse")
                 : node.type() == groove.engine.NodeType.LFO && param.equals(NodeParam.WAVE)
                 ? LFO_WAVE_NAMES[Math.max(0, Math.min(3, (int)value))]
+                : node.type() == groove.engine.NodeType.DELAY && param.equals(NodeParam.SYNC)
+                ? (value < .5 ? "Free" : "Sync")
+                : node.type() == groove.engine.NodeType.DELAY && param.equals(NodeParam.DIVISION)
+                ? DELAY_DIVISION_NAMES[Math.max(0, Math.min(7, (int)value))]
                 : value == Math.rint(value) ? Long.toString((long) value)
                 : String.format(java.util.Locale.ROOT, "%.2f", value);
         text = font.plainSubstrByWidth(text, Math.max(0, width - 4));

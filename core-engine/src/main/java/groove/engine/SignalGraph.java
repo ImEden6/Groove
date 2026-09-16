@@ -5,6 +5,8 @@ import java.util.*;
 /** Immutable, bounded signal routing compiled on the control worker, with independent pattern sources. */
 public final class SignalGraph {
     public static final int CONTROL_FRAMES = 64, MAX_DELAY_FRAMES = 48000, MAX_TOTAL_DELAY_FRAMES = 192000;
+    public static final int MAX_SYNC_DELAY_FRAMES = 192000;
+    public static final double[] DELAY_DIVISION_BEATS = {0.25, 1.0 / 3.0, 0.5, 2.0 / 3.0, 0.75, 1.0, 1.5, 2.0};
     public static final int MAX_AUDIO_SOURCES = 8, MAX_TRIGGER_SOURCES = 8;
     /** Longest an ENVELOPE's attack+decay+release can span (each 0-8 cycles); a trigger source's
      *  scheduler must look back at least this far so a still-releasing voice's onset stays visible. */
@@ -67,12 +69,21 @@ public final class SignalGraph {
             if (n.type() == NodeType.OUTPUT) { require(output == -1 && n.params().isEmpty(), "Exactly one output required"); output = i; }
             if (n.type() == NodeType.AUDIO_RENDER) renders.add(i);
             if (n.type() == NodeType.TRIGGER_RENDER) triggers.add(i);
-            if (n.type() == NodeType.DELAY) delayFrames += (int)param(n, NodeParam.FRAMES, 64);
+            if (n.type() == NodeType.DELAY) {
+                boolean sync = param(n, NodeParam.SYNC, 0) == 1;
+                if (sync) {
+                    int division = (int) param(n, NodeParam.DIVISION, 2);
+                    delayFrames += (int) Math.round(96000.0 * DELAY_DIVISION_BEATS[division]);
+                } else {
+                    delayFrames += (int) param(n, NodeParam.FRAMES, 64);
+                }
+            }
         }
         require(output >= 0 && !renders.isEmpty(), "Audio routing requires output and audio_render");
         require(renders.size() <= MAX_AUDIO_SOURCES, "At most eight audio_render sources supported");
         require(triggers.size() <= MAX_TRIGGER_SOURCES, "At most eight trigger_render sources supported");
-        require(delayFrames <= MAX_TOTAL_DELAY_FRAMES, "Delay memory budget exceeded");
+        require(delayFrames <= MAX_TOTAL_DELAY_FRAMES,
+                "Delay memory budget exceeded: " + delayFrames + " frames (max " + MAX_TOTAL_DELAY_FRAMES + " at 30 BPM; division 1/2 requires 192000 frames alone)");
         Set<Graph.Edge> unique = new HashSet<>();
         for (Graph.Edge e : graph.edges()) {
             require(ids.containsKey(e.fromNode()) && ids.containsKey(e.toNode()), "Dangling edge");
@@ -175,7 +186,7 @@ public final class SignalGraph {
             case ENVELOPE -> Set.of(NodeParam.ATTACK, NodeParam.DECAY, NodeParam.SUSTAIN, NodeParam.RELEASE, NodeParam.MODE);
             case ATTENUVERTER -> Set.of(NodeParam.SCALE, NodeParam.OFFSET);
             case FILTER -> Set.of(NodeParam.CUTOFF_HZ, NodeParam.RESONANCE_Q, NodeParam.MODE);
-            case DELAY -> Set.of(NodeParam.FRAMES);
+            case DELAY -> Set.of(NodeParam.FRAMES, NodeParam.SYNC, NodeParam.DIVISION);
             case MIX_BUS -> Set.of(NodeParam.GAIN);
             case AUDIO_RENDER, TRIGGER_RENDER -> Set.of();
             default -> throw new IllegalArgumentException("Invalid signal node");
@@ -193,7 +204,11 @@ public final class SignalGraph {
             }
             case ATTENUVERTER -> { range(n,NodeParam.SCALE,1,-20000,20000,false); range(n,NodeParam.OFFSET,0,-20000,20000,false); }
             case FILTER -> { range(n,NodeParam.CUTOFF_HZ,20000,20,20000,false); range(n,NodeParam.RESONANCE_Q,Biquad.DEFAULT_Q,.1,20,false); range(n,NodeParam.MODE,0,0,3,true); }
-            case DELAY -> range(n,NodeParam.FRAMES,64,CONTROL_FRAMES,MAX_DELAY_FRAMES,true);
+            case DELAY -> {
+                range(n, NodeParam.FRAMES, 64, CONTROL_FRAMES, MAX_DELAY_FRAMES, true);
+                range(n, NodeParam.SYNC, 0, 0, 1, true);
+                range(n, NodeParam.DIVISION, 2, 0, 7, true);
+            }
             case MIX_BUS -> range(n,NodeParam.GAIN,1,0,1,false);
             default -> { }
         }
