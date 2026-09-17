@@ -9,8 +9,8 @@ final class ResamplerTests {
     private static volatile double sink;
     static void run() {
         double worstRejection = Double.POSITIVE_INFINITY, worstPassError = 0;
-        for (double step : new double[]{1.01, 1.5, 1.999, 2, 2.01, 3, 3.999, 4, 8, 15.999, 16}) {
-            double nyquist = .5 / step;
+        for (double step : new double[]{1.01, 1.5, 1.96, 1.999, 2, 2.01, 3, 3.92, 3.999, 4, 7.84, 8, 15.7, 15.996, 15.999, 16}) {
+            double nyquist = .5 / step, stepRejection = Double.POSITIVE_INFINITY;
             for (int band = 0; band < 9; band++) {
                 double frequency = nyquist + (.499 - nyquist) * band / 8;
                 SampleData tone = tone(frequency);
@@ -21,8 +21,10 @@ final class ResamplerTests {
                 }
                 double rejection = -10 * Math.log10(energy / 512 * 2);
                 worstRejection = Math.min(worstRejection, rejection);
+                stepRejection = Math.min(stepRejection, rejection);
                 check(rejection >= 68, "Stopband rejection " + rejection + " dB at step=" + step + ", frequency=" + frequency);
             }
+            if (step > 15) System.out.printf(Locale.ROOT, "Resampler stopband at %.3fx: minimum %.2f dB rejection.%n", step, stepRejection);
         }
         for (double step : new double[]{1.0/24, .25, .5, .75, 1, 1.01, 1.5, 1.999, 2, 2.01, 4, 8, 16}) {
             double frequency = .4 / Math.max(1, step);
@@ -39,6 +41,7 @@ final class ResamplerTests {
             // Includes passband gain/phase error and interpolation images for upsampling.
             check(relative < .00052, "Passband RMS error at step=" + step + ": " + relative);
         }
+        spectralGate();
         SampleData fixture = tone(.1);
         check(fixture.bytes() == 16384L * 4 * 31 / 16, "Cache accounting includes all prefiltered PCM levels");
         check(fixture.at(500, 0, 1) == fixture.at(500, 0), "Unconverted PCM remains bit exact");
@@ -47,6 +50,28 @@ final class ResamplerTests {
         benchmark(fixture);
         voiceBenchmark();
     }
+    /** P3 gate: passband magnitude within 0.1 dB up to 80% of output Nyquist, just under and at 16x. */
+    private static void spectralGate() {
+        for (double step : new double[]{15.7, 15.996, 16}) {
+            double nyquist = .5 / step, worstDb = 0;
+            for (int k = 1; k <= 8; k++) {
+                double frequency = .8 * nyquist * k / 8;
+                SampleData tone = tone(frequency);
+                // Least-squares fit of one sinusoid at the output frequency gives the passband magnitude
+                double omega = 2 * Math.PI * frequency * step, ss = 0, cc = 0, sc = 0, ys = 0, yc = 0;
+                for (int i = 0; i < 512; i++) {
+                    double y = tone.at(2048.37 + i * step, 0, step), sn = Math.sin(omega * i), cs = Math.cos(omega * i);
+                    ss += sn * sn; cc += cc(cs); sc += sn * cs; ys += y * sn; yc += y * cs;
+                }
+                double det = ss * cc - sc * sc, a = (ys * cc - yc * sc) / det, b = (yc * ss - ys * sc) / det;
+                double db = 20 * Math.log10(Math.hypot(a, b));
+                if (Math.abs(db) > Math.abs(worstDb)) worstDb = db;
+                check(Math.abs(db) <= .1, "Passband magnitude " + db + " dB at step=" + step + ", frequency=" + frequency);
+            }
+            System.out.printf(Locale.ROOT, "Resampler passband at %.3fx: worst %.4f dB up to 80%% of output Nyquist.%n", step, worstDb);
+        }
+    }
+    private static double cc(double cs) { return cs * cs; }
     private static SampleData tone(double frequency) {
         float[] pcm = new float[16384];
         for (int i = 0; i < pcm.length; i++) pcm[i] = (float)Math.sin(2 * Math.PI * frequency * i + .37);

@@ -937,6 +937,13 @@ rows. Move to the next level when the step is within 2% below a power of two.
 - Record before/after spectra in the commit's docs update. P3 is the only intentional output change in
   Phase 4.
 
+As implemented: `SampleData.LEVEL_UP = 1.96`, shared by `at`, `atStereo` and
+`LoopGeometry.calculateR` (R at 15.996 is now 1,120, the same as at 16). The gate passes: passband
+worst -0.0170 dB at 15.7x, stopband at least 80.55 dB at 15.7x, 15.996x and 16x. Before/after numbers
+are in `ENGINE-EVOLUTION.md`. `GoldenTests` prints each golden's change when recapturing; only
+`stereo_sample_15_996x` moved (max 7.868e-5). The P6 change before it was output-preserving, so P3
+remains the only intentional output change.
+
 ---
 
 ## 8. P4: voice selection

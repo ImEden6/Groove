@@ -21,7 +21,7 @@ public record LoopGeometry(
     public static int calculateR(double step0) {
         int level = 0;
         double step = step0;
-        while (step >= 2.0 && level < 4) {
+        while (step >= SampleData.LEVEL_UP && level < 4) {
             level++;
             step *= 0.5;
         }

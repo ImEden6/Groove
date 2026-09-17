@@ -227,6 +227,13 @@ public final class GoldenTests {
 
             byte[] existingBytes = readGoldenBytes(name);
             if (capture || existingBytes == null) {
+                // Recapture reports how far the new render moved from the old golden, without gating it
+                if (existingBytes != null && existingBytes.length == SAMPLES * Double.BYTES) {
+                    ByteBuffer previous = ByteBuffer.wrap(existingBytes).order(ByteOrder.LITTLE_ENDIAN);
+                    double moved = 0;
+                    for (int i = 0; i < SAMPLES; i++) moved = Math.max(moved, Math.abs(output[i] - previous.getDouble()));
+                    System.out.printf("Recaptured golden %s: max abs change %.3e%n", name, moved);
+                }
                 Files.createDirectories(dir);
                 Path target = dir.resolve(name + ".f64");
                 ByteBuffer buf = ByteBuffer.allocate(SAMPLES * Double.BYTES).order(ByteOrder.LITTLE_ENDIAN);

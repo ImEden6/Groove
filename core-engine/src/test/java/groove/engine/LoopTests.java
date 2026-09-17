@@ -32,7 +32,8 @@ public final class LoopTests {
         check(r2 == 98, "R at step 2 is 98, got " + r2);
 
         int r15 = LoopGeometry.calculateR(15.996);
-        check(r15 == 728, "R at step 15.996 is 728, got " + r15);
+        // Within 2% below 16 the resampler already uses the top level, so R matches step 16
+        check(r15 == 1120, "R at step 15.996 is 1120, got " + r15);
 
         int r16 = LoopGeometry.calculateR(16.0);
         check(r16 == 1120, "R at step 16 is 1120, got " + r16);

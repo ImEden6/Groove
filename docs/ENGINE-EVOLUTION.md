@@ -26,7 +26,7 @@ The fixed eight-point design has been replaced with a 48-tap Kaiser-windowed sin
 
 Let N be the smaller of source and effective output Nyquist frequencies, expressed in the source clock domain. The intended passband is 0–0.8N; 0.8N–N is the transition band. Downsampling tests require at least 50 dB rejection at and above N, excluding sample-edge transients. Upsampling tests compare the output with the continuous sine reference, including interpolation-image error. The passband RMS-error limit is 0.3%.
 
-`ResamplerTests` measures 99 stopband cases: eleven conversion ratios from 1.01 to 16 (including values just below octave boundaries), nine frequencies each, and 512 output samples per case. Passband checks cover conversion ratios from 1/24 to 16 at 80% of the applicable Nyquist limit. This is a regression grid, not an exhaustive guarantee over every real-valued frequency/phase or sample-edge transient.
+`ResamplerTests` measures 144 stopband cases: sixteen conversion ratios from 1.01 to 16 (including values just below octave boundaries and at the 2% level-change points 1.96, 3.92, 7.84 and 15.7), nine frequencies each, and 512 output samples per case. Since Phase 4 (P3) it also fits the passband magnitude at eight frequencies up to 0.8N for ratios 15.7, 15.996 and 16, and requires it within ±0.1 dB. Passband checks cover conversion ratios from 1/24 to 16 at 80% of the applicable Nyquist limit. This is a regression grid, not an exhaustive guarantee over every real-valued frequency/phase or sample-edge transient.
 
 Measured on 2026-09-12:
 
@@ -38,9 +38,22 @@ Integer-frame, unity-rate playback preserves original PCM exactly. Source-frame 
 
 ### Processing and memory
 
-Octave selection reduces the runtime conversion ratio below two. The runtime filter uses 49–97 coefficient slots, with interpolated fractional phases. Shared tables use 64 cutoff subdivisions and 256 fractional phases. Convolution blends two independent dot products; the interior loop is unrolled to remove the serial accumulation bottleneck. There are no runtime transcendental calculations, sample allocations, or linear fallback.
+Octave selection reduces the runtime conversion ratio below 1.96. A ratio within 2% below a power of two (for example 15.996) takes the next level with a ratio just under one, so it uses the narrowest kernel instead of the widest; before Phase 4 it stayed on the lower level with 97 slots. The runtime filter uses 49–97 coefficient slots, with interpolated fractional phases. Shared tables use 64 cutoff subdivisions and 256 fractional phases. Convolution blends two independent dot products; the interior loop is unrolled to remove the serial accumulation bottleneck. There are no runtime transcendental calculations, sample allocations, or linear fallback.
 
 The PCM pyramid is built at sample construction on the existing decoder/control path. The four additional levels increase decoded storage to approximately **1.94 times** the original PCM size. `SampleData.bytes()` includes every level, so cache eviction and active-bank limits remain honest. No graph, save, or wire-format change is required.
+
+P3 before and after (2026-09-17, `ResamplerTests`):
+
+| Ratio | Min stopband rejection before | after | Worst passband magnitude before | after |
+| --- | --- | --- | --- | --- |
+| 15.7 | 71.30 dB | 80.55 dB | -0.0030 dB | -0.0170 dB |
+| 15.996 | 72.90 dB | 80.57 dB | -0.0029 dB | -0.0043 dB |
+| 16 | 80.57 dB | 80.57 dB | -0.0043 dB | -0.0043 dB |
+
+Whole sweep: minimum rejection 68.21 dB before, 68.36 dB after; maximum passband RMS error 0.05141% both.
+Rendering 32 stereo voices at 15.996x took 28.95 ms before and 19.45 ms after for 85.33 ms of audio
+(local warmed best, 16x itself 18.6 ms). Only the `stereo_sample_15_996x` golden changed, by at most
+7.868e-5; the other eleven are identical.
 
 Local warmed measurements (best trial, diagnostic only):
 

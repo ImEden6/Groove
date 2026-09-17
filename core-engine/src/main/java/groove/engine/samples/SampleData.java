@@ -58,6 +58,8 @@ public final class SampleData {
     private static final float[] KERNEL = buildKernel();
     private static final double[] HALF_RATE = halfRateWeights();
     private static final int BANDS = 64, PHASES = 256;
+    /** Steps within 2% below a power of two take the next octave level, where the kernel is half as wide. */
+    static final double LEVEL_UP = 1.96;
     private static final float[][] TABLES = buildTables();
 
     /** Bandlimited Kaiser interpolation, with prefiltered octaves for large rate changes.
@@ -74,7 +76,7 @@ public final class SampleData {
         // Preserve original PCM exactly when no rate conversion is needed.
         if (step == 1 && frame == Math.floor(frame)) return pcm[(int) frame * channels + c];
         int level = 0;
-        while (step >= 2) { level++; step *= .5; frame *= .5; }
+        while (level < 4 && step >= LEVEL_UP) { level++; step *= .5; frame *= .5; }
         float[] data = levels[level];
         int band = (int)Math.ceil(Math.max(0, step - 1) * BANDS);
         int radius = (int)Math.ceil(RADIUS * (1 + band / (double)BANDS));
@@ -126,7 +128,7 @@ public final class SampleData {
             return;
         }
         int level = 0;
-        while (step >= 2) { level++; step *= .5; frame *= .5; }
+        while (level < 4 && step >= LEVEL_UP) { level++; step *= .5; frame *= .5; }
         float[] data = levels[level];
         int band = (int)Math.ceil(Math.max(0, step - 1) * BANDS);
         int radius = (int)Math.ceil(RADIUS * (1 + band / (double)BANDS));
