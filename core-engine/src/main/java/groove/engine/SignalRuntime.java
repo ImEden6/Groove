@@ -15,6 +15,7 @@ public final class SignalRuntime {
     private final Reverb[] reverbs;
     private final double[] reverbOut = new double[2];
     private long reverbGuardHits = 0;
+    private long delaySnaps;
     private final LookaheadScheduler.Window[] triggerWindowByNode;
     private static final LookaheadScheduler.Window[] NO_TRIGGERS = new LookaheadScheduler.Window[0];
     private long controlBlock = Long.MIN_VALUE;
@@ -191,7 +192,7 @@ public final class SignalRuntime {
         }
         for (int i=0;i<graph.nodes.length;i++) if (delayLeft[i] != null) {
             int source = graph.audioInputs[i][0], cursor = cursors[i];
-            delayLeft[i][cursor] = bounded(left[source]); delayRight[i][cursor] = bounded(right[source]);
+            delayLeft[i][cursor] = snapDelay(bounded(left[source])); delayRight[i][cursor] = snapDelay(bounded(right[source]));
             cursors[i] = (cursor+1) % delayLeft[i].length;
         }
         stereo[0] = left[graph.output]; stereo[1] = right[graph.output];
@@ -330,6 +331,42 @@ public final class SignalRuntime {
     private static double clamp(double v,double min,double max) { return Math.max(min,Math.min(max,v)); }
 
     public long reverbGuardHits() { return reverbGuardHits; }
+
+    /** Feedback through a delay decays toward subnormals, which are far slower to compute. */
+    private double snapDelay(double v) {
+        if (Math.abs(v) < Biquad.DENORMAL_SNAP && v != 0) { delaySnaps++; return 0; }
+        return v;
+    }
+
+    /** Denormal snaps across delay writes, filter state and reverbs. */
+    long snappedWrites() {
+        long total = delaySnaps;
+        for (int i = 0; i < graph.nodes.length; i++) {
+            if (filtersLeft[i] != null) total += filtersLeft[i].snappedWrites() + filtersRight[i].snappedWrites();
+            if (reverbs[i] != null) total += reverbs[i].snappedWrites();
+        }
+        return total;
+    }
+
+    /** Tests only: fills delay, filter and reverb state with one value. */
+    void seedState(double value) {
+        for (int i = 0; i < graph.nodes.length; i++) {
+            if (delayLeft[i] != null) { Arrays.fill(delayLeft[i], value); Arrays.fill(delayRight[i], value); }
+            if (filtersLeft[i] != null) { filtersLeft[i].seedState(value); filtersRight[i].seedState(value); }
+            if (reverbs[i] != null) reverbs[i].seedState(value);
+        }
+    }
+
+    /** Tests only: every delay, filter and reverb state value is finite and none is subnormal. */
+    boolean stateClean() {
+        for (int i = 0; i < graph.nodes.length; i++) {
+            if (delayLeft[i] != null) for (int f = 0; f < delayLeft[i].length; f++)
+                if (!Biquad.clean(delayLeft[i][f]) || !Biquad.clean(delayRight[i][f])) return false;
+            if (filtersLeft[i] != null && !(filtersLeft[i].stateClean() && filtersRight[i].stateClean())) return false;
+            if (reverbs[i] != null && !reverbs[i].stateClean()) return false;
+        }
+        return true;
+    }
 
     private double boundedReverb(double v) {
         if (!Double.isFinite(v)) {

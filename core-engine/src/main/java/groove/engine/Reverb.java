@@ -97,6 +97,8 @@ public final class Reverb {
     private double kOut;
     private int preDelayFrames;
 
+    private long snappedWrites;
+
     // LFO modulation state (evaluated once per 64-frame control block)
     private boolean modulation = true;
     private long controlBlock = Long.MIN_VALUE;
@@ -218,7 +220,7 @@ public final class Reverb {
 
         // 2. Bandwidth input lowpass filter
         double xBw = b * xPre + (1.0 - b) * yBandwidth;
-        if (Math.abs(xBw) < 1e-15) xBw = 0.0;
+        if (Math.abs(xBw) < 1e-15) { if (xBw != 0) snappedWrites++; xBw = 0.0; }
         yBandwidth = xBw;
 
         // 3. Input diffusers (series of 4 allpass filters)
@@ -226,28 +228,28 @@ public final class Reverb {
         double w1 = diff1Buffer[diff1Cursor];
         double v1 = xBw - DIFF1_COEFF * w1;
         double y1 = w1 + DIFF1_COEFF * v1;
-        diff1Buffer[diff1Cursor] = v1;
+        diff1Buffer[diff1Cursor] = snap(v1);
         diff1Cursor = (diff1Cursor + 1) % DIFF1_LEN;
 
         // Diffuser 2
         double w2 = diff2Buffer[diff2Cursor];
         double v2 = y1 - DIFF2_COEFF * w2;
         double y2 = w2 + DIFF2_COEFF * v2;
-        diff2Buffer[diff2Cursor] = v2;
+        diff2Buffer[diff2Cursor] = snap(v2);
         diff2Cursor = (diff2Cursor + 1) % DIFF2_LEN;
 
         // Diffuser 3
         double w3 = diff3Buffer[diff3Cursor];
         double v3 = y2 - DIFF3_COEFF * w3;
         double y3 = w3 + DIFF3_COEFF * v3;
-        diff3Buffer[diff3Cursor] = v3;
+        diff3Buffer[diff3Cursor] = snap(v3);
         diff3Cursor = (diff3Cursor + 1) % DIFF3_LEN;
 
         // Diffuser 4
         double w4 = diff4Buffer[diff4Cursor];
         double v4 = y3 - DIFF4_COEFF * w4;
         double xDiff = w4 + DIFF4_COEFF * v4;
-        diff4Buffer[diff4Cursor] = v4;
+        diff4Buffer[diff4Cursor] = snap(v4);
         diff4Cursor = (diff4Cursor + 1) % DIFF4_LEN;
 
         // 4. Tank inputs (cross-coupled feedback from opposite tank half)
@@ -260,18 +262,18 @@ public final class Reverb {
         double wMa1 = readHermite(modA1Buffer, modA1Cursor, delayA1, MOD_A1_BUF_LEN);
         double vMa1 = inA - MOD_A1_COEFF * wMa1;
         double yMa1 = wMa1 + MOD_A1_COEFF * vMa1;
-        modA1Buffer[modA1Cursor] = vMa1;
+        modA1Buffer[modA1Cursor] = snap(vMa1);
         modA1Cursor = (modA1Cursor + 1) % MOD_A1_BUF_LEN;
 
         // Delay A1
         double wDelA1 = delA1Buffer[delA1Cursor];
-        delA1Buffer[delA1Cursor] = yMa1;
+        delA1Buffer[delA1Cursor] = snap(yMa1);
         int curA1 = delA1Cursor;
         delA1Cursor = (delA1Cursor + 1) % DEL_A1_LEN;
 
         // Damping lowpass filter A
         double yDa = (1.0 - d) * wDelA1 + d * yDampingA;
-        if (Math.abs(yDa) < 1e-15) yDa = 0.0;
+        if (Math.abs(yDa) < 1e-15) { if (yDa != 0) snappedWrites++; yDa = 0.0; }
         yDampingA = yDa;
 
         // Decay multiplier 1
@@ -281,18 +283,18 @@ public final class Reverb {
         double wApA2 = apA2Buffer[apA2Cursor];
         double vApA2 = xApA2 - AP_A2_COEFF * wApA2;
         double yApA2 = wApA2 + AP_A2_COEFF * vApA2;
-        apA2Buffer[apA2Cursor] = vApA2;
+        apA2Buffer[apA2Cursor] = snap(vApA2);
         int curApA2 = apA2Cursor;
         apA2Cursor = (apA2Cursor + 1) % AP_A2_LEN;
 
         // Delay A2
         double wDelA2 = delA2Buffer[delA2Cursor];
-        delA2Buffer[delA2Cursor] = yApA2;
+        delA2Buffer[delA2Cursor] = snap(yApA2);
         int curA2 = delA2Cursor;
         delA2Cursor = (delA2Cursor + 1) % DEL_A2_LEN;
 
         // Tank A output for feedback to Tank B
-        outA = g * wDelA2;
+        outA = snap(g * wDelA2);
 
         // === Tank Half B ===
         // Modulated allpass B1
@@ -300,18 +302,18 @@ public final class Reverb {
         double wMb1 = readHermite(modB1Buffer, modB1Cursor, delayB1, MOD_B1_BUF_LEN);
         double vMb1 = inB - MOD_B1_COEFF * wMb1;
         double yMb1 = wMb1 + MOD_B1_COEFF * vMb1;
-        modB1Buffer[modB1Cursor] = vMb1;
+        modB1Buffer[modB1Cursor] = snap(vMb1);
         modB1Cursor = (modB1Cursor + 1) % MOD_B1_BUF_LEN;
 
         // Delay B1
         double wDelB1 = delB1Buffer[delB1Cursor];
-        delB1Buffer[delB1Cursor] = yMb1;
+        delB1Buffer[delB1Cursor] = snap(yMb1);
         int curB1 = delB1Cursor;
         delB1Cursor = (delB1Cursor + 1) % DEL_B1_LEN;
 
         // Damping lowpass filter B
         double yDb = (1.0 - d) * wDelB1 + d * yDampingB;
-        if (Math.abs(yDb) < 1e-15) yDb = 0.0;
+        if (Math.abs(yDb) < 1e-15) { if (yDb != 0) snappedWrites++; yDb = 0.0; }
         yDampingB = yDb;
 
         // Decay multiplier 1
@@ -321,18 +323,18 @@ public final class Reverb {
         double wApB2 = apB2Buffer[apB2Cursor];
         double vApB2 = xApB2 - AP_B2_COEFF * wApB2;
         double yApB2 = wApB2 + AP_B2_COEFF * vApB2;
-        apB2Buffer[apB2Cursor] = vApB2;
+        apB2Buffer[apB2Cursor] = snap(vApB2);
         int curApB2 = apB2Cursor;
         apB2Cursor = (apB2Cursor + 1) % AP_B2_LEN;
 
         // Delay B2
         double wDelB2 = delB2Buffer[delB2Cursor];
-        delB2Buffer[delB2Cursor] = yApB2;
+        delB2Buffer[delB2Cursor] = snap(yApB2);
         int curB2 = delB2Cursor;
         delB2Cursor = (delB2Cursor + 1) % DEL_B2_LEN;
 
         // Tank B output for feedback to Tank A
-        outB = g * wDelB2;
+        outB = snap(g * wDelB2);
 
         // === Output Taps ===
         // Left:
@@ -369,6 +371,32 @@ public final class Reverb {
 
         outLR[0] = kOut * tapL;
         outLR[1] = kOut * tapR;
+    }
+
+    /** Zeroes stored feedback values too small to hear, before they decay into slow subnormals. */
+    private double snap(double v) {
+        if (Math.abs(v) < Biquad.DENORMAL_SNAP && v != 0) { snappedWrites++; return 0.0; }
+        return v;
+    }
+
+    long snappedWrites() { return snappedWrites; }
+
+    private double[][] stateBuffers() {
+        return new double[][]{preDelayBuffer, diff1Buffer, diff2Buffer, diff3Buffer, diff4Buffer,
+                modA1Buffer, delA1Buffer, apA2Buffer, delA2Buffer, modB1Buffer, delB1Buffer, apB2Buffer, delB2Buffer};
+    }
+
+    /** Tests only: fills every buffer and filter state with one value. */
+    void seedState(double value) {
+        for (double[] buf : stateBuffers()) Arrays.fill(buf, value);
+        yBandwidth = yDampingA = yDampingB = outA = outB = value;
+    }
+
+    /** Tests only: every state value is finite and none is subnormal. */
+    boolean stateClean() {
+        for (double[] buf : stateBuffers()) for (double v : buf) if (!Biquad.clean(v)) return false;
+        return Biquad.clean(yBandwidth) && Biquad.clean(yDampingA) && Biquad.clean(yDampingB)
+                && Biquad.clean(outA) && Biquad.clean(outB);
     }
 
     /** Largest magnitude held in the tank, for headroom tests. Scans buffers, so never call per frame. */

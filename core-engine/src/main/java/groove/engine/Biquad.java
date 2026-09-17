@@ -9,6 +9,10 @@ public final class Biquad {
     public static final double DEFAULT_Q = 0.70710678118654752; // 1/sqrt(2)
     private double b0 = 1, b1, b2, a1, a2;
     private double x1, x2, y1, y2;
+    /** Denormal snaps: output below 1e-15 or stored input below {@link #DENORMAL_SNAP}. */
+    private long snappedWrites;
+    /** Stored state below this is zeroed; subnormal doubles run 10-100x slower on x86 and Java cannot enable flush-to-zero. */
+    static final double DENORMAL_SNAP = 1e-30;
 
     public void setLowPass(double cutoffHz, double sampleRate) {
         setLowPass(cutoffHz, DEFAULT_Q, sampleRate);
@@ -49,11 +53,20 @@ public final class Biquad {
     public double process(double x) {
         double y = b0 * x + b1 * x1 + b2 * x2 - a1 * y1 - a2 * y2;
         if (!Double.isFinite(y)) { reset(); return 0; }
-        if (Math.abs(y) < 1e-15) y = 0;
+        if (Math.abs(y) < 1e-15) { if (y != 0) snappedWrites++; y = 0; }
+        if (Math.abs(x) < DENORMAL_SNAP && x != 0) { snappedWrites++; x = 0; }
         x2 = x1; x1 = x;
         y2 = y1; y1 = y;
         return y;
     }
 
     public void reset() { x1 = 0; x2 = 0; y1 = 0; y2 = 0; }
+
+    long snappedWrites() { return snappedWrites; }
+    /** Tests only: fills the filter state with one value. */
+    void seedState(double value) { x1 = x2 = y1 = y2 = value; }
+    /** Tests only: every state value is finite and none is subnormal. */
+    boolean stateClean() { return clean(x1) && clean(x2) && clean(y1) && clean(y2); }
+
+    static boolean clean(double v) { return Double.isFinite(v) && !(v != 0 && Math.abs(v) < Double.MIN_NORMAL); }
 }

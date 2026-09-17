@@ -913,6 +913,18 @@ Tests, each with a positive control that `snappedWrites > 0`:
 - After each: every state value is finite and none satisfies `0 < |x| < Double.MIN_NORMAL`.
 - Goldens stay within 1e-7.
 
+As implemented (`DenormalTests`, run from `EngineTests`):
+
+- Step 5b had no `1e-30` snap. `Reverb` and `Biquad` only zeroed three filter outputs below `1e-15`
+  (bandwidth, both damping filters, biquad output). Those stay as they are, output-preserving, and
+  now count in `snappedWrites`. The new `1e-30` snap (`Biquad.DENORMAL_SNAP`) covers every reverb
+  feedback buffer write and both tank outputs, `SignalRuntime` delay writes, and the biquad's stored
+  input.
+- Seeding at 1e-25 could not fail: in 5 s nothing decays from there into the subnormal range, and
+  the existing `1e-15` snaps cut the reverb and filter loops. The seeded reverb and delay cases start
+  at `1e-305`, and the biquad case feeds a subnormal input. With the snap disabled those three fail;
+  the 0.1 s impulse case still passes, since the existing snaps already cover it.
+
 ### P3. Resampler level near powers of two (own commit) [W16]
 
 A step just under a power of two (15.996x) stays on the higher level with band 64: 97 taps × 2 phase
