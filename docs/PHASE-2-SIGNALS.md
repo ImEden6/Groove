@@ -160,7 +160,7 @@ recovery keeps the older audio instead of silence. Once a scheduled commit is in
 only the pending program replays; the current program it replaces never starts one.
 Plain pattern and stateless signal graphs keep their immediate join behavior.
 
-Renderers can share a `ReplayBudget` (Phase 4, step 6 of [PHASE-4-PLAN.md](PHASE-4-PLAN.md)).
+Renderers can share a `ReplayBudget` ([Stage 4](ENGINE-UPGRADE-STAGES.md#replay-leasing-and-join-time)).
 At most `k` programs on a budget replay at once; others wait silently in FIFO order, and
 their history length is taken when the lease is granted. A renderer that stops rendering
 for `STALE_NANOS` on the budget's local clock loses its leases, and one that registers into

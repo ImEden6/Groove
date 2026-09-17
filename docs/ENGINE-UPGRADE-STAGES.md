@@ -334,7 +334,7 @@ Stage 3 adds automated build targets and offline demonstration scripts:
   (8.0s, 48 kHz stereo PCM), demonstrating dual live sources, LFO-modulated biquad filtering,
   and tempo-synced feedback delay via `LiveRenderer`.
 
-Stage 4 (Phase 4 step 9) reworks both demos around reverb:
+Stage 4 reworks both demos around reverb:
 
 - `renderSampleDemo` now plays four scores for 7 cycles at 120 BPM (14 s) plus a 2 s tail: the
   sliced swung kit (cycle 3 reversed) through a short room mixed low, dry pulse bass, the swung
@@ -534,7 +534,7 @@ replay. Replay work per round stays within its `2k` bound.
 
 Measured with `./gradlew :core-engine:perfBench` (forked JVM `-Xms1g -Xmx1g -XX:+AlwaysPreTouch`, GC logging enabled, block budget 10.67 ms for 512 frames @ 48 kHz). Each trial renders 2,000 blocks; warmed until 3 consecutive trial medians agree within 5%. Statistics pooled from the warmed trials.
 
-The first recorded table (step 1) never called `Timeline.prepare`, so the renderer missed nearly
+The first recorded baseline table never called `Timeline.prepare`, so the renderer missed nearly
 every schedule window and most timed blocks were silent. `perfBench` now prepares each block
 outside the timed render and fails on any schedule miss.
 
@@ -573,10 +573,10 @@ runs: six B1-only runs gave 4.4 to 5.1 ms except one at 11.6 ms, with Gradle and
 alike. Recorded stalls after warm-up had no GC, deoptimization or safepoint nearby, so they are
 treated as OS preemption. Use p99, not max, for pass criteria.
 
-### After P3 and P4 (step 7 and step 8)
+### After the resampler level change and cached voice selection
 
-Pinned, throttling off, 2026-09-17. "Before" is the full run after P3 (the 15.996x level change),
-"after" adds P4 (cached voice selection). B4 was not re-run for "after".
+Pinned, throttling off, 2026-09-17. "Before" is the full run after the resampler level change near
+powers of two, "after" adds cached voice selection. B4 was not re-run for "after".
 
 | Id | Median before (ms) | Median after (ms) | p99 before (ms) | p99 after (ms) |
 | --- | --- | --- | --- | --- |
@@ -593,8 +593,8 @@ Pinned, throttling off, 2026-09-17. "Before" is the full run after P3 (the 15.99
 | B8x8 | 23.2004 | 17.6738 | 38.9681 | 26.4099 |
 | B8q | 0.1535 | 0.1541 | 0.2690 | 0.2764 |
 
-Compared with the step 6 run, P3 alone took B9 from a 4.60 ms median and 8.27 ms p99 to 3.36 and
-5.81 ms. B9's publish bytes after P4 are 1,211,344, within its 1,323,132 gate. B8 at 8 renderers
+Compared with the run after replay leasing, the resampler change alone took B9 from a 4.60 ms median
+and 8.27 ms p99 to 3.36 and 5.81 ms. B9's publish bytes after cached voice selection are 1,211,344, within its 1,323,132 gate. B8 at 8 renderers
 still fails its 5.33 ms gate.
 
 ### B9 adversarial (`perfBench -PperfOnly=B9`)
@@ -612,7 +612,7 @@ Results from 2026-09-17, pinned, throttling off (two runs agreed within 0.1 ms o
 | B9 | Adversarial, one renderer | 4.5970 | 8.2684 | 17.3549 | 0.4308 | settled |
 
 The p99 gate of 10.67 ms passes. Bytes per publish are measured as the smallest of 10 publishes
-after 2 warm-up publishes: 1,202,848 bytes, identical in both runs. B9 did not exist at step 5b, so
+after 2 warm-up publishes: 1,202,848 bytes, identical in both runs. B9 did not exist before replay leasing, so
 this figure is the baseline and the gate is 1,323,132 bytes (+10%).
 
 ### B8 replay leasing (`perfBench -PperfOnly=B8`)
