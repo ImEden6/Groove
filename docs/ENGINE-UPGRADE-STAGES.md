@@ -349,23 +349,32 @@ Measured with `./gradlew :core-engine:perfBench` (forked JVM `-Xms1g -Xmx1g -XX:
 
 The first recorded table (step 1) never called `Timeline.prepare`, so the renderer missed nearly
 every schedule window and most timed blocks were silent. `perfBench` now prepares each block
-outside the timed render and fails on any schedule miss. Results from 2026-09-17:
+outside the timed render and fails on any schedule miss.
+
+`perfBench` also pins itself to the performance cores (`0xFFF` here). Unpinned, Windows moves the
+render thread to an efficiency core after about 3 s, which slowed even a plain Java loop 2 to 2.5x
+and kept B1 and B7 from settling. Override with `-PperfAffinity=<hex mask>` or `-PperfAffinity=none`.
+
+Voice matching now rejects on a hash of the matched event fields before comparing records. Stacked
+events share an ordinal and onset, so every voice used to walk every candidate's `Tone` or
+`SampleVoice` fields each frame; that was about 2/3 of B1 and 70% of B7. Output is byte-identical
+to the previous engine for B1, B7, B7b and the signal demo.
+
+Results from 2026-09-17, pinned, after the matching change:
 
 | Id | Scenario | Median (ms) | p99 (ms) | Max (ms) | RT Ratio | Publish Alloc (B) | Status |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| B1 | 32 tone voices (saw, pulse) | 36.6312 | 58.9731 | 127.4292 | 3.4331 | 922,136 | unsettled |
-| B2 | 32 mono sample voices at 1x | 0.5350 | 15.6610 | 34.0821 | 0.0501 | 32,408 | settled |
-| B3 | 32 stereo sample voices at 15.996x | 0.5298 | 25.5192 | 86.6124 | 0.0497 | 32,472 | settled |
-| B4 | 32 stereo sample voices at 16.000x | 0.5198 | 19.6793 | 47.2486 | 0.0487 | 32,408 | settled |
-| B5 | 8 audio sources, filters, feedback delay | 4.3501 | 8.1237 | 21.8220 | 0.4077 | 465,328 | settled |
-| B6 | B5 plus 2 reverbs | 4.8039 | 7.9345 | 16.2847 | 0.4502 | 1,375,448 | settled |
-| B7 | 32 sustained looped stereo voices at 4x | 52.6526 | 75.8375 | 209.6801 | 4.9346 | 33,144 | unsettled |
-| B7b | 112 hat one-shots per cycle beside one loop | 5.0124 | 13.9144 | 34.5726 | 0.4698 | 33,248 | unsettled |
+| B1 | 32 tone voices (saw, pulse) | 2.3979 | 3.4646 | 7.3537 | 0.2247 | 722,760 | settled |
+| B2 | 32 mono sample voices at 1x | 0.3635 | 7.1392 | 21.0489 | 0.0341 | 33,088 | settled |
+| B3 | 32 stereo sample voices at 15.996x | 0.3557 | 13.5054 | 17.0637 | 0.0333 | 33,136 | settled |
+| B4 | 32 stereo sample voices at 16.000x | 0.3557 | 8.7371 | 10.6887 | 0.0333 | 33,088 | settled |
+| B5 | 8 audio sources, filters, feedback delay | 1.8231 | 3.1570 | 12.3718 | 0.1709 | 470,808 | settled |
+| B6 | B5 plus 2 reverbs | 2.0611 | 2.9580 | 8.2959 | 0.1932 | 1,380,928 | settled |
+| B7 | 32 sustained looped stereo voices at 4x | 9.4605 | 11.5776 | 29.0271 | 0.8866 | 33,872 | settled |
+| B7b | 112 hat one-shots per cycle beside one loop | 1.9770 | 3.4191 | 8.0971 | 0.1853 | 33,248 | settled |
 
 B2 to B4 medians are low because the one-shots finish early in each 2 s cycle; their p99 is the
-playing cost. B1 and B7 run slower than real time. A standalone B1 render takes about 7 ms per block
-for its first 4 s, then about 16 ms, and a fresh renderer in the same process stays at 16 ms, so the
-slowdown is not renderer state. CPU throttling on the Balanced plan or JIT recompilation are the
-remaining suspects; not yet investigated.
+playing cost. B7 p99 and B3 p99 still exceed the 10.67 ms budget. In game the sound thread is not
+pinned, so it can still land on an efficiency core.
 
 

@@ -39,6 +39,7 @@ tasks.register('perfBench', JavaExec) {
     dependsOn testClasses
     classpath = sourceSets.test.runtimeClasspath
     mainClass = 'groove.engine.PerfBench'
+    systemProperty 'perf.affinity', project.findProperty('perfAffinity') ?: ''
     jvmArgs = [
         '-Xms1g',
         '-Xmx1g',

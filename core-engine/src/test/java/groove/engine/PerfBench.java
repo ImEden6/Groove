@@ -38,7 +38,8 @@ public final class PerfBench {
     }
 
     public static void main(String[] args) {
-        printSystemInfo();
+        String affinity = pinToPerformanceCores();
+        printSystemInfo(affinity);
 
         AssetRef kickRef = FactorySamples.ref("factory:basic/kick.wav");
         SampleData kickData = WavDecoder.decode(FactorySamples.bytes("factory:basic/kick.wav"));
@@ -219,7 +220,7 @@ public final class PerfBench {
         System.out.println("================================================================================");
     }
 
-    private static void printSystemInfo() {
+    private static void printSystemInfo(String affinity) {
         System.out.println("================================================================================");
         System.out.println("Groove Engine Performance Benchmark (perfBench)");
         System.out.println("================================================================================");
@@ -231,7 +232,65 @@ public final class PerfBench {
         System.out.printf("  CPU Model:      %s%n", getCpuModel());
         System.out.printf("  Logical Cores:  %d%n", Runtime.getRuntime().availableProcessors());
         System.out.printf("  Power Plan:     %s%n", getWindowsPowerPlan());
+        System.out.printf("  CPU Affinity:   %s%n", affinity);
         System.out.println("================================================================================");
+    }
+
+    // Finds logical processors in the highest efficiency class, then applies them to this process
+    private static final String AFFINITY_SCRIPT = String.join("\n",
+            "param([long]$ProcessId, [string]$Override)",
+            "Add-Type -TypeDefinition @'",
+            "using System;",
+            "using System.Runtime.InteropServices;",
+            "public static class GrooveCpuSets {",
+            "    [DllImport(\"kernel32.dll\")]",
+            "    static extern bool GetSystemCpuSetInformation(IntPtr info, uint length, out uint returned, IntPtr process, uint flags);",
+            "    public static long PerformanceMask() {",
+            "        uint needed;",
+            "        GetSystemCpuSetInformation(IntPtr.Zero, 0, out needed, IntPtr.Zero, 0);",
+            "        IntPtr buf = Marshal.AllocHGlobal((int) needed);",
+            "        try {",
+            "            if (!GetSystemCpuSetInformation(buf, needed, out needed, IntPtr.Zero, 0)) return 0;",
+            "            int best = -1; long mask = 0;",
+            "            for (int offset = 0; offset < needed; offset += Marshal.ReadInt32(buf, offset)) {",
+            "                int logical = Marshal.ReadByte(buf, offset + 14), efficiency = Marshal.ReadByte(buf, offset + 18);",
+            "                if (logical >= 64) continue;",
+            "                if (efficiency > best) { best = efficiency; mask = 0; }",
+            "                if (efficiency == best) mask |= 1L << logical;",
+            "            }",
+            "            return mask;",
+            "        } finally { Marshal.FreeHGlobal(buf); }",
+            "    }",
+            "}",
+            "'@",
+            "$mask = if ($Override) { [Convert]::ToInt64($Override, 16) } else { [GrooveCpuSets]::PerformanceMask() }",
+            "if ($mask -ne 0) { (Get-Process -Id $ProcessId).ProcessorAffinity = [IntPtr]$mask }",
+            "'{0:X}' -f $mask");
+
+    /** Hybrid CPUs move busy threads onto efficiency cores after a few seconds, which halves throughput mid-run. */
+    private static String pinToPerformanceCores() {
+        String override = System.getProperty("perf.affinity", "").trim();
+        if (override.equalsIgnoreCase("none")) return "not pinned (perf.affinity=none)";
+        if (!System.getProperty("os.name", "").toLowerCase(Locale.ROOT).contains("win"))
+            return "not pinned (Windows only)";
+        try {
+            Path script = Files.createTempFile("groove-affinity", ".ps1");
+            try {
+                Files.writeString(script, AFFINITY_SCRIPT);
+                List<String> command = new ArrayList<>(List.of("powershell", "-NoProfile", "-ExecutionPolicy", "Bypass",
+                        "-File", script.toString(), "-ProcessId", Long.toString(ProcessHandle.current().pid())));
+                if (!override.isEmpty()) command.addAll(List.of("-Override", override));
+                Process p = new ProcessBuilder(command).redirectErrorStream(true).start();
+                String output = new String(p.getInputStream().readAllBytes()).trim();
+                if (p.waitFor() != 0 || !output.matches("[0-9A-F]+") || output.equals("0"))
+                    return "not pinned (" + output.replaceAll("\\s+", " ") + ")";
+                return "0x" + output + (override.isEmpty() ? " (performance cores)" : " (perf.affinity)");
+            } finally {
+                Files.deleteIfExists(script);
+            }
+        } catch (Exception e) {
+            return "not pinned (" + e.getMessage() + ")";
+        }
     }
 
     private static String getCpuModel() {

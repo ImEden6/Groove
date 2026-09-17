@@ -8,7 +8,8 @@ import java.util.*;
 public final class LookaheadScheduler {
     public static final int LOOKAHEAD_CYCLES = 4;
     private static final int RING_SIZE = 64, MAX_BUCKET_EVENTS = GraphCompiler.MAX_EVENTS * 2;
-    public record Entry(Event event, int ordinal, double durationSeconds) {
+    public record Entry(Event event, int ordinal, double durationSeconds, int matchHash) {
+        Entry(Event event, int ordinal, double durationSeconds) { this(event, ordinal, durationSeconds, event.matchHash()); }
         public double durationSeconds() {
             assert !Double.isNaN(durationSeconds) : "Trigger entry duration should not be read";
             return durationSeconds;

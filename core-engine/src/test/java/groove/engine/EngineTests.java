@@ -24,6 +24,13 @@ public final class EngineTests {
         PatternTests.run();
         GoldenTests.run();
         ReverbTests.run();
+        // Voice matching rejects on matchHash first, so equal matched fields must hash equally
+        Tone matchTone = new Tone(Tone.Wave.SAW, 220, .2, 0, 20000, Biquad.DEFAULT_Q, .5);
+        Event firstPart = new Event(new Arc(0, 2), new Arc(0, 1), matchTone, null);
+        Event continuation = new Event(new Arc(0, 2), new Arc(1, 2), new Tone(Tone.Wave.SAW, 220, .2, 0, 20000, Biquad.DEFAULT_Q, .5), null);
+        check(firstPart.matchHash() == continuation.matchHash(), "Continuation fragments share a match hash");
+        check(firstPart.matchHash() != new Event(new Arc(0, 2), new Arc(0, 1), new Tone(Tone.Wave.SAW, 330, .2, 0, 20000, Biquad.DEFAULT_Q, .5), null).matchHash(),
+                "Stacked tones with different pitch get different match hashes");
         invalid(() -> new Arc(Double.NaN, 1));
         invalid(() -> new Arc(2, 1));
         invalid(() -> Pattern.tone(TONE).fast(Double.POSITIVE_INFINITY));

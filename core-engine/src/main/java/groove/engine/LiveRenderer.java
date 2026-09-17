@@ -116,6 +116,7 @@ public final class LiveRenderer {
         final int[] events;
         final Event[] data;
         final double[] onsets;
+        final int[] hashes, planHashes;
         int count, tailCursor;
         long lastNow = Long.MIN_VALUE, lastResync;
         /** A voice pool (ActiveVoice[MAX_VOICES]) is only needed by a leaf program that's
@@ -132,7 +133,9 @@ public final class LiveRenderer {
             recoverEffects = stateful;
             int capacity = program.sources == null && !program.isTriggerSource ? MAX_VOICES : 0;
             voices = new ActiveVoice[capacity]; tails = new ActiveVoice[capacity];
-            events = new int[capacity]; data = new Event[capacity]; onsets = new double[capacity];
+            events = new int[capacity]; data = new Event[capacity]; onsets = new double[capacity]; hashes = new int[capacity];
+            planHashes = new int[scheduler == null && capacity > 0 ? plan.size() : 0];
+            for (int i = 0; i < planHashes.length; i++) planHashes[i] = plan.event(i).matchHash();
             if (program.sources != null) {
                 sources = new VoiceProgram[program.sources.length];
                 sourceStereo = new double[sources.length][2];
@@ -147,26 +150,26 @@ public final class LiveRenderer {
                 voices[i] = new ActiveVoice(); tails[i] = new ActiveVoice();
             }
         }
-        void candidate(int event, double onset, Event value) {
+        void candidate(int event, double onset, Event value, int hash) {
             int at = count;
             if (at == MAX_VOICES) {
                 at--;
                 if (onset <= onsets[at]) return;
             } else count++;
             while (at > 0 && onset > onsets[at - 1]) {
-                events[at] = events[at - 1]; data[at] = data[at - 1]; onsets[at] = onsets[at - 1]; at--;
+                events[at] = events[at - 1]; data[at] = data[at - 1]; onsets[at] = onsets[at - 1]; hashes[at] = hashes[at - 1]; at--;
             }
-            events[at] = event; data[at] = value; onsets[at] = onset;
+            events[at] = event; data[at] = value; onsets[at] = onset; hashes[at] = hash;
         }
     }
     private static final class ActiveVoice {
-        int event = -1, fadeFrame;
+        int event = -1, fadeFrame, hash;
         Event data;
         double onset, duration;
         boolean wanted;
         final VoiceDsp dsp = new VoiceDsp();
-        void start(Event e, int index, double cycle, double duration, groove.engine.samples.SamplePlayback sample) {
-            event = index; onset = cycle; fadeFrame = 0;
+        void start(Event e, int index, int hash, double cycle, double duration, groove.engine.samples.SamplePlayback sample) {
+            event = index; this.hash = hash; onset = cycle; fadeFrame = 0;
             data = e; this.duration = duration;
             dsp.start(e.tone(), sample, SAMPLE_RATE, duration);
         }
@@ -392,7 +395,7 @@ public final class LiveRenderer {
                 if (event.sample() != null && !event.sample().loop() && onset < program.state.anchorCycle()) continue;
                 double duration = entry.durationSeconds();
                 if (duration < 0) continue;
-                if ((cycles - onset) * secondsPerCycle < duration) program.candidate(entry.ordinal(), onset, event);
+                if ((cycles - onset) * secondsPerCycle < duration) program.candidate(entry.ordinal(), onset, event, entry.matchHash());
             }
         } else for (int i = 0; i < program.plan.size(); i++) {
             Event event = program.plan.event(i);
@@ -402,7 +405,7 @@ public final class LiveRenderer {
             if (duration < 0) continue;
             for (int overlap = 0; overlap < MAX_VOICES && (event.sample() != null && event.sample().loop() || onset >= program.state.anchorCycle()); overlap++, onset--) {
                 if ((cycles - onset) * secondsPerCycle >= duration) break;
-                program.candidate(i, onset, event);
+                program.candidate(i, onset, event, program.planHashes[i]);
             }
         }
         for (ActiveVoice v : program.voices) {
@@ -430,7 +433,7 @@ public final class LiveRenderer {
             double duration = eventDuration(program, event, secondsPerCycle);
             if (duration < 0) continue;
             for (ActiveVoice v : program.voices) if (v.event < 0) {
-                v.start(event, program.events[i], program.onsets[i], duration,
+                v.start(event, program.events[i], program.hashes[i], program.onsets[i], duration,
                         event.sample() == null ? null : program.samples.get(event.sample())); break;
             }
         }
@@ -478,8 +481,10 @@ public final class LiveRenderer {
     }
 
     private static boolean matches(ActiveVoice voice, VoiceProgram program, int index) {
-        if (voice.event < 0 || voice.event != program.events[index] || voice.onset != program.onsets[index]) return false;
+        if (voice.event < 0 || voice.event != program.events[index] || voice.onset != program.onsets[index]
+                || voice.hash != program.hashes[index]) return false;
         Event a = voice.data, b = program.data[index];
+        if (a == b) return true;
         return a.whole().equals(b.whole()) && java.util.Objects.equals(a.tone(), b.tone())
                 && java.util.Objects.equals(a.sample(), b.sample());
     }
