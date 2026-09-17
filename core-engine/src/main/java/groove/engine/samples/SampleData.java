@@ -26,6 +26,7 @@ public final class SampleData {
     public int frames() { return pcm.length / channels; }
     public long bytes() { long size = 0; for (float[] level : levels) size += level.length * 4L; return size; }
     public double duration() { return (double) frames() / rate; }
+    float[] pcm() { return pcm; }
     /** Exact PCM payload estimate, including all five levels; call before allocating a region. */
     public static long storageBytes(int frames, int channels) {
         if (frames < 1 || (channels != 1 && channels != 2) || (long)frames * channels > MAX_FLOATS)

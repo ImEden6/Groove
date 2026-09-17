@@ -108,6 +108,8 @@ public final class LookaheadScheduler {
                 if (!retainAllEvents) {
                     if (e.sample() == null) {
                         if (e.whole().end() <= base - 1) continue;
+                    } else if (e.sample().loop()) {
+                        if (e.whole().end() <= base - 1) continue;
                     } else {
                         double durationSec = entry.durationSeconds;
                         if (durationSec < 0) {

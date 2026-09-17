@@ -12,6 +12,10 @@ final class VoiceDsp {
     private final float[] stereoPcm = new float[2];
 
     void start(Tone tone, SamplePlayback sample, int sampleRate) {
+        start(tone, sample, sampleRate, sample != null ? sample.duration() : 0);
+    }
+
+    void start(Tone tone, SamplePlayback sample, int sampleRate, double duration) {
         if ((tone == null) == (sample == null)) throw new IllegalArgumentException("Expected one voice source");
         this.tone = tone; this.sample = sample;
         double cutoff = tone != null ? tone.cutoffHz() : sample.voice().cutoffHz();
@@ -32,7 +36,7 @@ final class VoiceDsp {
                 rightPan = Math.min(1, 1 + pan);
             }
             sampleGain = sample.voice().gain();
-            sampleDuration = sample.duration();
+            sampleDuration = sample.voice().loop() ? duration : sample.duration();
             sampleRateRatio = sample.pcm().rate() * sample.voice().pitchRatio();
             sampleStep = sampleRateRatio / sampleRate;
         }
@@ -44,19 +48,69 @@ final class VoiceDsp {
         if (sample != null) {
             double left = 0, right = 0;
             if (age >= 0 && age < sampleDuration) {
-                double envelope = Math.min(1, Math.min(age / .001, (sampleDuration - age) / .005));
-                double frame = age * sampleRateRatio;
-                if (sample.pcm().channels() == 1) {
-                    float val = sample.pcm().at(frame, 0, sampleStep);
-                    double v = val * sampleGain;
-                    left = (v * leftPan) * envelope;
-                    right = (v * rightPan) * envelope;
+                boolean loop = sample.voice().loop() && sample.geometry() != null && sample.geometry().looped();
+                double envelope = loop
+                        ? Math.min(1, Math.min(age / .001, (sampleDuration - age) / .020))
+                        : Math.min(1, Math.min(age / .001, (sampleDuration - age) / .005));
+                if (loop) {
+                    var geom = sample.geometry();
+                    double s = age * sampleRateRatio;
+                    int lePrime = geom.lePrime();
+                    int lsPrime = geom.lsPrime();
+                    int p = geom.period();
+                    int x = geom.fadeFrames();
+                    double u = s < lePrime ? s : lsPrime + (s - lsPrime) - p * Math.floor((s - lsPrime) / p);
+                    if (x > 0 && u >= lePrime - x && u < lePrime) {
+                        double w = (u - (lePrime - x)) / (double) x;
+                        double c = Math.cos(Math.PI * w * 0.5);
+                        double d = Math.sin(Math.PI * w * 0.5);
+                        double n = Math.sqrt(1.0 + 2.0 * geom.rho() * c * d);
+                        double a = c / n;
+                        double b = d / n;
+                        if (sample.pcm().channels() == 1) {
+                            float valA = sample.pcm().at(u, 0, sampleStep);
+                            float valB = sample.pcm().at(u - p, 0, sampleStep);
+                            double v = (a * valA + b * valB) * sampleGain;
+                            left = (v * leftPan) * envelope;
+                            right = (v * rightPan) * envelope;
+                        } else {
+                            sample.pcm().atStereo(u, sampleStep, stereoPcm);
+                            float u0 = stereoPcm[0], u1 = stereoPcm[1];
+                            sample.pcm().atStereo(u - p, sampleStep, stereoPcm);
+                            float up0 = stereoPcm[0], up1 = stereoPcm[1];
+                            double v0 = (a * u0 + b * up0) * sampleGain;
+                            double v1 = (a * u1 + b * up1) * sampleGain;
+                            left = (v0 * leftPan) * envelope;
+                            right = (v1 * rightPan) * envelope;
+                        }
+                    } else {
+                        if (sample.pcm().channels() == 1) {
+                            float val = sample.pcm().at(u, 0, sampleStep);
+                            double v = val * sampleGain;
+                            left = (v * leftPan) * envelope;
+                            right = (v * rightPan) * envelope;
+                        } else {
+                            sample.pcm().atStereo(u, sampleStep, stereoPcm);
+                            double v0 = stereoPcm[0] * sampleGain;
+                            double v1 = stereoPcm[1] * sampleGain;
+                            left = (v0 * leftPan) * envelope;
+                            right = (v1 * rightPan) * envelope;
+                        }
+                    }
                 } else {
-                    sample.pcm().atStereo(frame, sampleStep, stereoPcm);
-                    double v0 = stereoPcm[0] * sampleGain;
-                    double v1 = stereoPcm[1] * sampleGain;
-                    left = (v0 * leftPan) * envelope;
-                    right = (v1 * rightPan) * envelope;
+                    double frame = age * sampleRateRatio;
+                    if (sample.pcm().channels() == 1) {
+                        float val = sample.pcm().at(frame, 0, sampleStep);
+                        double v = val * sampleGain;
+                        left = (v * leftPan) * envelope;
+                        right = (v * rightPan) * envelope;
+                    } else {
+                        sample.pcm().atStereo(frame, sampleStep, stereoPcm);
+                        double v0 = stereoPcm[0] * sampleGain;
+                        double v1 = stereoPcm[1] * sampleGain;
+                        left = (v0 * leftPan) * envelope;
+                        right = (v1 * rightPan) * envelope;
+                    }
                 }
             }
             out[0] += leftFilter.process(left) * fade;

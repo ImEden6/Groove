@@ -11,10 +11,13 @@ public final class PreparedSamples {
     private final long bytes;
 
     public PreparedSamples(Map<AssetRef, SampleData> samples, Collection<SampleVoice> settings) {
-        this(samples, settings, MAX_BYTES);
+        this(samples, settings, MAX_BYTES, 48000);
+    }
+    public PreparedSamples(Map<AssetRef, SampleData> samples, Collection<SampleVoice> settings, long budget) {
+        this(samples, settings, budget, 48000);
     }
     /** Smaller budgets are useful for constrained hosts; the global maximum cannot be raised. */
-    public PreparedSamples(Map<AssetRef, SampleData> samples, Collection<SampleVoice> settings, long budget) {
+    public PreparedSamples(Map<AssetRef, SampleData> samples, Collection<SampleVoice> settings, long budget, int outputRate) {
         if (budget < 1 || budget > MAX_BYTES || settings.size() > MAX_VOICES || samples.size() > SampleCatalog.MAX_ASSETS)
             throw new IllegalArgumentException("Sample bank exceeds bounds");
         long used = 0;
@@ -44,16 +47,21 @@ public final class PreparedSamples {
                 }
                 regions.put(key, pcm);
             }
-            result.put(voice, new SamplePlayback(voice, pcm));
+            LoopGeometry geometry = LoopGeometry.resolve(pcm, voice, outputRate);
+            result.put(voice, new SamplePlayback(voice, pcm, geometry));
         }
         voices = Map.copyOf(result); bytes = used;
     }
     public SamplePlayback get(SampleVoice voice) { return voices.get(voice); }
+    public Map<SampleVoice, SamplePlayback> voices() { return voices; }
     /** Single source of truth for voice duration. Missing asset returns -1. */
     public double lifetimeSeconds(SampleVoice voice, double eventCycles, double secondsPerCycle) {
         if (voice == null) return -1;
         SamplePlayback playback = voices.get(voice);
         if (playback == null) return -1;
+        if (voice.loop()) {
+            return Math.min(eventCycles * secondsPerCycle, 40.0);
+        }
         return playback.duration();
     }
     /** PCM payload, including source arrays and every isolated region's prefiltered levels. */

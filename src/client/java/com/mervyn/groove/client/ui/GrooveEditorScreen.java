@@ -22,6 +22,10 @@ import com.mervyn.groove.music.MusicPackets;
 import com.mervyn.groove.music.GraphJson;
 import groove.engine.samples.SampleCatalog;
 import groove.engine.samples.AssetRef;
+import groove.engine.samples.LoopGeometry;
+import groove.engine.samples.SampleData;
+import groove.engine.samples.SampleVoice;
+import groove.engine.samples.SampleRegion;
 import net.fabricmc.fabric.api.client.networking.v1.ClientPlayNetworking;
 import net.minecraft.client.gui.components.EditBox;
 
@@ -307,6 +311,10 @@ public final class GrooveEditorScreen extends Screen {
             // against the old flat-fill inset used to sit right on top of it.
             graphics.drawString(font, font.plainSubstrByWidth(node.id(), 136), 8, 8, renderer.textColor(), false);
             graphics.drawString(font, font.plainSubstrByWidth(node.type().idStem(), 136), 8, 30, renderer.textColor(), false);
+            String nodeLoopMsg = loopStatus(node);
+            if (nodeLoopMsg != null) {
+                graphics.drawString(font, font.plainSubstrByWidth(nodeLoopMsg, 136), 8, 52, 0xffcc66, false);
+            }
             graphics.pose().popPose();
             for (var socket : node.type().outputPorts()) {
                 Vec2 port = state.toScreen(NodeGeometry.port(origin, node.type(), socket.name(), true));
@@ -369,7 +377,13 @@ public final class GrooveEditorScreen extends Screen {
                 graphics.drawString(font, font.plainSubstrByWidth(node.sample().assetId(), width - textX), textX, 46, textColor, false);
                 String status = MusicClient.sampleStatus().getOrDefault(node.sample(), SampleLibrary.catalog().status(node.sample()).name());
                 graphics.drawString(font, font.plainSubstrByWidth(status, width - textX), textX, 62, 0xffcc66, false);
-                graphics.drawString(font, "Drop a sample to replace", textX, 78, textColor, false);
+                String loopMsg = loopStatus(node);
+                if (loopMsg != null) {
+                    graphics.drawString(font, font.plainSubstrByWidth(loopMsg, width - textX), textX, 74, 0xffcc66, false);
+                    graphics.drawString(font, "Drop a sample to replace", textX, 86, textColor, false);
+                } else {
+                    graphics.drawString(font, "Drop a sample to replace", textX, 78, textColor, false);
+                }
                 if (!node.sample().equals(waveRef)) {
                     waveRef = node.sample(); waveform = null;
                     AssetRef ref = waveRef;
@@ -844,5 +858,34 @@ public final class GrooveEditorScreen extends Screen {
             case GLFW.GLFW_KEY_A -> InputController.Key.A;
             default -> null;
         });
+    }
+
+    public static String loopStatus(Graph.Node node) {
+        if (node == null || node.type() != NodeType.GENERATOR_SAMPLE || node.sample() == null) return null;
+        if (node.params().getOrDefault(NodeParam.LOOP, 0.0) != 1.0) return null;
+        if (SampleLibrary.catalog().status(node.sample()) != SampleCatalog.Status.READY) return null;
+        try {
+            SampleData data = SampleLibrary.resolve(node.sample());
+            int startFrame = (int) Math.round(node.params().getOrDefault(NodeParam.START_FRAME, 0.0));
+            int endFrame = (int) Math.round(node.params().getOrDefault(NodeParam.END_FRAME, 0.0));
+            boolean rev = Math.round(node.params().getOrDefault(NodeParam.REVERSE, 0.0)) == 1;
+            SampleRegion region = new SampleRegion(startFrame, endFrame, 1, 0, rev);
+            SampleVoice voice = new SampleVoice(node.sample(),
+                    node.params().getOrDefault(NodeParam.PITCH_RATIO, 1.0),
+                    node.params().getOrDefault(NodeParam.GAIN, 0.8),
+                    node.params().getOrDefault(NodeParam.PAN, 0.0),
+                    node.params().getOrDefault(NodeParam.CUTOFF_HZ, 20000.0),
+                    node.params().getOrDefault(NodeParam.RESONANCE_Q, groove.engine.Biquad.DEFAULT_Q),
+                    region,
+                    true,
+                    node.params().getOrDefault(NodeParam.LOOP_START, SampleVoice.DEFAULT_LOOP_START),
+                    node.params().getOrDefault(NodeParam.LOOP_END, SampleVoice.DEFAULT_LOOP_END),
+                    node.params().getOrDefault(NodeParam.LOOP_FADE_MS, SampleVoice.DEFAULT_LOOP_FADE_MS));
+            SampleData cropped = data.copyRegion(region.start(data), region.end(data), region.reverse());
+            LoopGeometry geom = LoopGeometry.resolve(cropped, voice, 48000);
+            if (geom.fallback()) return "Loop too short for this sample; playing one-shot";
+            if (geom.clamped()) return "Loop points moved inward to fit";
+        } catch (RuntimeException ignored) {}
+        return null;
     }
 }

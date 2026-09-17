@@ -110,7 +110,7 @@ public final class GraphJson {
                 var ids = new java.util.HashSet<String>();
                 for (var node : graph.nodes()) {
                     if (node.id() == null || !node.id().matches("[a-zA-Z0-9_-]{1,32}") || node.type() == null || !ids.add(node.id())) throw new IllegalArgumentException("Invalid draft node");
-                    int maxParams = node.type().isSignalNode() ? 16 : node.type() == NodeType.SCALE_SEQUENCE ? 12 : 8;
+                    int maxParams = node.type().isSignalNode() ? 16 : (node.type() == NodeType.SCALE_SEQUENCE || node.type() == NodeType.GENERATOR_SAMPLE) ? 12 : 8;
                     if (node.params().size() > maxParams || node.params().values().stream().anyMatch(v -> !Double.isFinite(v))) throw new IllegalArgumentException("Invalid draft parameters");
                 }
                 for (var edge : graph.edges()) if (!ids.contains(edge.fromNode()) || !ids.contains(edge.toNode()) || edge.fromPort() == null || edge.toPort() == null) throw new IllegalArgumentException("Invalid draft edge");

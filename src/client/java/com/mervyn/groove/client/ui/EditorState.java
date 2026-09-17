@@ -315,6 +315,27 @@ public final class EditorState {
                 else params.put(NodeParam.START_FRAME, Math.max(0, end - 1));
             }
         }
+        if (node.type() == NodeType.GENERATOR_SAMPLE && param.equals(NodeParam.LOOP)) {
+            double loopVal = params.getOrDefault(NodeParam.LOOP, 0.0);
+            if (loopVal == 1.0) {
+                params.putIfAbsent(NodeParam.LOOP_START, 0.25);
+                params.putIfAbsent(NodeParam.LOOP_END, 0.9);
+                params.putIfAbsent(NodeParam.LOOP_FADE_MS, 20.0);
+            } else {
+                params.remove(NodeParam.LOOP);
+                params.remove(NodeParam.LOOP_START);
+                params.remove(NodeParam.LOOP_END);
+                params.remove(NodeParam.LOOP_FADE_MS);
+            }
+        }
+        if (node.type() == NodeType.GENERATOR_SAMPLE && (param.equals(NodeParam.LOOP_START) || param.equals(NodeParam.LOOP_END))) {
+            double ls = params.getOrDefault(NodeParam.LOOP_START, 0.25);
+            double le = params.getOrDefault(NodeParam.LOOP_END, 0.9);
+            if (ls >= le) {
+                if (param.equals(NodeParam.LOOP_START)) params.put(NodeParam.LOOP_END, Math.min(1.0, ls + 0.001));
+                else params.put(NodeParam.LOOP_START, Math.max(0.0, le - 0.001));
+            }
+        }
         if (node.type() == NodeType.EUCLID && param.equals(NodeParam.STEPS)) {
             params.put(NodeParam.PULSES, Math.min(params.get(NodeParam.STEPS),
                     params.getOrDefault(NodeParam.PULSES, defaultParams(NodeType.EUCLID).get(NodeParam.PULSES))));
@@ -453,6 +474,10 @@ public final class EditorState {
             case NodeParam.GAIN -> Math.max(0.0, Math.min(1.0, value));
             case NodeParam.PAN -> Math.max(-1.0, Math.min(1.0, value));
             case NodeParam.PITCH_RATIO -> Math.max(0.25, Math.min(4.0, value));
+            case NodeParam.LOOP -> Math.max(0, Math.min(1, Math.rint(value)));
+            case NodeParam.LOOP_START -> Math.max(0.0, Math.min(1.0, value));
+            case NodeParam.LOOP_END -> Math.max(0.0, Math.min(1.0, value));
+            case NodeParam.LOOP_FADE_MS -> Math.max(0.0, Math.min(500.0, value));
             case NodeParam.WAVE -> Math.max(0.0, Math.min(2.0, Math.round(value)));
             case NodeParam.PULSE_WIDTH -> Math.max(0.01, Math.min(0.99, value));
             case NodeParam.FACTOR -> Math.max(.25, Math.min(16.0, Math.round(value * 100.0) / 100.0));
@@ -529,6 +554,19 @@ public final class EditorState {
     public static Map<String, Double> displayParams(Graph.Node node) {
         Map<String, Double> merged = new LinkedHashMap<>(defaultParams(node.type()));
         merged.putAll(node.params());
+        if (node.type() == NodeType.GENERATOR_SAMPLE) {
+            merged.putIfAbsent(NodeParam.LOOP, 0.0);
+            double loop = merged.get(NodeParam.LOOP);
+            if (loop == 1.0) {
+                merged.putIfAbsent(NodeParam.LOOP_START, 0.25);
+                merged.putIfAbsent(NodeParam.LOOP_END, 0.9);
+                merged.putIfAbsent(NodeParam.LOOP_FADE_MS, 20.0);
+            } else {
+                merged.remove(NodeParam.LOOP_START);
+                merged.remove(NodeParam.LOOP_END);
+                merged.remove(NodeParam.LOOP_FADE_MS);
+            }
+        }
         return merged;
     }
 

@@ -208,6 +208,62 @@ public final class BackendTests {
                         groove.engine.samples.FactorySamples.ref("factory:basic/kick.wav")),
                 new Graph.Node("out", NodeType.OUTPUT, java.util.Map.of())), java.util.List.of(Graph.edge("sample", "out")));
         check(GraphJson.decode(GraphJson.encode(filteredSample)).equals(filteredSample), "Sample cutoff/Q JSON round trip");
+
+        java.util.Map<String, Double> all12Params = java.util.Map.ofEntries(
+                java.util.Map.entry(NodeParam.PITCH_RATIO, 1.25),
+                java.util.Map.entry(NodeParam.GAIN, 0.75),
+                java.util.Map.entry(NodeParam.PAN, -0.2),
+                java.util.Map.entry(NodeParam.CUTOFF_HZ, 4500.0),
+                java.util.Map.entry(NodeParam.RESONANCE_Q, 1.8),
+                java.util.Map.entry(NodeParam.START_FRAME, 100.0),
+                java.util.Map.entry(NodeParam.END_FRAME, 2000.0),
+                java.util.Map.entry(NodeParam.REVERSE, 1.0),
+                java.util.Map.entry(NodeParam.LOOP, 1.0),
+                java.util.Map.entry(NodeParam.LOOP_START, 0.2),
+                java.util.Map.entry(NodeParam.LOOP_END, 0.8),
+                java.util.Map.entry(NodeParam.LOOP_FADE_MS, 35.0)
+        );
+        Graph loopGraph = new Graph(3, java.util.List.of(
+                new Graph.Node("sample", NodeType.GENERATOR_SAMPLE, all12Params,
+                        groove.engine.samples.FactorySamples.ref("factory:basic/kick.wav")),
+                new Graph.Node("out", NodeType.OUTPUT, java.util.Map.of())),
+                java.util.List.of(Graph.edge("sample", "out")));
+        GraphCompiler.compile(loopGraph);
+        Graph decodedLoop = GraphJson.decode(GraphJson.encode(loopGraph));
+        check(decodedLoop.equals(loopGraph), "12-key sample node JSON round trip");
+        Graph draftDecoded = GraphJson.decodeDraft(GraphJson.encode(loopGraph));
+        check(draftDecoded.equals(loopGraph), "12-key sample node draft decode round trip");
+
+        SessionState loopState = new SessionState(1, 0, 0, 120, true, loopGraph);
+        java.nio.file.Path tempDir = java.nio.file.Files.createTempDirectory("groove-loop-test");
+        try {
+            var saved = new SessionStore.Saved(loopGraph, 120);
+            SessionStore.write(tempDir, saved);
+            var loaded = SessionStore.read(tempDir);
+            check(loaded.equals(saved), "12-key sample node SessionStore round trip");
+        } finally {
+            java.nio.file.Files.deleteIfExists(tempDir.resolve(SessionStore.FILE));
+            java.nio.file.Files.deleteIfExists(tempDir);
+        }
+        MusicPackets.WireState wireState = new MusicPackets.WireState(loopState);
+        check(wireState.decode().equals(loopState), "12-key sample node MusicPackets WireState round trip");
+
+        Graph unloopedGraph = new Graph(3, java.util.List.of(
+                new Graph.Node("sample", NodeType.GENERATOR_SAMPLE, java.util.Map.of(
+                        NodeParam.PITCH_RATIO, 1.0,
+                        NodeParam.GAIN, 0.8,
+                        NodeParam.LOOP, 0.0,
+                        NodeParam.LOOP_START, 0.1,
+                        NodeParam.LOOP_END, 0.7
+                ), groove.engine.samples.FactorySamples.ref("factory:basic/kick.wav")),
+                new Graph.Node("out", NodeType.OUTPUT, java.util.Map.of())),
+                java.util.List.of(Graph.edge("sample", "out")));
+        var unloopedPlan = GraphCompiler.compile(unloopedGraph);
+        groove.engine.samples.SampleVoice compiledVoice = unloopedPlan.sampleVoices().iterator().next();
+        check(!compiledVoice.loop(), "Compiled voice has loop = false");
+        check(compiledVoice.loopStart() == groove.engine.samples.SampleVoice.DEFAULT_LOOP_START, "Default loopStart applied");
+        check(compiledVoice.loopEnd() == groove.engine.samples.SampleVoice.DEFAULT_LOOP_END, "Default loopEnd applied");
+        check(compiledVoice.loopFadeMs() == groove.engine.samples.SampleVoice.DEFAULT_LOOP_FADE_MS, "Default loopFadeMs applied");
         invalid(() -> GraphJson.decode("null"));
         invalid(() -> GraphJson.decode("[".repeat(17) + "]".repeat(17)));
         invalid(() -> GraphJson.decode(" ".repeat(GraphJson.MAX_LENGTH + 1)));

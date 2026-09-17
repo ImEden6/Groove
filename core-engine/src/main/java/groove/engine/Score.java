@@ -39,7 +39,7 @@ public final class Score {
         List<Event> events = pattern.query(new Arc(0, cycles));
         var voices = new HashSet<SampleVoice>();
         for (Event e : events) if (e.sample() != null && e.whole().start() >= 0 && e.whole().start() < cycles) voices.add(e.sample());
-        PreparedSamples bank = new PreparedSamples(Map.copyOf(samples), voices);
+        PreparedSamples bank = new PreparedSamples(Map.copyOf(samples), voices, PreparedSamples.MAX_BYTES, transport.sampleRate());
         List<Note> notes = new ArrayList<>();
         for (Event e : events) {
             // Continuations do not trigger a second attack.

@@ -18,6 +18,10 @@ public final class NodeParam {
     public static final String SLICES = "slices";
     public static final String INDEX = "index";
     public static final String REVERSE = "reverse";
+    public static final String LOOP = "loop";
+    public static final String LOOP_START = "loopStart";
+    public static final String LOOP_END = "loopEnd";
+    public static final String LOOP_FADE_MS = "loopFadeMs";
     public static final String FACTOR = "factor";
     public static final String STEPS = "steps";
     public static final String PULSES = "pulses";

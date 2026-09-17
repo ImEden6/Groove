@@ -19,6 +19,7 @@ public final class EngineTests {
         SampleRegionTests.run();
         ResamplerTests.run();
         SchedulerTests.run();
+        LoopTests.run();
         LimiterTests.run();
         PatternTests.run();
         GoldenTests.run();

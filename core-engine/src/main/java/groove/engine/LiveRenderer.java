@@ -52,8 +52,10 @@ public final class LiveRenderer {
                     double history = 0;
                     double secondsPerCycle = 240.0 / state.bpm();
                     for (var voice : plan.sampleVoices()) {
-                        double lifetime = preparedSamples.lifetimeSeconds(voice, 0, secondsPerCycle);
-                        if (lifetime > 0) history = Math.max(history, lifetime);
+                        if (!voice.loop()) {
+                            double lifetime = preparedSamples.lifetimeSeconds(voice, 0, secondsPerCycle);
+                            if (lifetime > 0) history = Math.max(history, lifetime);
+                        }
                     }
                     if (history > 40.0) history = 40.0;
                     final double spc = secondsPerCycle;
@@ -166,7 +168,7 @@ public final class LiveRenderer {
         void start(Event e, int index, double cycle, double duration, groove.engine.samples.SamplePlayback sample) {
             event = index; onset = cycle; fadeFrame = 0;
             data = e; this.duration = duration;
-            dsp.start(e.tone(), sample, SAMPLE_RATE);
+            dsp.start(e.tone(), sample, SAMPLE_RATE, duration);
         }
     }
     private static final int STEAL_FRAMES = 120;
@@ -179,8 +181,10 @@ public final class LiveRenderer {
     private boolean initialized;
     private long origin;
     private double elapsed;
+    private static final System.Logger LOGGER = System.getLogger("groove.engine.LiveRenderer");
     private volatile long resyncs, scheduleMisses;
     private volatile long historyFrames, historyRecoveries;
+    private volatile long loopFallbacks, loopClamps;
     private double fade;
     private Playback observed, previous;
     private double programBlend = 1;
@@ -192,13 +196,32 @@ public final class LiveRenderer {
      *  Superseded playback state is released after its crossfade, without a map lookup. */
     public void publish(Timeline value) {
         java.util.Objects.requireNonNull(value);
+        auditProgram(value.current());
+        if (value.pending() != null) auditProgram(value.pending());
         timeline = new Playback(new VoiceProgram(value.current()),
                 value.pending() == null ? null : new VoiceProgram(value.pending()));
     }
+
+    private void auditProgram(Program p) {
+        if (p == null || p.preparedSamples == null) return;
+        long fb = 0, cl = 0;
+        for (var sp : p.preparedSamples.voices().values()) {
+            if (sp.geometry() != null) {
+                if (sp.geometry().fallback()) fb++;
+                if (sp.geometry().clamped()) cl++;
+            }
+        }
+        loopFallbacks += fb;
+        loopClamps += cl;
+        LOGGER.log(System.Logger.Level.INFO, "Program loop statistics: fallbacks={0}, clamps={1}", fb, cl);
+    }
+
     public long resyncs() { return resyncs; }
     public long scheduleMisses() { return scheduleMisses; }
     public long historyFrames() { return historyFrames; }
     public long historyRecoveries() { return historyRecoveries; }
+    public long loopFallbacks() { return loopFallbacks; }
+    public long loopClamps() { return loopClamps; }
     /** Audio-owner call after an underrun; the next block rejoins the supplied playback time. */
     public void resynchronize() { initialized = false; elapsed = 0; fade = 0; resyncs++; }
 
@@ -347,7 +370,7 @@ public final class LiveRenderer {
                 Event event = entry.event();
                 double onset = event.whole().start();
                 if (onset > cycles) break;
-                if (event.sample() != null && onset < program.state.anchorCycle()) continue;
+                if (event.sample() != null && !event.sample().loop() && onset < program.state.anchorCycle()) continue;
                 double duration = entry.durationSeconds();
                 if (duration < 0) continue;
                 if ((cycles - onset) * secondsPerCycle < duration) program.candidate(entry.ordinal(), onset, event);
@@ -358,7 +381,7 @@ public final class LiveRenderer {
             if (onset > cycles) onset--;
             double duration = eventDuration(program, event, secondsPerCycle);
             if (duration < 0) continue;
-            for (int overlap = 0; overlap < MAX_VOICES && onset >= program.state.anchorCycle(); overlap++, onset--) {
+            for (int overlap = 0; overlap < MAX_VOICES && (event.sample() != null && event.sample().loop() || onset >= program.state.anchorCycle()); overlap++, onset--) {
                 if ((cycles - onset) * secondsPerCycle >= duration) break;
                 program.candidate(i, onset, event);
             }

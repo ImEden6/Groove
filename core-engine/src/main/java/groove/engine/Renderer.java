@@ -77,10 +77,10 @@ public final class Renderer {
             for (int i = 0; i < voices.length; i++) if (voices[i] == selected) { selected = retire(i); break; }
         }
         selected.note = note;
-        selected.duration = note.sample() == null ? (note.end() - note.start()) / (double)score.sampleRate() : note.sample().duration();
+        selected.duration = (note.end() - note.start()) / (double)score.sampleRate();
         selected.phase = 0;
         selected.increment = note.tone() == null ? 0 : note.tone().frequency() / score.sampleRate();
-        selected.dsp.start(note.tone(), note.sample(), score.sampleRate());
+        selected.dsp.start(note.tone(), note.sample(), score.sampleRate(), selected.duration);
     }
 
     private Voice retire(int slot) {

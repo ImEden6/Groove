@@ -52,7 +52,7 @@ public final class GraphCompiler {
             require(!node.type().isSignalNode(), "Signal node requires v3 routing");
             require(node.type() == NodeType.GENERATOR_SAMPLE ? graph.version() >= 2 && node.sample() != null : node.sample() == null,
                     "Sample reference requires a v2/v3 generator/sample node");
-            require(node.params().size() <= (node.type() == NodeType.SCALE_SEQUENCE ? 12 : 8), "Too many parameters");
+            require(node.params().size() <= (node.type() == NodeType.SCALE_SEQUENCE || node.type() == NodeType.GENERATOR_SAMPLE ? 12 : 8), "Too many parameters");
             inputs.put(node.id(), new ArrayList<>());
         }
         Set<Graph.Edge> unique = new HashSet<>();
@@ -86,7 +86,8 @@ public final class GraphCompiler {
         Set<String> allowed = switch (node.type()) {
             case TONE -> Set.of(NodeParam.FREQUENCY, NodeParam.GAIN, NodeParam.PAN, NodeParam.WAVE, NodeParam.CUTOFF_HZ, NodeParam.RESONANCE_Q, NodeParam.PULSE_WIDTH);
             case GENERATOR_SAMPLE -> Set.of(NodeParam.PITCH_RATIO, NodeParam.GAIN, NodeParam.PAN, NodeParam.CUTOFF_HZ, NodeParam.RESONANCE_Q,
-                    NodeParam.START_FRAME, NodeParam.END_FRAME, NodeParam.REVERSE);
+                    NodeParam.START_FRAME, NodeParam.END_FRAME, NodeParam.REVERSE,
+                    NodeParam.LOOP, NodeParam.LOOP_START, NodeParam.LOOP_END, NodeParam.LOOP_FADE_MS);
             case SAMPLE_SLICE -> Set.of(NodeParam.SLICES, NodeParam.INDEX, NodeParam.REVERSE);
             case FAST -> Set.of(NodeParam.FACTOR);
             case EUCLID -> Set.of(NodeParam.STEPS, NodeParam.PULSES, NodeParam.ROTATION);
@@ -117,12 +118,28 @@ public final class GraphCompiler {
                     number(node, NodeParam.GAIN, .25), number(node, NodeParam.PAN, 0), cutoffHz, number(node, NodeParam.RESONANCE_Q, Biquad.DEFAULT_Q), pulseWidth)), 1, frequency, frequency, false);
         }
         case GENERATOR_SAMPLE -> {
+            int loopInt = integer(node, NodeParam.LOOP, 0, 0, 1);
+            boolean loop = loopInt == 1;
+            double loopStart = number(node, NodeParam.LOOP_START, SampleVoice.DEFAULT_LOOP_START);
+            double loopEnd = number(node, NodeParam.LOOP_END, SampleVoice.DEFAULT_LOOP_END);
+            double loopFadeMs = number(node, NodeParam.LOOP_FADE_MS, SampleVoice.DEFAULT_LOOP_FADE_MS);
+            if (loop) {
+                require(loopStart >= 0.0 && loopStart <= 1.0, "loopStart must be 0..1");
+                require(loopEnd >= 0.0 && loopEnd <= 1.0, "loopEnd must be 0..1");
+                require(loopStart < loopEnd, "loopStart must be less than loopEnd");
+                require(loopFadeMs >= 0.0 && loopFadeMs <= 500.0, "loopFadeMs must be 0..500");
+            } else {
+                loopStart = SampleVoice.DEFAULT_LOOP_START;
+                loopEnd = SampleVoice.DEFAULT_LOOP_END;
+                loopFadeMs = SampleVoice.DEFAULT_LOOP_FADE_MS;
+            }
             SampleVoice voice = new SampleVoice(node.sample(),
                     number(node, NodeParam.PITCH_RATIO, 1), number(node, NodeParam.GAIN, .8), number(node, NodeParam.PAN, 0), number(node, NodeParam.CUTOFF_HZ, 20000),
                     number(node, NodeParam.RESONANCE_Q, Biquad.DEFAULT_Q), new SampleRegion(
                     integer(node, NodeParam.START_FRAME, 0, 0, groove.engine.samples.SampleData.MAX_FLOATS - 1),
                     integer(node, NodeParam.END_FRAME, 0, 0, groove.engine.samples.SampleData.MAX_FLOATS), 1, 0,
-                    integer(node, NodeParam.REVERSE, 0, 0, 1) == 1));
+                    integer(node, NodeParam.REVERSE, 0, 0, 1) == 1),
+                    loop, loopStart, loopEnd, loopFadeMs);
             yield new Compiled(Pattern.sample(voice), 1, Double.POSITIVE_INFINITY, 0, true, Set.of(voice));
         }
         case SAMPLE_SLICE -> {

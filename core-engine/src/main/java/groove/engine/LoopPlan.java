@@ -9,7 +9,7 @@ public final class LoopPlan {
     private final SignalGraph signals;
     private final int eventCost;
     private final java.util.Set<groove.engine.samples.SampleVoice> sampleVoices;
-    java.util.Set<groove.engine.samples.SampleVoice> sampleVoices() { return sampleVoices; }
+    public java.util.Set<groove.engine.samples.SampleVoice> sampleVoices() { return sampleVoices; }
     int eventCost() { return eventCost; }
     SignalGraph signals() { return signals; }
     LoopPlan withSignals(SignalGraph value) { return new LoopPlan(java.util.Arrays.asList(events), pattern, value, eventCost, sampleVoices); }
