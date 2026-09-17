@@ -143,7 +143,8 @@ public final class PerfBench {
             trialMedians.add(trialMedian);
 
             int n = trialMedians.size();
-            if (n >= 3) {
+            // Trial 0 runs while the JIT is still compiling, so it is never checked or pooled
+            if (n >= 4) {
                 double m1 = trialMedians.get(n - 3);
                 double m2 = trialMedians.get(n - 2);
                 double m3 = trialMedians.get(n - 1);
