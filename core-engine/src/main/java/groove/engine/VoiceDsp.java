@@ -7,14 +7,13 @@ final class VoiceDsp {
     private final Biquad leftFilter = new Biquad(), rightFilter = new Biquad();
     private Tone tone;
     private SamplePlayback sample;
-    private int sampleRate;
     private double leftPan, rightPan, increment;
     private double sampleGain, sampleDuration, sampleRateRatio, sampleStep;
     private final float[] stereoPcm = new float[2];
 
     void start(Tone tone, SamplePlayback sample, int sampleRate) {
         if ((tone == null) == (sample == null)) throw new IllegalArgumentException("Expected one voice source");
-        this.tone = tone; this.sample = sample; this.sampleRate = sampleRate;
+        this.tone = tone; this.sample = sample;
         double cutoff = tone != null ? tone.cutoffHz() : sample.voice().cutoffHz();
         double q = tone != null ? tone.resonanceQ() : sample.voice().resonanceQ();
         leftFilter.reset(); rightFilter.reset();
