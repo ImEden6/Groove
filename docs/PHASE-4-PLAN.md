@@ -575,8 +575,9 @@ not changed.
 
 Row sums ≤ 0.89 bound the loop's infinity-norm gain below 1 (small-gain theorem), so any
 difference between two listeners' states shrinks by at least 11% per trip around the shortest
-loop. Convergence time is therefore about `trips to −60 dB × loop length`, not T60 [R3, W8 from
-review 2].
+loop. Each trip scales a difference by the row sum, but the reverb's own state still needs its T60
+per 60 dB, so the bound is `T60 + trips × loop length` [R3, W8 from review 2]. Measured at
+implementation: with a 64-frame delay the trips term alone is 13 ms, while the tail took 2.1 s.
 
 ### 5f. Known limitations, documented
 
@@ -613,8 +614,9 @@ In `check`:
 - **Feedback convergence [R3]:** the accepted graph above at `decaySeconds = 2.5`, with delay lengths
   {64 frames, 0.5 s, 21,589 × 1.61285 frames (a tank loop length)}. Measured against peak output
   while input was present: after input stops, energy in successive 1 s windows strictly falls from
-  2 s on, and falls below −60 dB within the bound computed from the row sum. `reverbGuardHits == 0`.
-  Two runtimes started 1 s apart with different histories differ by < 1e-6 after that bound.
+  2 s on, and falls below −60 dB within `T60 + trips(−60 dB) × loop length`. `reverbGuardHits == 0`.
+  Two runtimes with different first-second histories differ by < 1e-6 within
+  `2·T60 + trips(1e-6) × loop length`.
 - **Headroom:** full-scale sine at the lowest tank resonance, `decaySeconds = 2.5`: tank state max
   < 1.
 - NaN, +Inf, −Inf inputs followed by normal input: output finite, recovers within `decaySeconds`.

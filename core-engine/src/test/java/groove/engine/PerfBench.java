@@ -9,7 +9,7 @@ import java.util.*;
 
 /**
  * Stage 4 baseline performance benchmark harness.
- * Measures scenarios B1..B5 with warmup convergence, pooled block timings,
+ * Measures scenarios B1..B7 with warmup convergence, pooled block timings,
  * real-time ratio, publish allocations, and system metadata.
  */
 public final class PerfBench {
@@ -42,10 +42,13 @@ public final class PerfBench {
 
         AssetRef kickRef = FactorySamples.ref("factory:basic/kick.wav");
         SampleData kickData = WavDecoder.decode(FactorySamples.bytes("factory:basic/kick.wav"));
+        AssetRef hatRef = FactorySamples.ref("factory:basic/hat.wav");
+        SampleData hatData = WavDecoder.decode(FactorySamples.bytes("factory:basic/hat.wav"));
         SampleData stereoData192k = createStereoSample192k();
 
         Map<AssetRef, SampleData> sampleBank = Map.of(
                 kickRef, kickData,
+                hatRef, hatData,
                 STEREO_REF_192K, stereoData192k);
 
         List<Scenario> scenarios = List.of(
@@ -53,10 +56,13 @@ public final class PerfBench {
                 new Scenario("B2", "32 mono sample voices at 1x", b2Graph(kickRef), sampleBank),
                 new Scenario("B3", "32 stereo sample voices at 15.996x", b3Graph(STEREO_REF_192K), sampleBank),
                 new Scenario("B4", "32 stereo sample voices at 16.000x", b4Graph(STEREO_REF_192K), sampleBank),
-                new Scenario("B5", "8 audio sources, filters, feedback delay", b5Graph(), Map.of()));
+                new Scenario("B5", "8 audio sources, filters, feedback delay", b5Graph(), Map.of()),
+                new Scenario("B6", "B5 plus 2 reverbs", b6Graph(), Map.of()),
+                new Scenario("B7", "32 sustained looped stereo voices at 4x", b7Graph(STEREO_REF_192K), sampleBank),
+                new Scenario("B7b", "112 hat one-shots per cycle beside one loop", b7DenseGraph(STEREO_REF_192K, hatRef), sampleBank));
 
         System.out.println("--------------------------------------------------------------------------------");
-        System.out.println("Running baseline scenarios B1..B5...");
+        System.out.println("Running scenarios B1..B7...");
         System.out.println("--------------------------------------------------------------------------------");
 
         List<Result> results = new ArrayList<>();
@@ -115,6 +121,8 @@ public final class PerfBench {
             benchRenderer.resynchronize();
 
             for (int b = 0; b < BLOCKS_PER_TRIAL; b++) {
+                // Worker-thread work, so it stays outside the timed render
+                timeline.prepare(targetNanos);
                 long t0 = System.nanoTime();
                 benchRenderer.render(blockBuf, BLOCK_FRAMES, targetNanos);
                 long elapsed = System.nanoTime() - t0;
@@ -125,6 +133,8 @@ public final class PerfBench {
             double[] sorted = blockTimes.clone();
             Arrays.sort(sorted);
             double trialMedian = sorted[BLOCKS_PER_TRIAL / 2];
+            if (benchRenderer.scheduleMisses() > 0)
+                throw new IllegalStateException(scenario.id() + " missed " + benchRenderer.scheduleMisses() + " schedule windows");
 
             trialBlockTimes.add(blockTimes);
             trialMedians.add(trialMedian);
@@ -403,5 +413,74 @@ public final class PerfBench {
             edges.add(Graph.edge(filterId, "mix"));
         }
         return new Graph(3, nodes, edges);
+    }
+
+    // B6: B5 with a short and a long reverb in parallel after the feedback mix
+    private static Graph b6Graph() {
+        Graph b5 = b5Graph();
+        List<Graph.Node> nodes = new ArrayList<>(b5.nodes());
+        List<Graph.Edge> edges = new ArrayList<>(b5.edges());
+        edges.remove(new Graph.Edge("mix", "out", "out", "audio"));
+        nodes.add(new Graph.Node("room", NodeType.REVERB, Map.of(NodeParam.DECAY_SECONDS, 0.6, NodeParam.DAMPING_HZ, 8000.0)));
+        nodes.add(new Graph.Node("hall", NodeType.REVERB, Map.of(NodeParam.DECAY_SECONDS, 2.5, NodeParam.PRE_DELAY_MS, 20.0)));
+        nodes.add(new Graph.Node("master", NodeType.MIX_BUS, Map.of(NodeParam.GAIN, 0.5)));
+        edges.add(Graph.edge("mix", "room"));
+        edges.add(Graph.edge("mix", "hall"));
+        edges.add(Graph.edge("mix", "master"));
+        edges.add(Graph.edge("room", "master"));
+        edges.add(Graph.edge("hall", "master"));
+        edges.add(new Graph.Edge("master", "out", "out", "audio"));
+        return new Graph(3, nodes, edges);
+    }
+
+    // B7: 32 sustained looped stereo voices at 4x
+    private static Graph b7Graph(AssetRef stereoRef192k) {
+        List<Graph.Node> nodes = new ArrayList<>();
+        List<Graph.Edge> edges = new ArrayList<>();
+        nodes.add(new Graph.Node("stack1", NodeType.STACK, Map.of()));
+        nodes.add(new Graph.Node("stack2", NodeType.STACK, Map.of()));
+        nodes.add(new Graph.Node("mix", NodeType.STACK, Map.of()));
+        nodes.add(new Graph.Node("out", NodeType.OUTPUT, Map.of()));
+        edges.add(Graph.edge("stack1", "mix"));
+        edges.add(Graph.edge("stack2", "mix"));
+        edges.add(Graph.edge("mix", "out"));
+
+        for (int i = 0; i < 32; i++) {
+            String id = "loop" + i;
+            nodes.add(new Graph.Node(id, NodeType.GENERATOR_SAMPLE, loopParams(1.0 + i * 0.01, 0.8 / 32), stereoRef192k));
+            edges.add(Graph.edge(id, i < 16 ? "stack1" : "stack2"));
+        }
+        return new Graph(2, nodes, edges);
+    }
+
+    // B7b: 7 hats at 16 per cycle beside one sustained loop
+    private static Graph b7DenseGraph(AssetRef stereoRef192k, AssetRef hatRef) {
+        List<Graph.Node> nodes = new ArrayList<>();
+        List<Graph.Edge> edges = new ArrayList<>();
+        nodes.add(new Graph.Node("mix", NodeType.STACK, Map.of()));
+        nodes.add(new Graph.Node("out", NodeType.OUTPUT, Map.of()));
+        edges.add(Graph.edge("mix", "out"));
+        nodes.add(new Graph.Node("loop", NodeType.GENERATOR_SAMPLE, loopParams(1.0, 0.3), stereoRef192k));
+        edges.add(Graph.edge("loop", "mix"));
+        for (int i = 0; i < 7; i++) {
+            String hat = "hat" + i, fast = "fast" + i;
+            nodes.add(new Graph.Node(hat, NodeType.GENERATOR_SAMPLE, Map.of(
+                    NodeParam.PITCH_RATIO, 1.0 + i * 0.1,
+                    NodeParam.GAIN, 0.4 / 7), hatRef));
+            nodes.add(new Graph.Node(fast, NodeType.FAST, Map.of(NodeParam.FACTOR, 16.0)));
+            edges.add(Graph.edge(hat, fast));
+            edges.add(Graph.edge(fast, "mix"));
+        }
+        return new Graph(2, nodes, edges);
+    }
+
+    private static Map<String, Double> loopParams(double pitchRatio, double gain) {
+        return Map.of(
+                NodeParam.PITCH_RATIO, pitchRatio,
+                NodeParam.GAIN, gain,
+                NodeParam.LOOP, 1.0,
+                NodeParam.LOOP_START, 0.25,
+                NodeParam.LOOP_END, 0.9,
+                NodeParam.LOOP_FADE_MS, 20.0);
     }
 }

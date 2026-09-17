@@ -3,6 +3,8 @@ package groove.engine;
 import java.util.*;
 
 final class ReverbTests {
+    // Figure-eight tank loop, 21,589 frames at 29,761 Hz
+    private static final double TANK_LOOP_FRAMES = 21589 * 48000.0 / 29761;
     private static int checks;
 
     static void run() {
@@ -251,36 +253,42 @@ final class ReverbTests {
     }
 
     private static void nanInfRecovery() {
-        Reverb rev = new Reverb();
-        rev.setParams(1.0, 6000.0, 12000.0, 0.0);
-        double[] out = new double[2];
-        rev.process(Double.NaN, 0, out);
-        check(Double.isFinite(out[0]) && Double.isFinite(out[1]), "NaN input handled");
-        rev.process(Double.POSITIVE_INFINITY, 1, out);
-        check(Double.isFinite(out[0]) && Double.isFinite(out[1]), "+Inf input handled");
-        rev.process(Double.NEGATIVE_INFINITY, 2, out);
-        check(Double.isFinite(out[0]) && Double.isFinite(out[1]), "-Inf input handled");
-
-        // Run normal input and verify recovery
-        for (int i = 3; i < 3 * 48000; i++) {
-            rev.process(0.0, i, out);
-            check(Double.isFinite(out[0]) && Double.isFinite(out[1]), "Finite output during recovery");
+        // Non-finite input counts as silence, and the damage is gone within decaySeconds
+        double decay = 1.0;
+        int bad = 4800, frames = bad + (int) (decay * 48000) + 4800;
+        Reverb hit = new Reverb(), silenced = new Reverb(), clean = new Reverb();
+        for (Reverb r : List.of(hit, silenced, clean)) r.setParams(decay, 6000.0, 12000.0, 0.0);
+        double[] a = new double[2], b = new double[2], c = new double[2];
+        double[] poison = {Double.NaN, Double.POSITIVE_INFINITY, Double.NEGATIVE_INFINITY};
+        double peak = 0.0, lateDiff = 0.0;
+        for (int i = 0; i < frames; i++) {
+            double x = Math.sin(0.03 * i);
+            boolean poisoned = i >= bad && i < bad + poison.length;
+            hit.process(poisoned ? poison[i - bad] : x, i, a);
+            silenced.process(poisoned ? 0.0 : x, i, b);
+            clean.process(x, i, c);
+            check(Double.isFinite(a[0]) && Double.isFinite(a[1]), "Finite output around non-finite input at frame " + i);
+            check(a[0] == b[0] && a[1] == b[1], "Non-finite input behaves as silence at frame " + i);
+            peak = Math.max(peak, Math.max(Math.abs(c[0]), Math.abs(c[1])));
+            if (i >= bad + decay * 48000)
+                lateDiff = Math.max(lateDiff, Math.max(Math.abs(a[0] - c[0]), Math.abs(a[1] - c[1])));
         }
-        check(Math.abs(out[0]) < 1e-6 && Math.abs(out[1]) < 1e-6, "Recovered to silence after tail");
+        check(lateDiff < peak * 1e-3, "Recovers to within -60 dB of a clean run after decaySeconds: " + lateDiff + " / " + peak);
     }
 
     private static void headroom() {
-        // Full-scale sine at lowest tank resonance (~1.38 Hz or 200 Hz), decaySeconds = 2.5
+        // Full-scale sine at the lowest tank resonance: one trip round the figure-eight
         Reverb rev = new Reverb();
         rev.setParams(2.5, 20000.0, 20000.0, 0.0);
+        rev.setModulation(false);
+        double omega = 2.0 * Math.PI / TANK_LOOP_FRAMES;
         double[] out = new double[2];
-        double omega = 2.0 * Math.PI * 200.0 / 48000.0;
-        double maxOut = 0.0;
-        for (int i = 0; i < 96000; i++) {
+        double tankMax = 0.0;
+        for (int i = 0; i < 48000 * 10; i++) {
             rev.process(Math.sin(omega * i), i, out);
-            maxOut = Math.max(maxOut, Math.max(Math.abs(out[0]), Math.abs(out[1])));
+            if (i % 64 == 0) tankMax = Math.max(tankMax, rev.tankPeak());
         }
-        check(maxOut < 8.0, "Steady state output bounded away from guard");
+        check(tankMax < 1.0, "Tank state stays below 1 at the lowest resonance: " + tankMax);
     }
 
     private static void blockIndependence() {
@@ -478,6 +486,8 @@ final class ReverbTests {
 
     /** delay, reverb, mix_bus(0.5) loop with a short, a 0.5 s and a tank-length delay. */
     static void feedbackConvergence(double decay) {
+        // Row sum of the loop-gain matrix for this graph: mix_bus 0.5 times reverb bound 0.95
+        double rowSum = 0.5 * 0.95;
         for (int delayFrames : List.of(64, 24000, 34819)) {
             Graph g = new Graph(3, List.of(
                     new Graph.Node("tone", NodeType.TONE, Map.of()),
@@ -496,35 +506,45 @@ final class ReverbTests {
             ));
             LoopPlan plan = GraphCompiler.compile(g);
             SessionState st = new SessionState(0L, 0L, 0.0, 120.0, true, g);
-            SignalRuntime rt = plan.signals().runtime(st);
-            double[] stereo = new double[2];
-
-            // 1 second of input
-            double peakDuringInput = 0.0;
-            for (int i = 0; i < 48000; i++) {
-                stereo[0] = Math.sin(0.1 * i); stereo[1] = Math.sin(0.1 * i);
-                rt.process(stereo, i * 20833L);
-                peakDuringInput = Math.max(peakDuringInput, Math.max(Math.abs(stereo[0]), Math.abs(stereo[1])));
-            }
-
-            // After input stops, verify energy strictly falls in successive 1s windows and reverbGuardHits == 0
-            double prevEnergy = Double.MAX_VALUE;
-            double lastEnergy = 0.0;
-            for (int window = 2, last = 2 + (int) Math.ceil(1.6 * decay); window <= last; window++) {
-                double windowEnergy = 0.0;
-                for (int i = 0; i < 48000; i++) {
-                    stereo[0] = 0.0; stereo[1] = 0.0;
-                    long nanos = (window * 48000L + i) * 20833L;
-                    rt.process(stereo, nanos);
-                    windowEnergy += stereo[0] * stereo[0] + stereo[1] * stereo[1];
+            // The second listener heard noise for its first second instead of the sine
+            SignalRuntime rt = plan.signals().runtime(st), other = plan.signals().runtime(st);
+            double loopSeconds = delayFrames / 48000.0;
+            // Reverb state needs a T60 per 60 dB, and each trip round the loop scales by rowSum
+            double quietBound = decay + Math.ceil(Math.log(1e-3) / Math.log(rowSum)) * loopSeconds;
+            double matchBound = 2 * decay + Math.ceil(Math.log(1e-6) / Math.log(rowSum)) * loopSeconds;
+            int inputEnd = 96000, frames = inputEnd + (int) (48000 * (Math.max(quietBound, matchBound) + 1));
+            double[] a = new double[2], b = new double[2];
+            Random rng = new Random(7);
+            double peak = 0.0, lastLoud = 0.0, lastDiff = 0.0, windowEnergy = 0.0, prevEnergy = Double.MAX_VALUE;
+            for (int i = 0; i < frames; i++) {
+                double shared = i >= 48000 && i < inputEnd ? Math.sin(0.1 * i) : 0.0;
+                a[0] = a[1] = i < 48000 ? Math.sin(0.05 * i) : shared;
+                b[0] = b[1] = i < 48000 ? rng.nextDouble() * 2 - 1 : shared;
+                long nanos = Math.round(i * 1e9 / 48000);
+                rt.process(a, nanos);
+                other.process(b, nanos);
+                if (i < inputEnd) {
+                    peak = Math.max(peak, Math.max(Math.abs(a[0]), Math.abs(a[1])));
+                    continue;
                 }
-                check(windowEnergy < prevEnergy, "Feedback energy strictly falls from 2s on for delay " + delayFrames);
-                prevEnergy = windowEnergy;
-                lastEnergy = windowEnergy;
+                double t = (i - inputEnd) / 48000.0;
+                if (Math.max(Math.abs(a[0]), Math.abs(a[1])) > peak * 1e-3) lastLoud = t;
+                if (Math.max(Math.abs(a[0] - b[0]), Math.abs(a[1] - b[1])) >= 1e-6) lastDiff = t;
+                windowEnergy += a[0] * a[0] + a[1] * a[1];
+                if ((i - inputEnd + 1) % 48000 == 0) {
+                    if (windowEnergy > 1e-24)
+                        check(windowEnergy < prevEnergy, "Feedback energy strictly falls each second for delay " + delayFrames);
+                    prevEnergy = windowEnergy;
+                    windowEnergy = 0.0;
+                }
             }
-            check(rt.reverbGuardHits() == 0, "No reverbGuardHits during feedback loop");
-            double relativeDb = 10.0 * Math.log10(lastEnergy / (peakDuringInput * peakDuringInput * 48000.0) + 1e-30);
-            check(relativeDb < -60.0, "Falls below -60 dB: " + relativeDb + " dB");
+            check(rt.reverbGuardHits() == 0 && other.reverbGuardHits() == 0, "No reverbGuardHits during feedback loop");
+            check(lastLoud <= quietBound, String.format(Locale.ROOT,
+                    "Delay %d falls below -60 dB after %.2f s (bound %.2f s)", delayFrames, lastLoud, quietBound));
+            check(lastDiff <= matchBound, String.format(Locale.ROOT,
+                    "Delay %d listeners match within 1e-6 after %.2f s (bound %.2f s)", delayFrames, lastDiff, matchBound));
+            System.out.printf(Locale.ROOT, "Reverb loop delay %d: -60 dB after %.2f s (bound %.2f), match after %.2f s (bound %.2f)%n",
+                    delayFrames, lastLoud, quietBound, lastDiff, matchBound);
         }
     }
 

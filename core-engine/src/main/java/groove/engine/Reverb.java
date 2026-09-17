@@ -371,6 +371,15 @@ public final class Reverb {
         outLR[1] = kOut * tapR;
     }
 
+    /** Largest magnitude held in the tank, for headroom tests. Scans buffers, so never call per frame. */
+    double tankPeak() {
+        double peak = 0.0;
+        for (double[] buf : new double[][]{modA1Buffer, delA1Buffer, apA2Buffer, delA2Buffer,
+                modB1Buffer, delB1Buffer, apB2Buffer, delB2Buffer})
+            for (double v : buf) peak = Math.max(peak, Math.abs(v));
+        return Math.max(peak, Math.max(Math.abs(outA), Math.abs(outB)));
+    }
+
     private static double tapRead(double[] buf, int cursor, int delay, int length) {
         int idx = cursor - delay;
         if (idx < 0) {

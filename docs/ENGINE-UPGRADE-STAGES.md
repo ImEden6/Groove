@@ -347,12 +347,25 @@ Stage 3 adds automated build targets and offline demonstration scripts:
 
 Measured with `./gradlew :core-engine:perfBench` (forked JVM `-Xms1g -Xmx1g -XX:+AlwaysPreTouch`, GC logging enabled, block budget 10.67 ms for 512 frames @ 48 kHz). Each trial renders 2,000 blocks; warmed until 3 consecutive trial medians agree within 5%. Statistics pooled from the warmed trials.
 
+The first recorded table (step 1) never called `Timeline.prepare`, so the renderer missed nearly
+every schedule window and most timed blocks were silent. `perfBench` now prepares each block
+outside the timed render and fails on any schedule miss. Results from 2026-09-17:
+
 | Id | Scenario | Median (ms) | p99 (ms) | Max (ms) | RT Ratio | Publish Alloc (B) | Status |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| B1 | 32 tone voices (saw, pulse) | 0.0054 | 8.6671 | 14.6357 | 0.0005 | 62,480 | settled |
-| B2 | 32 mono sample voices at 1x | 0.0054 | 5.3296 | 8.1844 | 0.0005 | 18,920 | settled |
-| B3 | 32 stereo sample voices at 15.996x | 0.0054 | 22.9658 | 47.5104 | 0.0005 | 18,920 | settled |
-| B4 | 32 stereo sample voices at 16.000x | 0.0054 | 15.6473 | 27.0272 | 0.0005 | 18,920 | settled |
-| B5 | 8 audio sources, filters, feedback delay | 0.0078 | 3.9526 | 10.0197 | 0.0007 | 393,336 | settled |
+| B1 | 32 tone voices (saw, pulse) | 36.6312 | 58.9731 | 127.4292 | 3.4331 | 922,136 | unsettled |
+| B2 | 32 mono sample voices at 1x | 0.5350 | 15.6610 | 34.0821 | 0.0501 | 32,408 | settled |
+| B3 | 32 stereo sample voices at 15.996x | 0.5298 | 25.5192 | 86.6124 | 0.0497 | 32,472 | settled |
+| B4 | 32 stereo sample voices at 16.000x | 0.5198 | 19.6793 | 47.2486 | 0.0487 | 32,408 | settled |
+| B5 | 8 audio sources, filters, feedback delay | 4.3501 | 8.1237 | 21.8220 | 0.4077 | 465,328 | settled |
+| B6 | B5 plus 2 reverbs | 4.8039 | 7.9345 | 16.2847 | 0.4502 | 1,375,448 | settled |
+| B7 | 32 sustained looped stereo voices at 4x | 52.6526 | 75.8375 | 209.6801 | 4.9346 | 33,144 | unsettled |
+| B7b | 112 hat one-shots per cycle beside one loop | 5.0124 | 13.9144 | 34.5726 | 0.4698 | 33,248 | unsettled |
+
+B2 to B4 medians are low because the one-shots finish early in each 2 s cycle; their p99 is the
+playing cost. B1 and B7 run slower than real time. A standalone B1 render takes about 7 ms per block
+for its first 4 s, then about 16 ms, and a fresh renderer in the same process stays at 16 ms, so the
+slowdown is not renderer state. CPU throttling on the Balanced plan or JIT recompilation are the
+remaining suspects; not yet investigated.
 
 
