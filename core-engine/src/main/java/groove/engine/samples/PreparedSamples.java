@@ -49,6 +49,13 @@ public final class PreparedSamples {
         voices = Map.copyOf(result); bytes = used;
     }
     public SamplePlayback get(SampleVoice voice) { return voices.get(voice); }
+    /** Single source of truth for voice duration. Missing asset returns -1. */
+    public double lifetimeSeconds(SampleVoice voice, double eventCycles, double secondsPerCycle) {
+        if (voice == null) return -1;
+        SamplePlayback playback = voices.get(voice);
+        if (playback == null) return -1;
+        return playback.duration();
+    }
     /** PCM payload, including source arrays and every isolated region's prefiltered levels. */
     public long bytes() { return bytes; }
 }

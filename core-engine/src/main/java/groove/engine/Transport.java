@@ -8,7 +8,8 @@ public record Transport(int sampleRate, double bpm, int beatsPerCycle) {
             throw new IllegalArgumentException("Invalid transport");
     }
 
-    public double framesPerCycle() { return sampleRate * 60.0 * beatsPerCycle / bpm; }
+    public double secondsPerCycle() { return 60.0 * beatsPerCycle / bpm; }
+    public double framesPerCycle() { return sampleRate * secondsPerCycle(); }
     public long frameAt(double cycle) {
         double frame = cycle * framesPerCycle();
         if (!Double.isFinite(frame) || Math.abs(frame) >= Long.MAX_VALUE)

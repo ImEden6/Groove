@@ -50,7 +50,8 @@ public final class Score {
             SamplePlayback sample = e.sample() == null ? null : bank.get(e.sample());
             if (e.sample() != null && sample == null) throw new IllegalArgumentException("Missing offline sample: " + e.sample().asset().assetId());
             if (sample != null) sample.validateOutputRate(transport.sampleRate());
-            long end = sample == null ? transport.frameAt(e.whole().end()) : start + (long)Math.ceil(sample.duration() * transport.sampleRate());
+            long end = sample == null ? transport.frameAt(e.whole().end())
+                    : start + (long)Math.ceil(bank.lifetimeSeconds(e.sample(), e.whole().end() - e.whole().start(), transport.secondsPerCycle()) * transport.sampleRate());
             if (end > start) notes.add(new Note(start, end, e.tone(), sample));
             if (notes.size() > 100_000) throw new IllegalArgumentException("Too many scheduled notes");
         }

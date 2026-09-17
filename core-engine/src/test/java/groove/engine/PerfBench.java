@@ -3,10 +3,12 @@ package groove.engine;
 import groove.engine.samples.*;
 import java.lang.management.GarbageCollectorMXBean;
 import java.lang.management.ManagementFactory;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.*;
 
 /**
- * Stage 4 baseline performance benchmark harness (Step 1a & 1b).
+ * Stage 4 baseline performance benchmark harness.
  * Measures scenarios B1..B5 with warmup convergence, pooled block timings,
  * real-time ratio, publish allocations, and system metadata.
  */
@@ -18,8 +20,7 @@ public final class PerfBench {
 
     private static final AssetRef STEREO_REF_192K = new AssetRef(
             "custom:perf_stereo_192k.wav",
-            "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789"
-    );
+            "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789");
 
     private static SampleData createStereoSample192k() {
         int rate = 192000;
@@ -33,7 +34,8 @@ public final class PerfBench {
         return new SampleData(rate, 2, pcm);
     }
 
-    private record Scenario(String id, String description, Graph graph, Map<AssetRef, SampleData> sampleBank) {}
+    private record Scenario(String id, String description, Graph graph, Map<AssetRef, SampleData> sampleBank) {
+    }
 
     public static void main(String[] args) {
         printSystemInfo();
@@ -44,16 +46,14 @@ public final class PerfBench {
 
         Map<AssetRef, SampleData> sampleBank = Map.of(
                 kickRef, kickData,
-                STEREO_REF_192K, stereoData192k
-        );
+                STEREO_REF_192K, stereoData192k);
 
         List<Scenario> scenarios = List.of(
                 new Scenario("B1", "32 tone voices (saw, pulse)", b1Graph(), Map.of()),
                 new Scenario("B2", "32 mono sample voices at 1x", b2Graph(kickRef), sampleBank),
                 new Scenario("B3", "32 stereo sample voices at 15.996x", b3Graph(STEREO_REF_192K), sampleBank),
                 new Scenario("B4", "32 stereo sample voices at 16.000x", b4Graph(STEREO_REF_192K), sampleBank),
-                new Scenario("B5", "8 audio sources, filters, feedback delay", b5Graph(), Map.of())
-        );
+                new Scenario("B5", "8 audio sources, filters, feedback delay", b5Graph(), Map.of()));
 
         System.out.println("--------------------------------------------------------------------------------");
         System.out.println("Running baseline scenarios B1..B5...");
@@ -80,8 +80,8 @@ public final class PerfBench {
             double maxBlockMs,
             double realTimeRatio,
             long gcCollections,
-            long gcTimeMs
-    ) {}
+            long gcTimeMs) {
+    }
 
     private static Result runScenario(Scenario scenario) {
         SessionState state = new SessionState(1, 0, 0, 120, true, scenario.graph());
@@ -179,8 +179,7 @@ public final class PerfBench {
                 max,
                 rtRatio,
                 gcCollections,
-                gcTimeMs
-        );
+                gcTimeMs);
     }
 
     private static void printResult(Result r) {
@@ -188,7 +187,8 @@ public final class PerfBench {
         System.out.printf("  Status:          %s (%d trials)%n", r.status(), r.trialsRun());
         System.out.printf("  Publish alloc:   %,d bytes%n", r.publishAllocBytes());
         System.out.printf("  Median block:    %.4f ms (budget: %.2f ms)%n", r.medianBlockMs(), BLOCK_BUDGET_MS);
-        System.out.printf("  Real-time ratio: %.4fx (%.1fx faster than real-time)%n", r.realTimeRatio(), 1.0 / r.realTimeRatio());
+        System.out.printf("  Real-time ratio: %.4fx (%.1fx faster than real-time)%n", r.realTimeRatio(),
+                1.0 / r.realTimeRatio());
         System.out.printf("  p99 block:       %.4f ms%n", r.p99BlockMs());
         System.out.printf("  Max block:       %.4f ms%n", r.maxBlockMs());
         System.out.printf("  GC Pauses:       %d collections, %d ms%n%n", r.gcCollections(), r.gcTimeMs());
@@ -198,7 +198,8 @@ public final class PerfBench {
         System.out.println("================================================================================");
         System.out.println("SUMMARY BASELINE TABLE (for docs/ENGINE-UPGRADE-STAGES.md):");
         System.out.println("================================================================================");
-        System.out.println("| Id | Scenario | Median (ms) | p99 (ms) | Max (ms) | RT Ratio | Publish Alloc (B) | Status |");
+        System.out.println(
+                "| Id | Scenario | Median (ms) | p99 (ms) | Max (ms) | RT Ratio | Publish Alloc (B) | Status |");
         System.out.println("| --- | --- | --- | --- | --- | --- | --- | --- |");
         for (Result r : results) {
             System.out.printf(Locale.ROOT, "| %s | %s | %.4f | %.4f | %.4f | %.4f | %,d | %s |%n",
@@ -213,8 +214,10 @@ public final class PerfBench {
         System.out.println("Groove Engine Performance Benchmark (perfBench)");
         System.out.println("================================================================================");
         System.out.println("System Information:");
-        System.out.printf("  JDK:            %s (%s)%n", System.getProperty("java.runtime.version"), System.getProperty("java.vm.vendor"));
-        System.out.printf("  OS:             %s %s (%s)%n", System.getProperty("os.name"), System.getProperty("os.version"), System.getProperty("os.arch"));
+        System.out.printf("  JDK:            %s (%s)%n", System.getProperty("java.runtime.version"),
+                System.getProperty("java.vm.vendor"));
+        System.out.printf("  OS:             %s %s (%s)%n", System.getProperty("os.name"),
+                System.getProperty("os.version"), System.getProperty("os.arch"));
         System.out.printf("  CPU Model:      %s%n", getCpuModel());
         System.out.printf("  Logical Cores:  %d%n", Runtime.getRuntime().availableProcessors());
         System.out.printf("  Power Plan:     %s%n", getWindowsPowerPlan());
@@ -234,14 +237,16 @@ public final class PerfBench {
                         return line.substring(line.indexOf(':') + 1).trim();
                     }
                 }
-            } catch (Exception ignored) {}
+            } catch (Exception ignored) {
+            }
         }
         return "unknown";
     }
 
     private static String getWindowsPowerPlan() {
         String os = System.getProperty("os.name", "").toLowerCase(Locale.ROOT);
-        if (!os.contains("win")) return "N/A";
+        if (!os.contains("win"))
+            return "N/A";
         try {
             Process p = new ProcessBuilder("powercfg", "/getactivescheme").start();
             try (var scanner = new Scanner(p.getInputStream())) {
@@ -249,7 +254,8 @@ public final class PerfBench {
                     return scanner.nextLine().trim();
                 }
             }
-        } catch (Exception ignored) {}
+        } catch (Exception ignored) {
+        }
         return "unknown";
     }
 
@@ -288,8 +294,7 @@ public final class PerfBench {
                     NodeParam.WAVE, wave,
                     NodeParam.FREQUENCY, 110.0 + i * 20.0,
                     NodeParam.GAIN, 0.25 / 32,
-                    NodeParam.PULSE_WIDTH, 0.3
-            )));
+                    NodeParam.PULSE_WIDTH, 0.3)));
             String parent = i < 16 ? "stack1" : "stack2";
             edges.add(Graph.edge(id, parent));
         }
@@ -312,8 +317,7 @@ public final class PerfBench {
             String id = "sample" + i;
             nodes.add(new Graph.Node(id, NodeType.GENERATOR_SAMPLE, Map.of(
                     NodeParam.PITCH_RATIO, 1.0,
-                    NodeParam.GAIN, 0.8 / 32
-            ), kickRef));
+                    NodeParam.GAIN, 0.8 / 32), kickRef));
             String parent = i < 16 ? "stack1" : "stack2";
             edges.add(Graph.edge(id, parent));
         }
@@ -336,8 +340,7 @@ public final class PerfBench {
             String id = "sample" + i;
             nodes.add(new Graph.Node(id, NodeType.GENERATOR_SAMPLE, Map.of(
                     NodeParam.PITCH_RATIO, 3.999,
-                    NodeParam.GAIN, 0.8 / 32
-            ), stereoRef192k));
+                    NodeParam.GAIN, 0.8 / 32), stereoRef192k));
             String parent = i < 16 ? "stack1" : "stack2";
             edges.add(Graph.edge(id, parent));
         }
@@ -360,8 +363,7 @@ public final class PerfBench {
             String id = "sample" + i;
             nodes.add(new Graph.Node(id, NodeType.GENERATOR_SAMPLE, Map.of(
                     NodeParam.PITCH_RATIO, 4.0,
-                    NodeParam.GAIN, 0.8 / 32
-            ), stereoRef192k));
+                    NodeParam.GAIN, 0.8 / 32), stereoRef192k));
             String parent = i < 16 ? "stack1" : "stack2";
             edges.add(Graph.edge(id, parent));
         }
@@ -387,17 +389,14 @@ public final class PerfBench {
             nodes.add(new Graph.Node(toneId, NodeType.TONE, Map.of(
                     NodeParam.FREQUENCY, 110.0 + i * 40.0,
                     NodeParam.GAIN, 0.15 / 8,
-                    NodeParam.WAVE, 1.0
-            )));
+                    NodeParam.WAVE, 1.0)));
             nodes.add(new Graph.Node(rhythmId, NodeType.EUCLID, Map.of(
                     NodeParam.STEPS, 8.0,
-                    NodeParam.PULSES, (double) ((i % 5) + 2)
-            )));
+                    NodeParam.PULSES, (double) ((i % 5) + 2))));
             nodes.add(new Graph.Node(renderId, NodeType.AUDIO_RENDER, Map.of()));
             nodes.add(new Graph.Node(filterId, NodeType.FILTER, Map.of(
                     NodeParam.CUTOFF_HZ, 500.0 + i * 200.0,
-                    NodeParam.RESONANCE_Q, 1.5
-            )));
+                    NodeParam.RESONANCE_Q, 1.5)));
             edges.add(Graph.edge(toneId, rhythmId));
             edges.add(Graph.edge(rhythmId, renderId));
             edges.add(Graph.edge(renderId, filterId));

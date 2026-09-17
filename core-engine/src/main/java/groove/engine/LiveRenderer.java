@@ -50,8 +50,17 @@ public final class LiveRenderer {
                     scheduler = new LookaheadScheduler(plan.pattern(), SignalGraph.MAX_ENVELOPE_TAIL_CYCLES);
                 } else {
                     double history = 0;
-                    for (var pcm : samples.values()) history = Math.max(history, pcm.duration() / .25);
-                    scheduler = new LookaheadScheduler(plan.pattern(), history, state.bpm());
+                    double secondsPerCycle = 240.0 / state.bpm();
+                    for (var voice : plan.sampleVoices()) {
+                        double lifetime = preparedSamples.lifetimeSeconds(voice, 0, secondsPerCycle);
+                        if (lifetime > 0) history = Math.max(history, lifetime);
+                    }
+                    if (history > 40.0) history = 40.0;
+                    final double spc = secondsPerCycle;
+                    var durFn = (java.util.function.ToDoubleFunction<Event>) e ->
+                            e.sample() == null ? (e.whole().end() - e.whole().start()) * spc
+                                    : preparedSamples.lifetimeSeconds(e.sample(), e.whole().end() - e.whole().start(), spc);
+                    scheduler = new LookaheadScheduler(plan.pattern(), history, state.bpm(), durFn);
                 }
             }
             prepare(state.effectiveNanos());
@@ -339,7 +348,7 @@ public final class LiveRenderer {
                 double onset = event.whole().start();
                 if (onset > cycles) break;
                 if (event.sample() != null && onset < program.state.anchorCycle()) continue;
-                double duration = eventDuration(program, event, secondsPerCycle);
+                double duration = entry.durationSeconds();
                 if (duration < 0) continue;
                 if ((cycles - onset) * secondsPerCycle < duration) program.candidate(entry.ordinal(), onset, event);
             }
@@ -423,8 +432,7 @@ public final class LiveRenderer {
 
     private static double eventDuration(VoiceProgram program, Event event, double secondsPerCycle) {
         if (event.sample() == null) return (event.whole().end() - event.whole().start()) * secondsPerCycle;
-        var sample = program.samples.get(event.sample());
-        return sample == null ? -1 : sample.duration();
+        return program.samples.lifetimeSeconds(event.sample(), event.whole().end() - event.whole().start(), secondsPerCycle);
     }
 
     private static boolean matches(ActiveVoice voice, VoiceProgram program, int index) {

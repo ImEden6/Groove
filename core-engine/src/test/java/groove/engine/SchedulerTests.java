@@ -32,6 +32,8 @@ final class SchedulerTests {
         check(voices == 2, "Identical simultaneous voices survive deduplication");
         allocationAndMiss(counted, queries);
         sampleHistory();
+        denseOneShotPruning();
+        perSourceHistoryIsolation();
         System.out.println("Rolling scheduler regressions passed.");
     }
     private static void fractional(double factor) {
@@ -108,5 +110,67 @@ final class SchedulerTests {
         a.render(x, 512, 10_500_000_000L); b.render(y, 512, 10_500_000_000L);
         check(Arrays.equals(x, y) && x[1000] > .1, "Late joining clients reconstruct overlapping sample tails identically");
     }
+
+    private static void denseOneShotPruning() {
+        AssetRef kickRef = FactorySamples.ref("factory:basic/kick.wav");
+        SampleVoice voice = new SampleVoice(kickRef, 1.0, 0.8, 0);
+        List<Event> cycleEvents = new ArrayList<>();
+        for (int i = 0; i < 16; i++) {
+            double start = i / 16.0;
+            cycleEvents.add(new Event(new Arc(start, start + 0.05), new Arc(start, start + 0.05), null, voice));
+        }
+        Pattern pattern = arc -> {
+            long startCycle = (long) Math.floor(arc.start());
+            long endCycle = (long) Math.ceil(arc.end());
+            List<Event> result = new ArrayList<>();
+            for (long c = startCycle; c < endCycle; c++) {
+                for (Event e : cycleEvents) {
+                    Arc whole = new Arc(c + e.whole().start(), c + e.whole().end());
+                    Arc part = whole.intersect(arc);
+                    if (part != null) result.add(new Event(whole, part, null, voice));
+                }
+            }
+            return result;
+        };
+        double sampleDuration = 0.1; // 0.05 cycles at 120 bpm
+        LookaheadScheduler scheduler = new LookaheadScheduler(pattern, 40, 120, e -> sampleDuration);
+        for (int c = 0; c <= 60; c++) scheduler.prepare(c);
+        var window = scheduler.window();
+        // At cycle 60, base = 60, base - 1 = 59.
+        // Lookahead extends to base + 4 = 64.
+        // With pruning, only events that sound past cycle 59 remain.
+        check(window.size() <= 16 * 6, "Pruning retains only still-sounding one-shot entries, got " + window.size());
+        for (int i = 0; i < window.size(); i++) {
+            var entry = window.entry(i);
+            double endCycle = entry.event().whole().start() + entry.durationSeconds() * 120.0 / 240.0;
+            check(endCycle > 59.0, "Pruned all events that finished before base - 1");
+        }
+    }
+
+    private static void perSourceHistoryIsolation() {
+        AssetRef kickRef = FactorySamples.ref("factory:basic/kick.wav");
+        Graph graph = new Graph(3, List.of(
+                new Graph.Node("sample", NodeType.GENERATOR_SAMPLE, Map.of(NodeParam.GAIN, 0.8), kickRef),
+                new Graph.Node("tone", NodeType.TONE, Map.of(NodeParam.FREQUENCY, 440.0, NodeParam.GAIN, 0.2)),
+                new Graph.Node("render0", NodeType.AUDIO_RENDER, Map.of()),
+                new Graph.Node("render1", NodeType.AUDIO_RENDER, Map.of()),
+                new Graph.Node("mix", NodeType.MIX_BUS, Map.of()),
+                new Graph.Node("out", NodeType.OUTPUT, Map.of())
+        ), List.of(
+                Graph.edge("sample", "render0"),
+                Graph.edge("tone", "render1"),
+                Graph.edge("render0", "mix"),
+                Graph.edge("render1", "mix"),
+                new Graph.Edge("mix", "out", "out", "audio")
+        ));
+        float[] pcm10s = new float[48000 * 10];
+        SampleData data10s = new SampleData(48000, 1, pcm10s);
+        SessionState state = new SessionState(1, 0, 0, 120, true, graph);
+        LoopPlan plan = GraphCompiler.compile(graph);
+        LiveRenderer.Program program = new LiveRenderer.Program(state, plan, Map.of(kickRef, data10s));
+        check(program.plan().signals().sourcePlan(1).sampleVoices().isEmpty(), "Tone source has no sample voices");
+        check(!program.plan().signals().sourcePlan(0).sampleVoices().isEmpty(), "Sample source has sample voices");
+    }
+
     private static void check(boolean value, String message) { if (!value) throw new AssertionError(message); }
 }
