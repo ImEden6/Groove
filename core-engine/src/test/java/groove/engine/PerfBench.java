@@ -3,8 +3,6 @@ package groove.engine;
 import groove.engine.samples.*;
 import java.lang.management.GarbageCollectorMXBean;
 import java.lang.management.ManagementFactory;
-import java.nio.file.Files;
-import java.nio.file.Path;
 import java.util.*;
 
 /**
