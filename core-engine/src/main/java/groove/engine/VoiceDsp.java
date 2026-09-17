@@ -9,6 +9,8 @@ final class VoiceDsp {
     private SamplePlayback sample;
     private int sampleRate;
     private double leftPan, rightPan, increment;
+    private double sampleGain, sampleDuration, sampleRateRatio, sampleStep;
+    private final float[] stereoPcm = new float[2];
 
     void start(Tone tone, SamplePlayback sample, int sampleRate) {
         if ((tone == null) == (sample == null)) throw new IllegalArgumentException("Expected one voice source");
@@ -21,6 +23,19 @@ final class VoiceDsp {
             double angle = (tone.pan() + 1) * Math.PI / 4;
             leftPan = Math.cos(angle); rightPan = Math.sin(angle);
             increment = tone.frequency() / sampleRate;
+        } else {
+            double pan = sample.voice().pan();
+            if (sample.pcm().channels() == 1) {
+                leftPan = Math.cos((pan + 1) * Math.PI / 4);
+                rightPan = Math.sin((pan + 1) * Math.PI / 4);
+            } else {
+                leftPan = Math.min(1, 1 - pan);
+                rightPan = Math.min(1, 1 + pan);
+            }
+            sampleGain = sample.voice().gain();
+            sampleDuration = sample.duration();
+            sampleRateRatio = sample.pcm().rate() * sample.voice().pitchRatio();
+            sampleStep = sampleRateRatio / sampleRate;
         }
     }
 
@@ -28,8 +43,25 @@ final class VoiceDsp {
      *  duration bounds the tone envelope; samples carry their own half-open lifetime. */
     void add(double age, double duration, double phase, double fade, double[] out) {
         if (sample != null) {
-            out[0] += leftFilter.process(sample.value(age, 0, sampleRate)) * fade;
-            out[1] += rightFilter.process(sample.value(age, 1, sampleRate)) * fade;
+            double left = 0, right = 0;
+            if (age >= 0 && age < sampleDuration) {
+                double envelope = Math.min(1, Math.min(age / .001, (sampleDuration - age) / .005));
+                double frame = age * sampleRateRatio;
+                if (sample.pcm().channels() == 1) {
+                    float val = sample.pcm().at(frame, 0, sampleStep);
+                    double v = val * sampleGain;
+                    left = (v * leftPan) * envelope;
+                    right = (v * rightPan) * envelope;
+                } else {
+                    sample.pcm().atStereo(frame, sampleStep, stereoPcm);
+                    double v0 = stereoPcm[0] * sampleGain;
+                    double v1 = stereoPcm[1] * sampleGain;
+                    left = (v0 * leftPan) * envelope;
+                    right = (v1 * rightPan) * envelope;
+                }
+            }
+            out[0] += leftFilter.process(left) * fade;
+            out[1] += rightFilter.process(right) * fade;
             return;
         }
         double remaining = duration - age;

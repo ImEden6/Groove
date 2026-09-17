@@ -111,6 +111,81 @@ public final class SampleData {
         }
         return (float)(sumA + (sumB - sumA) * blend);
     }
+
+    /** Evaluates stereo interpolation for both channels sharing resampling kernel setup. */
+    public void atStereo(double frame, double step, float[] out) {
+        if (!Double.isFinite(step) || step <= 0 || step > 16) throw new IllegalArgumentException("Invalid resampling step");
+        if (!Double.isFinite(frame) || frame < 0 || frame >= frames()) {
+            out[0] = 0; out[1] = 0; return;
+        }
+        if (channels != 2) throw new IllegalArgumentException("atStereo requires stereo sample");
+        if (step == 1 && frame == Math.floor(frame)) {
+            int idx = (int) frame * 2;
+            out[0] = pcm[idx]; out[1] = pcm[idx + 1];
+            return;
+        }
+        int level = 0;
+        while (step >= 2) { level++; step *= .5; frame *= .5; }
+        float[] data = levels[level];
+        int band = (int)Math.ceil(Math.max(0, step - 1) * BANDS);
+        int radius = (int)Math.ceil(RADIUS * (1 + band / (double)BANDS));
+        int taps = radius * 2 + 1;
+        int base = (int)frame, start = base - radius;
+        double phase = (frame - base) * PHASES;
+        int offset = (int)phase * taps;
+        double blend = phase - (int)phase;
+        float[] table = TABLES[band];
+        double sumA0 = 0, sumB0 = 0, sumA1 = 0, sumB1 = 0;
+        if (start >= 0 && start + taps <= data.length / 2) {
+            int source = start * 2;
+            double a0_0 = 0, a1_0 = 0, a2_0 = 0, a3_0 = 0, b0_0 = 0, b1_0 = 0, b2_0 = 0, b3_0 = 0;
+            double a0_1 = 0, a1_1 = 0, a2_1 = 0, a3_1 = 0, b0_1 = 0, b1_1 = 0, b2_1 = 0, b3_1 = 0;
+            int tap = 0;
+            for (; tap + 3 < taps; tap += 4, source += 8) {
+                double t0 = table[offset + tap], tb0 = table[offset + taps + tap];
+                double t1 = table[offset + tap + 1], tb1 = table[offset + taps + tap + 1];
+                double t2 = table[offset + tap + 2], tb2 = table[offset + taps + tap + 2];
+                double t3 = table[offset + tap + 3], tb3 = table[offset + taps + tap + 3];
+
+                double x0_0 = data[source], x0_1 = data[source + 1];
+                double x1_0 = data[source + 2], x1_1 = data[source + 3];
+                double x2_0 = data[source + 4], x2_1 = data[source + 5];
+                double x3_0 = data[source + 6], x3_1 = data[source + 7];
+
+                a0_0 += x0_0 * t0; b0_0 += x0_0 * tb0;
+                a0_1 += x0_1 * t0; b0_1 += x0_1 * tb0;
+
+                a1_0 += x1_0 * t1; b1_0 += x1_0 * tb1;
+                a1_1 += x1_1 * t1; b1_1 += x1_1 * tb1;
+
+                a2_0 += x2_0 * t2; b2_0 += x2_0 * tb2;
+                a2_1 += x2_1 * t2; b2_1 += x2_1 * tb2;
+
+                a3_0 += x3_0 * t3; b3_0 += x3_0 * tb3;
+                a3_1 += x3_1 * t3; b3_1 += x3_1 * tb3;
+            }
+            sumA0 = a0_0 + a1_0 + a2_0 + a3_0; sumB0 = b0_0 + b1_0 + b2_0 + b3_0;
+            sumA1 = a0_1 + a1_1 + a2_1 + a3_1; sumB1 = b0_1 + b1_1 + b2_1 + b3_1;
+            for (; tap < taps; tap++, source += 2) {
+                double val0 = data[source], val1 = data[source + 1];
+                double t = table[offset + tap], tb = table[offset + taps + tap];
+                sumA0 += val0 * t; sumB0 += val0 * tb;
+                sumA1 += val1 * t; sumB1 += val1 * tb;
+            }
+        } else {
+            for (int tap = 0; tap < taps; tap++) {
+                int source = start + tap;
+                if (source < 0 || source >= data.length / 2) continue;
+                double val0 = data[source * 2], val1 = data[source * 2 + 1];
+                double t = table[offset + tap], tb = table[offset + taps + tap];
+                sumA0 += val0 * t; sumB0 += val0 * tb;
+                sumA1 += val1 * t; sumB1 += val1 * tb;
+            }
+        }
+        out[0] = (float)(sumA0 + (sumB0 - sumA0) * blend);
+        out[1] = (float)(sumA1 + (sumB1 - sumA1) * blend);
+    }
+
     private static float[][] buildTables() {
         float[][] tables = new float[BANDS + 1][];
         for (int band = 0; band <= BANDS; band++) {

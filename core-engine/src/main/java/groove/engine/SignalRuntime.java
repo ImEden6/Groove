@@ -7,7 +7,7 @@ public final class SignalRuntime {
     private final SignalGraph graph;
     private final SessionState state;
     private final double[] left, right, start, end;
-    private final double[][] controls, delayLeft, delayRight;
+    private final double[][] controls, delayLeft, delayRight, nodeParams;
     private final int[] cursors;
     private final Biquad[] filtersLeft, filtersRight;
     private final Biquad.Mode[] filterModes;
@@ -15,6 +15,14 @@ public final class SignalRuntime {
     private final LookaheadScheduler.Window[] triggerWindowByNode;
     private static final LookaheadScheduler.Window[] NO_TRIGGERS = new LookaheadScheduler.Window[0];
     private long controlBlock = Long.MIN_VALUE;
+
+    private static final int MIX_GAIN = 0;
+    private static final int FILTER_CUTOFF = 0, FILTER_Q = 1;
+    private static final int LFO_SYNC = 0, LFO_RATE = 1, LFO_WAVE = 2;
+    private static final int STEP_COUNT = 0, STEP_RATE = 1, STEP_VAL_0 = 2;
+    private static final int ATT_SCALE = 0, ATT_OFFSET = 1;
+    private static final int ENV_ATTACK = 0, ENV_DECAY = 1, ENV_SUSTAIN = 2, ENV_RELEASE = 3, ENV_MODE = 4;
+    private static final int ENV_WIDTH = 5, ENV_RELEASE_AT = 6;
 
     SignalRuntime(SignalGraph graph, SessionState state) {
         this.graph = graph; this.state = state;
@@ -25,6 +33,7 @@ public final class SignalRuntime {
         filtersLeft = new Biquad[size]; filtersRight = new Biquad[size]; filterCoefficientsSet = new boolean[size];
         filterModes = new Biquad.Mode[size];
         triggerWindowByNode = new LookaheadScheduler.Window[size];
+        nodeParams = new double[size][];
         for (int i=0;i<size;i++) {
             Graph.Node n = graph.nodes[i];
             if (n.type() == NodeType.DELAY) {
@@ -40,9 +49,50 @@ public final class SignalRuntime {
                 }
                 delayLeft[i] = new double[frames]; delayRight[i] = new double[frames];
             }
-            if (n.type() == NodeType.FILTER) {
-                filtersLeft[i] = new Biquad(); filtersRight[i] = new Biquad();
-                filterModes[i] = Biquad.Mode.values()[(int)p(n,NodeParam.MODE,0)];
+            switch (n.type()) {
+                case MIX_BUS -> nodeParams[i] = new double[]{p(n, NodeParam.GAIN, 1)};
+                case FILTER -> {
+                    filtersLeft[i] = new Biquad(); filtersRight[i] = new Biquad();
+                    filterModes[i] = Biquad.Mode.values()[(int)p(n,NodeParam.MODE,0)];
+                    nodeParams[i] = new double[]{
+                            p(n, NodeParam.CUTOFF_HZ, 20000),
+                            p(n, NodeParam.RESONANCE_Q, Biquad.DEFAULT_Q)
+                    };
+                }
+                case LFO -> nodeParams[i] = new double[]{
+                        p(n, NodeParam.SYNC, 0),
+                        p(n, NodeParam.RATE, 1),
+                        p(n, NodeParam.WAVE, 0)
+                };
+                case STEP_SEQUENCE -> {
+                    double[] p = new double[10];
+                    p[STEP_COUNT] = p(n, NodeParam.STEPS, 4);
+                    p[STEP_RATE] = p(n, NodeParam.RATE, 1);
+                    for (int k = 0; k < 8; k++) p[STEP_VAL_0 + k] = p(n, NodeParam.VALUES[k], 0);
+                    nodeParams[i] = p;
+                }
+                case ATTENUVERTER -> nodeParams[i] = new double[]{
+                        p(n, NodeParam.SCALE, 1),
+                        p(n, NodeParam.OFFSET, 0)
+                };
+                case ENVELOPE -> {
+                    double attack = p(n, NodeParam.ATTACK, .01);
+                    double decay = p(n, NodeParam.DECAY, .1);
+                    double sustain = p(n, NodeParam.SUSTAIN, .5);
+                    double release = p(n, NodeParam.RELEASE, .1);
+                    double mode = p(n, NodeParam.MODE, 0);
+                    double width = 0, releaseAt = 0;
+                    int trigIdx = graph.controlInput[i];
+                    if (trigIdx >= 0) {
+                        Graph.Node trigger = graph.nodes[trigIdx];
+                        if (trigger.type() != NodeType.TRIGGER_RENDER) {
+                            width = 1.0 / (p(trigger, NodeParam.STEPS, 4) * p(trigger, NodeParam.RATE, 1));
+                            releaseAt = mode == 0 ? attack + decay : width * p(trigger, NodeParam.GATE, .5);
+                        }
+                    }
+                    nodeParams[i] = new double[]{attack, decay, sustain, release, mode, width, releaseAt};
+                }
+                default -> nodeParams[i] = new double[0];
             }
         }
     }
@@ -98,15 +148,15 @@ public final class SignalRuntime {
             switch (n.type()) {
                 case AUDIO_RENDER -> { /* Filled by source-to-node mapping before routing. */ }
                 case MIX_BUS -> {
-                    double gain = mod < 0 ? p(n,NodeParam.GAIN,1) : clamp(controls[mod][frame],0,1);
+                    double gain = mod < 0 ? nodeParams[i][MIX_GAIN] : clamp(controls[mod][frame],0,1);
                     double l=0,r=0;
                     for (int source : inputs) { l += left[source]; r += right[source]; }
                     left[i] = bounded(l*gain); right[i] = bounded(r*gain);
                 }
                 case FILTER -> {
                     if (mod >= 0 || !filterCoefficientsSet[i]) {
-                        double cutoff = mod < 0 ? p(n,NodeParam.CUTOFF_HZ,20000) : clamp(controls[mod][frame],20,20000);
-                        double q = p(n,NodeParam.RESONANCE_Q,Biquad.DEFAULT_Q);
+                        double cutoff = mod < 0 ? nodeParams[i][FILTER_CUTOFF] : clamp(controls[mod][frame],20,20000);
+                        double q = nodeParams[i][FILTER_Q];
                         filtersLeft[i].set(filterModes[i],cutoff,q,LiveRenderer.SAMPLE_RATE);
                         filtersRight[i].set(filterModes[i],cutoff,q,LiveRenderer.SAMPLE_RATE);
                         filterCoefficientsSet[i] = true;
@@ -161,31 +211,34 @@ public final class SignalRuntime {
             Graph.Node n = graph.nodes[i];
             switch (n.type()) {
                 case LFO -> {
-                    double phase = p(n,NodeParam.SYNC,0) == 1 ? cycle*p(n,NodeParam.RATE,1)
-                            : (nanos-(n.birthNanos() == null ? 0 : n.birthNanos()))/1e9*p(n,NodeParam.RATE,1);
+                    double[] p = nodeParams[i];
+                    double rate = p[LFO_RATE];
+                    double phase = p[LFO_SYNC] == 1 ? cycle * rate
+                            : (nanos - (n.birthNanos() == null ? 0 : n.birthNanos())) / 1e9 * rate;
                     phase -= Math.floor(phase);
-                    values[i] = switch ((int)p(n,NodeParam.WAVE,0)) {
-                        case 1 -> 1-4*Math.abs(phase-.5);
+                    values[i] = switch ((int) p[LFO_WAVE]) {
+                        case 1 -> 1 - 4 * Math.abs(phase - .5);
                         case 2 -> phase < .5 ? 1 : -1;
-                        case 3 -> 2*phase-1;
-                        default -> Math.sin(2*Math.PI*phase);
+                        case 3 -> 2 * phase - 1;
+                        default -> Math.sin(2 * Math.PI * phase);
                     };
                 }
                 case STEP_SEQUENCE -> {
-                    int steps = (int)p(n,NodeParam.STEPS,4);
-                    int index = Math.floorMod((long)Math.floor(cycle*p(n,NodeParam.RATE,1)*steps), steps);
-                    // Avoid constructing parameter keys in the audio callback.
-                    values[i] = p(n, NodeParam.VALUES[index],0);
+                    double[] p = nodeParams[i];
+                    int steps = (int) p[STEP_COUNT];
+                    int index = Math.floorMod((long) Math.floor(cycle * p[STEP_RATE] * steps), steps);
+                    values[i] = p[STEP_VAL_0 + index];
                 }
-                case ATTENUVERTER -> values[i] = clamp(values[graph.controlInput[i]]*p(n,NodeParam.SCALE,1)+p(n,NodeParam.OFFSET,0),-20000,20000);
+                case ATTENUVERTER -> {
+                    double[] p = nodeParams[i];
+                    values[i] = clamp(values[graph.controlInput[i]] * p[ATT_SCALE] + p[ATT_OFFSET], -20000, 20000);
+                }
                 case ENVELOPE -> {
                     Graph.Node trigger = graph.nodes[graph.controlInput[i]];
                     if (trigger.type() == NodeType.TRIGGER_RENDER) break; // filled by evaluateTriggerDrivenEnvelopes already
-                    double attack = p(n,NodeParam.ATTACK,.01), decay = p(n,NodeParam.DECAY,.1), sustain = p(n,NodeParam.SUSTAIN,.5);
-                    double release = p(n,NodeParam.RELEASE,.1), mode = p(n,NodeParam.MODE,0);
-                    double width = 1/(p(trigger,NodeParam.STEPS,4)*p(trigger,NodeParam.RATE,1));
-                    double releaseAt = mode == 0 ? attack+decay : width*p(trigger,NodeParam.GATE,.5);
-                    values[i] = periodicEnvelopeValue(cycle, width, releaseAt, attack, decay, sustain, release);
+                    double[] p = nodeParams[i];
+                    values[i] = periodicEnvelopeValue(cycle, p[ENV_WIDTH], p[ENV_RELEASE_AT],
+                            p[ENV_ATTACK], p[ENV_DECAY], p[ENV_SUSTAIN], p[ENV_RELEASE]);
                 }
                 default -> values[i] = 0;
             }
@@ -204,8 +257,9 @@ public final class SignalRuntime {
             if (n.type() != NodeType.ENVELOPE) continue;
             Graph.Node trigger = graph.nodes[graph.controlInput[i]];
             if (trigger.type() != NodeType.TRIGGER_RENDER) continue;
-            double attack = p(n,NodeParam.ATTACK,.01), decay = p(n,NodeParam.DECAY,.1), sustain = p(n,NodeParam.SUSTAIN,.5);
-            double release = p(n,NodeParam.RELEASE,.1), mode = p(n,NodeParam.MODE,0);
+            double[] p = nodeParams[i];
+            double attack = p[ENV_ATTACK], decay = p[ENV_DECAY], sustain = p[ENV_SUSTAIN];
+            double release = p[ENV_RELEASE], mode = p[ENV_MODE];
             LookaheadScheduler.Window window = triggerWindowByNode[graph.controlInput[i]];
             double bestStart = 0, bestEnd = 0;
             if (window != null) for (int e = 0; e < window.size(); e++) {
