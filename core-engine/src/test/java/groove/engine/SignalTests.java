@@ -552,9 +552,8 @@ final class SignalTests {
         return output;
     }
     private static void allocation() {
-        var bean = java.lang.management.ManagementFactory.getThreadMXBean();
-        if (!(bean instanceof com.sun.management.ThreadMXBean allocation) || !allocation.isThreadAllocatedMemorySupported()) return;
-        allocation.setThreadAllocatedMemoryEnabled(true);
+        var allocation = AllocHelper.bean();
+        if (allocation == null) return;
         Graph g=SignalDemo.graph(); SignalRuntime dsp=runtime(g,state(g,0,0,120)); double[] frame=new double[2];
         for (int i=0;i<200_000;i++) { frame[0]=.1; frame[1]=.2; dsp.process(frame,Math.round(i*1e9/48000)); }
         long id=Thread.currentThread().threadId(), before=allocation.getThreadAllocatedBytes(id);

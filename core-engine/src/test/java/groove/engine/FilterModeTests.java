@@ -51,9 +51,8 @@ final class FilterModeTests {
                 List.of(Graph.edge("tone","render"),Graph.edge("render","filter"),new Graph.Edge("filter","out","out","audio")));
     }
     private static void allocation(SignalRuntime runtime) {
-        var bean=java.lang.management.ManagementFactory.getThreadMXBean();
-        if (!(bean instanceof com.sun.management.ThreadMXBean counter) || !counter.isThreadAllocatedMemorySupported()) return;
-        counter.setThreadAllocatedMemoryEnabled(true);
+        var counter = AllocHelper.bean();
+        if (counter == null) return;
         double[] stereo={0,0};
         for(int i=0;i<20000;i++) runtime.process(stereo,i*21000L);
         long id=Thread.currentThread().threadId(),before=counter.getThreadAllocatedBytes(id);

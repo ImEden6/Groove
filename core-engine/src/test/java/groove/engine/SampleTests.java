@@ -8,6 +8,7 @@ import java.util.*;
 public final class SampleTests {
     private static int checks;
     public static void main(String[] args) throws Exception {
+        long startNanos = System.nanoTime();
         SampleInstallTests.run();
         String id = "factory:basic/kick.wav";
         byte[] encoded = FactorySamples.bytes(id);
@@ -117,7 +118,7 @@ public final class SampleTests {
         float[] fresh = new float[1024]; rejoined.render(fresh, 512, start + 2_300_000_000L);
         check(Arrays.equals(output, fresh), "Underrun rebase restores phase and fade like a fresh join");
         check(GraphCompiler.compile(FactorySamples.demo()).size() == 11, "Sample demo compiles");
-        System.out.println("Passed " + checks + " sample engine/catalog/transfer checks.");
+        System.out.printf("Passed %d sample engine/catalog/transfer checks in %.2f ms.%n", checks, (System.nanoTime() - startNanos) / 1_000_000.0);
     }
     private static void check(boolean value, String message) { checks++; if (!value) throw new AssertionError(message); }
     private static void invalid(Runnable action) {

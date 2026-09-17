@@ -7,7 +7,7 @@
 | 1 | Note names, scale-degree sequences, transpose, chords, filter modes | Implemented; automated checks pass |
 | 2 | Shared voice DSP, offline samples, sample regions and slicing | Implemented; automated checks pass |
 | 3 | Pattern reverse, swing, pulse/PWM, tempo-synced delay | Implemented; automated checks pass |
-| 4 | Reverb, sustained sample loops, measured performance improvements | Next |
+| 4 | Reverb, sustained sample loops, measured performance improvements | In progress |
 
 ## Stage 1 usage
 
@@ -333,4 +333,26 @@ Stage 3 adds automated build targets and offline demonstration scripts:
 - `gradlew.bat -p core-engine renderSignalDemo`: renders `core-engine/build/signal-demo.wav`
   (8.0s, 48 kHz stereo PCM), demonstrating dual live sources, LFO-modulated biquad filtering,
   and tempo-synced feedback delay via `LiveRenderer`.
+
+## Stage 4 baseline performance on reference machine
+
+### Reference machine specification
+- **CPU:** Intel64 Family 6 Model 186 Stepping 2, GenuineIntel (13th Gen Intel(R) Core(TM) i7-13620H)
+- **Cores:** 16 logical cores
+- **OS:** Windows 11 Build 26100 (amd64)
+- **Power Plan:** Balanced (Power Scheme GUID: `381b4222-f694-41f0-9685-ff5bb260df2e`)
+- **JDK:** OpenJDK 64-Bit Server VM Temurin-21.0.10+7 (build 21.0.10+7-LTS, Eclipse Adoptium)
+
+### Baseline benchmarks (`perfBench`)
+
+Measured with `./gradlew :core-engine:perfBench` (forked JVM `-Xms1g -Xmx1g -XX:+AlwaysPreTouch`, GC logging enabled, block budget 10.67 ms for 512 frames @ 48 kHz). Each trial renders 2,000 blocks; warmed until 3 consecutive trial medians agree within 5%. Statistics pooled from the warmed trials.
+
+| Id | Scenario | Median (ms) | p99 (ms) | Max (ms) | RT Ratio | Publish Alloc (B) | Status |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| B1 | 32 tone voices (saw, pulse) | 0.0054 | 8.6671 | 14.6357 | 0.0005 | 62,480 | settled |
+| B2 | 32 mono sample voices at 1x | 0.0054 | 5.3296 | 8.1844 | 0.0005 | 18,920 | settled |
+| B3 | 32 stereo sample voices at 15.996x | 0.0054 | 22.9658 | 47.5104 | 0.0005 | 18,920 | settled |
+| B4 | 32 stereo sample voices at 16.000x | 0.0054 | 15.6473 | 27.0272 | 0.0005 | 18,920 | settled |
+| B5 | 8 audio sources, filters, feedback delay | 0.0078 | 3.9526 | 10.0197 | 0.0007 | 393,336 | settled |
+
 

@@ -195,15 +195,13 @@ final class DspTests {
         for (int i = 0; i < 2000; i++) {
             live.render(warmup, 64, Math.round((frames + i * 64) * 1e9 / 48000));
         }
-        var bean = java.lang.management.ManagementFactory.getThreadMXBean();
-        if (bean instanceof com.sun.management.ThreadMXBean counter && counter.isThreadAllocatedMemorySupported()) {
-            counter.setThreadAllocatedMemoryEnabled(true);
-            long id = Thread.currentThread().threadId(), before = counter.getThreadAllocatedBytes(id);
-            for (int i = 2000; i < 4000; i++) {
-                live.render(warmup, 64, Math.round((frames + i * 64) * 1e9 / 48000));
-            }
-            long bytes = counter.getThreadAllocatedBytes(id) - before;
-            check(bytes == 0 && live.scheduleMisses() == 0, "Pulse live render callback allocation: " + bytes);
+        var counter = AllocHelper.bean();
+        if (counter == null) return;
+        long id = Thread.currentThread().threadId(), before = counter.getThreadAllocatedBytes(id);
+        for (int i = 2000; i < 4000; i++) {
+            live.render(warmup, 64, Math.round((frames + i * 64) * 1e9 / 48000));
         }
+        long bytes = counter.getThreadAllocatedBytes(id) - before;
+        check(bytes == 0 && live.scheduleMisses() == 0, "Pulse live render callback allocation: " + bytes);
     }
 }

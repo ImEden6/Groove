@@ -81,9 +81,8 @@ final class PitchTests {
             for(float value : block) energy += value*value;
         }
         check(energy>1 && renderer.scheduleMisses()==0,"Pitch chain renders audible scheduled voices");
-        var bean = java.lang.management.ManagementFactory.getThreadMXBean();
-        if (!(bean instanceof com.sun.management.ThreadMXBean counter) || !counter.isThreadAllocatedMemorySupported()) return;
-        counter.setThreadAllocatedMemoryEnabled(true);
+        var counter = AllocHelper.bean();
+        if (counter == null) return;
         long id=Thread.currentThread().threadId(),before=counter.getThreadAllocatedBytes(id);
         for(int i=2000;i<4000;i++) renderer.render(block,64,Math.round(i*64*1e9/48000));
         long bytes=counter.getThreadAllocatedBytes(id)-before;

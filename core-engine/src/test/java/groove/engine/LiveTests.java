@@ -5,6 +5,7 @@ import java.util.*;
 public final class LiveTests {
     private static int checks;
     public static void main(String[] args) {
+        long startNanos = System.nanoTime();
         Graph demo = Graph.demo();
         check(GraphCompiler.compile(demo).size() == 9, "Demo graph event count");
         invalid(() -> GraphCompiler.compile(new Graph(4, demo.nodes(), demo.edges())));
@@ -108,7 +109,7 @@ public final class LiveTests {
         LiveRenderer joining = new LiveRenderer(); joining.publish(compiled);
         joining.render(bAudio, 1024, joinedAt);
         check(Arrays.equals(aAudio, bAudio), "Late join and stall recovery use the same phase");
-        System.out.println("Passed " + checks + " live/backend checks.");
+        System.out.printf("Passed %d live/backend checks in %.2f ms.%n", checks, (System.nanoTime() - startNanos) / 1_000_000.0);
     }
     private static Graph.Node node(String id, NodeType type, Map<String, Double> params) { return new Graph.Node(id, type, params); }
     private static Graph simple(Map<String, Double> params) {

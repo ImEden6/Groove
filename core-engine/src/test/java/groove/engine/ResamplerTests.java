@@ -21,7 +21,7 @@ final class ResamplerTests {
                 }
                 double rejection = -10 * Math.log10(energy / 512 * 2);
                 worstRejection = Math.min(worstRejection, rejection);
-                check(rejection >= 50, "Stopband rejection " + rejection + " dB at step=" + step + ", frequency=" + frequency);
+                check(rejection >= 68, "Stopband rejection " + rejection + " dB at step=" + step + ", frequency=" + frequency);
             }
         }
         for (double step : new double[]{1.0/24, .25, .5, .75, 1, 1.01, 1.5, 1.999, 2, 2.01, 4, 8, 16}) {
@@ -37,7 +37,7 @@ final class ResamplerTests {
             double relative = Math.sqrt(error / reference);
             worstPassError = Math.max(worstPassError, relative);
             // Includes passband gain/phase error and interpolation images for upsampling.
-            check(relative < .003, "Passband RMS error at step=" + step + ": " + relative);
+            check(relative < .00052, "Passband RMS error at step=" + step + ": " + relative);
         }
         SampleData fixture = tone(.1);
         check(fixture.bytes() == 16384L * 4 * 31 / 16, "Cache accounting includes all prefiltered PCM levels");

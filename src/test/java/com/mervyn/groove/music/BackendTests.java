@@ -134,6 +134,7 @@ public final class BackendTests {
     }
 
     public static void main(String[] args) throws Exception {
+        long startNanos = System.nanoTime();
         SharedConstants.tryDetectVersion(); Bootstrap.bootStrap();
         for (NodeType type : java.util.List.of(NodeType.ALTERNATE, NodeType.PROBABILITY, NodeType.POLYMETER,
                 NodeType.TRANSPOSE, NodeType.SCALE_SEQUENCE, NodeType.CHORD)) {
@@ -279,7 +280,7 @@ public final class BackendTests {
             check(MusicPackets.AssetInstallRequest.CODEC.decode(buf).equals(install), "Asset install request round trip");
             invalid(() -> new MusicPackets.AssetInstallRequest(ref, -1));
         } finally { buf.release(); }
-        System.out.println("Passed graph JSON and Minecraft packet checks.");
+        System.out.printf("Passed graph JSON and Minecraft packet checks in %.2f ms.%n", (System.nanoTime() - startNanos) / 1_000_000.0);
     }
     private static void check(boolean value, String message) { TestSupport.check(value, message); }
     private static void editorChecks(Graph graph) {

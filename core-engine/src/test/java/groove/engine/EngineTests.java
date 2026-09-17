@@ -9,6 +9,7 @@ public final class EngineTests {
     private static final Tone TONE = new Tone(Tone.Wave.SINE, 220, .3, 0, 20000);
 
     public static void main(String[] args) {
+        long startNanos = System.nanoTime();
         MusicalPatternTests.run();
         PitchTests.run();
         FilterModeTests.run();
@@ -20,6 +21,7 @@ public final class EngineTests {
         SchedulerTests.run();
         LimiterTests.run();
         PatternTests.run();
+        GoldenTests.run();
         invalid(() -> new Arc(Double.NaN, 1));
         invalid(() -> new Arc(2, 1));
         invalid(() -> Pattern.tone(TONE).fast(Double.POSITIVE_INFINITY));
@@ -128,7 +130,7 @@ public final class EngineTests {
         check(Arrays.equals(Arrays.copyOfRange(shared, 96000, shared.length),
                 Arrays.copyOfRange(isolatedBuf, 96000, isolatedBuf.length)),
                 "Filter state does not bleed across voice reuse");
-        System.out.println("Passed " + checks + " checks.");
+        System.out.printf("Passed %d checks in %.2f ms.%n", checks, (System.nanoTime() - startNanos) / 1_000_000.0);
     }
     private static void check(boolean condition, String message) {
         checks++;

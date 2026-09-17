@@ -29,6 +29,21 @@ tasks.register('sampleTest', JavaExec) {
 }
 check.dependsOn sampleTest
 
+tasks.register('perfBench', JavaExec) {
+    dependsOn testClasses
+    classpath = sourceSets.test.runtimeClasspath
+    mainClass = 'groove.engine.PerfBench'
+    jvmArgs = [
+        '-Xms1g',
+        '-Xmx1g',
+        '-XX:+AlwaysPreTouch',
+        '-Xlog:gc*:file=build/perfbench-gc.log:time,tags'
+    ]
+    doFirst {
+        file('build').mkdirs()
+    }
+}
+
 // This module uses an executable regression suite instead of a JUnit dependency.
 tasks.named('test') {
     dependsOn engineTest, liveTest, sampleTest
