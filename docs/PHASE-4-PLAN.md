@@ -523,9 +523,11 @@ g = 10^(−3 · τ / T60)
 - Input gain `gIn = 1 − g`. Each tank half has 2 decay multipliers and input enters both halves,
   so steady-state tank level at resonance is about `gIn / (1 − g²) = 1/(1 + g)` times input:
   0.52 at 20 s, far from the ±8 guard.
-- Output gain `kOut(g) = k0 · (1 + g)`, with the constant `k0` fixed at implementation time so the
-  peak magnitude response is −1 dB (modulation off, `dampingHz = bandwidthHz = 20000`). Since
-  peak level scales as `1/(1 + g)`, this holds at every decay.
+- Output gain `kOut(g) = 10^(−1/20) / p(g)`, where `p(g)` is a cubic fit of the unscaled tap peak
+  (modulation off, `dampingHz = bandwidthHz = 20000`). Measured at implementation: several output
+  taps read tank delays before a decay multiplier, so the unscaled peak stays nearly flat (3.00 at
+  0.1 s, 3.32 at 20 s) instead of scaling as `1/(1 + g)`. The earlier `k0 · (1 + g)` missed the
+  contract by −3 dB at 0.1 s and +2.6 dB at 20 s. The fit is within 0.05 dB over 0.1..20 s.
 - Remaining loudness trend, documented: broadband tail energy still falls for longer decays, by
   about 9 dB from 1 s to 20 s. `mix_bus` gain is capped at 1 (`SignalGraph.java:212`) and cannot
   make up level; the contract fixes peak response, not tail energy. Users set dry level lower
@@ -599,8 +601,8 @@ In `check`:
   render `2·T60 + 1 s`, mono sum. Schroeder backward-integrated energy in dB, least-squares fit
   from −5 to −35 dB, `T60 = 2·T30`. Gate ±20%. Below 0.5 s is documented as uncalibrated.
 - **Peak gain [W6]:** modulation off, `decaySeconds ∈ {0.1, 0.5, 1, 2.5}`. Render the IR until it is
-  below −120 dB, zero-pad to 8x, Hann window with amplitude correction; then refine the 10 largest
-  peaks with stepped steady-state sines at ±0.5 bin spacing. Gate: max = −1 dB ± 0.2 dB.
+  below −120 dB and zero-pad to 8x with no window (a window starting at zero removes the early IR,
+  which carries the peak); then refine the 10 largest local maxima with stepped steady-state sines at ±0.5 bin spacing. Gate: max = −1 dB ± 0.2 dB.
 - **Modulated stability [W6]:** modulation on, `decaySeconds = 2.5`: steady-state gain for sines at
   the 10 peak frequencies found above ≤ −0.5 dB.
 - **Stereo width:** zero-lag |ρ| between L and R of the IR from 50 ms to T60 at `decaySeconds = 2.5`,
@@ -621,8 +623,8 @@ In `check`:
 - Param bounds: 0.1, 20, 200, 20000 accepted; 0.09, 20.1, 199, 20001 rejected with a range message.
 - Block independence: chunk sizes 1, 64, 512 give identical output.
 - Offline/live parity; two runtimes with identical input give identical output.
-- Late join at `decaySeconds = 0.5`: after the 240-frame fade plus 100 ms, within 1e-3 of a continuous
-  run [N7].
+- Late join at `decaySeconds = 0.5`: after history replay catches the clock (about 16,000 frames for
+  1 s of history), the 240-frame fade and 100 ms, within 1e-3 of a continuous run [N7].
 - Graph limit: exactly 2 accepted, 3 rejected, through compile, `decodeDraft` and the editor.
 - `GraphJson` round trip; a partly set reverb passes `decodeDraft`.
 - Late join triggers `historyRecoveries` for a graph whose only stateful node is a reverb.

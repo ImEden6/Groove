@@ -108,8 +108,10 @@ public final class GraphJson {
             else {
                 if (graph.version() < 1 || graph.version() > Graph.CURRENT_VERSION || graph.nodes().size() > 64 || graph.edges().size() > 128) throw new IllegalArgumentException("Invalid draft bounds");
                 var ids = new java.util.HashSet<String>();
+                int reverbs = 0;
                 for (var node : graph.nodes()) {
                     if (node.id() == null || !node.id().matches("[a-zA-Z0-9_-]{1,32}") || node.type() == null || !ids.add(node.id())) throw new IllegalArgumentException("Invalid draft node");
+                    if (node.type() == NodeType.REVERB && ++reverbs > 2) throw new IllegalArgumentException("At most 2 reverbs per graph");
                     int maxParams = node.type().isSignalNode() ? 16 : (node.type() == NodeType.SCALE_SEQUENCE || node.type() == NodeType.GENERATOR_SAMPLE) ? 12 : 8;
                     if (node.params().size() > maxParams || node.params().values().stream().anyMatch(v -> !Double.isFinite(v))) throw new IllegalArgumentException("Invalid draft parameters");
                 }

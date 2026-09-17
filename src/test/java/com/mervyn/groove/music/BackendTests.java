@@ -162,6 +162,7 @@ public final class BackendTests {
         persistenceChecks();
         typedCompatibilityChecks();
         signalChecks();
+        reverbChecks();
         protocolChecks();
         unreadableProjectChecks();
         fixtureChecks();
@@ -857,6 +858,46 @@ public final class BackendTests {
             GraphCompiler.compile(decoded);
             check(GraphJson.decode(GraphJson.encode(decoded)).equals(decoded), "Fixture " + name + " survives JSON round-trip");
         }
+    }
+
+    private static void reverbChecks() {
+        var reverbParams = com.mervyn.groove.client.ui.EditorState.defaultParams(NodeType.REVERB);
+        Graph graph = new Graph(3, java.util.List.of(new Graph.Node("tone", NodeType.TONE, java.util.Map.of()),
+                new Graph.Node("render", NodeType.AUDIO_RENDER, java.util.Map.of()),
+                new Graph.Node("delay", NodeType.DELAY, java.util.Map.of(NodeParam.FRAMES, 1000.0)),
+                new Graph.Node("rev", NodeType.REVERB, reverbParams),
+                new Graph.Node("bus", NodeType.MIX_BUS, java.util.Map.of(NodeParam.GAIN, 0.5)),
+                new Graph.Node("out", NodeType.OUTPUT, java.util.Map.of())),
+                java.util.List.of(Graph.edge("tone", "render"), Graph.edge("render", "bus"), Graph.edge("delay", "rev"),
+                        Graph.edge("rev", "bus"), Graph.edge("bus", "delay"), new Graph.Edge("bus", "out", "out", "audio")));
+        GraphCompiler.compile(graph);
+        check(GraphJson.decode(GraphJson.encode(graph)).equals(graph), "Reverb graph round trips through JSON");
+        check(GraphJson.encode(graph).contains("\"reverb\""), "Reverb saves under its type name");
+        Graph partial = new Graph(3, java.util.List.of(new Graph.Node("rev", NodeType.REVERB, java.util.Map.of(NodeParam.DECAY_SECONDS, 4.0))), java.util.List.of());
+        check(GraphJson.decodeDraft(GraphJson.encode(partial)).equals(partial), "Partly set reverb passes decodeDraft");
+        Graph three = new Graph(3, java.util.List.of(new Graph.Node("a", NodeType.REVERB, java.util.Map.of()),
+                new Graph.Node("b", NodeType.REVERB, java.util.Map.of()), new Graph.Node("c", NodeType.REVERB, java.util.Map.of())), java.util.List.of());
+        invalid(() -> GraphJson.decodeDraft(GraphJson.encode(three)));
+
+        var editor = new com.mervyn.groove.client.ui.EditorState(graph);
+        editor.setKnobValue("bus", NodeParam.GAIN, 1.0);
+        check(editor.node("bus").params().get(NodeParam.GAIN) == 0.5, "Editor keeps loop gain within the reverb bound");
+        GraphCompiler.compile(editor.toGraph());
+        editor.connect("delay", "out", "bus", "in");
+        check(!editor.edges().contains(Graph.edge("delay", "bus")), "Editor rejects dry plus wet reverb feedback");
+        var dryWet = new java.util.ArrayList<>(graph.edges()); dryWet.add(Graph.edge("delay", "bus"));
+        invalid(() -> GraphCompiler.compile(new Graph(3, graph.nodes(), dryWet)));
+        editor.setKnobValue("bus", NodeParam.GAIN, 0.3);
+        check(editor.node("bus").params().get(NodeParam.GAIN) == 0.3, "Editor allows lowering loop gain");
+        editor.openQuickSpawn(new com.mervyn.groove.client.ui.Vec2(0, 0));
+        editor.spawnNode("rev2", NodeType.REVERB);
+        editor.openQuickSpawn(new com.mervyn.groove.client.ui.Vec2(0, 0));
+        editor.spawnNode("rev3", NodeType.REVERB);
+        check(editor.node("rev2") != null && editor.node("rev3") == null, "Editor stops at 2 reverbs");
+        editor.clearSelection();
+        editor.select("rev", false);
+        editor.cloneSelected();
+        check(editor.nodes().stream().filter(n -> n.type() == NodeType.REVERB).count() == 2, "Cloning cannot exceed 2 reverbs");
     }
 
     private static void invalid(Runnable action) {

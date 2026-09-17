@@ -28,6 +28,12 @@ tasks.register('sampleTest', JavaExec) {
     mainClass = 'groove.engine.SampleTests'
 }
 check.dependsOn sampleTest
+// Opt-in long renders such as 20 s reverb decays, not part of check
+tasks.register('longTest', JavaExec) {
+    dependsOn testClasses
+    classpath = sourceSets.test.runtimeClasspath
+    mainClass = 'groove.engine.ReverbLongTests'
+}
 
 tasks.register('perfBench', JavaExec) {
     dependsOn testClasses

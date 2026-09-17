@@ -128,7 +128,7 @@ public final class LiveRenderer {
             signals = plan.signals() == null ? null : plan.signals().runtime(state);
             boolean stateful = false;
             if (plan.signals() != null) for (Graph.Node node : plan.signals().nodes)
-                if (node.type() == NodeType.DELAY || node.type() == NodeType.FILTER) stateful = true;
+                if (node.type() == NodeType.DELAY || node.type() == NodeType.FILTER || node.type() == NodeType.REVERB) stateful = true;
             recoverEffects = stateful;
             int capacity = program.sources == null && !program.isTriggerSource ? MAX_VOICES : 0;
             voices = new ActiveVoice[capacity]; tails = new ActiveVoice[capacity];
@@ -222,6 +222,25 @@ public final class LiveRenderer {
     public long historyRecoveries() { return historyRecoveries; }
     public long loopFallbacks() { return loopFallbacks; }
     public long loopClamps() { return loopClamps; }
+    public long reverbGuardHits() {
+        long total = 0;
+        if (observed != null) {
+            total += countReverbGuardHits(observed.current);
+            if (observed.pending != null) total += countReverbGuardHits(observed.pending);
+        }
+        if (previous != null) {
+            total += countReverbGuardHits(previous.current);
+            if (previous.pending != null) total += countReverbGuardHits(previous.pending);
+        }
+        return total;
+    }
+
+    private static long countReverbGuardHits(VoiceProgram p) {
+        if (p == null) return 0;
+        long hits = p.signals == null ? 0 : p.signals.reverbGuardHits();
+        if (p.sources != null) for (VoiceProgram s : p.sources) hits += countReverbGuardHits(s);
+        return hits;
+    }
     /** Audio-owner call after an underrun; the next block rejoins the supplied playback time. */
     public void resynchronize() { initialized = false; elapsed = 0; fade = 0; resyncs++; }
 

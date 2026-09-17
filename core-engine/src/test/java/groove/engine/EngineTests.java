@@ -23,6 +23,7 @@ public final class EngineTests {
         LimiterTests.run();
         PatternTests.run();
         GoldenTests.run();
+        ReverbTests.run();
         invalid(() -> new Arc(Double.NaN, 1));
         invalid(() -> new Arc(2, 1));
         invalid(() -> Pattern.tone(TONE).fast(Double.POSITIVE_INFINITY));

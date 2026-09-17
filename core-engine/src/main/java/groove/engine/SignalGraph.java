@@ -55,7 +55,7 @@ public final class SignalGraph {
         require(graph.version() == 3, "Signal nodes require v3");
         require(!graph.nodes().isEmpty() && graph.nodes().size() <= GraphCompiler.MAX_NODES && graph.edges().size() <= 128, "Graph exceeds size budget");
         Map<String, Integer> ids = new LinkedHashMap<>();
-        int output = -1, delayFrames = 0;
+        int output = -1, delayFrames = 0, reverbs = 0;
         List<Integer> renders = new ArrayList<>();
         List<Integer> triggers = new ArrayList<>();
         for (int i = 0; i < graph.nodes().size(); i++) {
@@ -69,6 +69,7 @@ public final class SignalGraph {
             if (n.type() == NodeType.OUTPUT) { require(output == -1 && n.params().isEmpty(), "Exactly one output required"); output = i; }
             if (n.type() == NodeType.AUDIO_RENDER) renders.add(i);
             if (n.type() == NodeType.TRIGGER_RENDER) triggers.add(i);
+            if (n.type() == NodeType.REVERB) reverbs++;
             if (n.type() == NodeType.DELAY) {
                 boolean sync = param(n, NodeParam.SYNC, 0) == 1;
                 if (sync) {
@@ -84,6 +85,7 @@ public final class SignalGraph {
         require(triggers.size() <= MAX_TRIGGER_SOURCES, "At most eight trigger_render sources supported");
         require(delayFrames <= MAX_TOTAL_DELAY_FRAMES,
                 "Delay memory budget exceeded: " + delayFrames + " frames (max " + MAX_TOTAL_DELAY_FRAMES + "; synced delays count at 30 BPM)");
+        require(reverbs <= 2, "At most 2 reverbs per graph");
         Set<Graph.Edge> unique = new HashSet<>();
         for (Graph.Edge e : graph.edges()) {
             require(ids.containsKey(e.fromNode()) && ids.containsKey(e.toNode()), "Dangling edge");
@@ -103,6 +105,7 @@ public final class SignalGraph {
         List<Integer> sorted = new ArrayList<>();
         int[] colors = new int[ids.size()];
         for (int i = 0; i < colors.length; i++) visit(i, graph, ids, colors, sorted, 0);
+        checkLoopGain(graph.nodes(), graph.edges());
         // Trigger sources share the audio sources' event budget, not an independent one, so a
         // trigger-only patch can't bypass the combined MAX_EVENTS cap; threading cost through
         // both calls (rather than each starting fresh) is what enforces that.
@@ -188,6 +191,7 @@ public final class SignalGraph {
             case FILTER -> Set.of(NodeParam.CUTOFF_HZ, NodeParam.RESONANCE_Q, NodeParam.MODE);
             case DELAY -> Set.of(NodeParam.FRAMES, NodeParam.SYNC, NodeParam.DIVISION);
             case MIX_BUS -> Set.of(NodeParam.GAIN);
+            case REVERB -> Set.of(NodeParam.DECAY_SECONDS, NodeParam.DAMPING_HZ, NodeParam.BANDWIDTH_HZ, NodeParam.PRE_DELAY_MS);
             case AUDIO_RENDER, TRIGGER_RENDER -> Set.of();
             default -> throw new IllegalArgumentException("Invalid signal node");
         };
@@ -210,7 +214,222 @@ public final class SignalGraph {
                 range(n, NodeParam.DIVISION, 2, 0, 7, true);
             }
             case MIX_BUS -> range(n,NodeParam.GAIN,1,0,1,false);
+            case REVERB -> {
+                range(n, NodeParam.DECAY_SECONDS, 1.8, 0.1, 20.0, false);
+                range(n, NodeParam.DAMPING_HZ, 6000.0, 200.0, 20000.0, false);
+                range(n, NodeParam.BANDWIDTH_HZ, 12000.0, 200.0, 20000.0, false);
+                range(n, NodeParam.PRE_DELAY_MS, 0.0, 0.0, 500.0, false);
+            }
             default -> { }
+        }
+    }
+
+    public static boolean isLoopGainValid(Collection<Graph.Node> nodes, Collection<Graph.Edge> edges) {
+        try {
+            checkLoopGain(nodes, edges);
+            return true;
+        } catch (IllegalArgumentException e) {
+            return false;
+        }
+    }
+
+    public static void checkLoopGain(Collection<Graph.Node> nodes, Collection<Graph.Edge> edges) {
+        Map<String, Graph.Node> signalNodes = new LinkedHashMap<>();
+        for (Graph.Node n : nodes) {
+            if (n.type() != null && n.type().isSignalNode()) {
+                signalNodes.put(n.id(), n);
+            }
+        }
+        boolean anyReverb = false;
+        for (Graph.Node n : signalNodes.values()) {
+            if (n.type() == NodeType.REVERB) {
+                anyReverb = true;
+                break;
+            }
+        }
+        if (!anyReverb) return;
+
+        Map<String, List<String>> audioAdj = new HashMap<>();
+        for (String id : signalNodes.keySet()) audioAdj.put(id, new ArrayList<>());
+        for (Graph.Edge e : edges) {
+            Graph.Node from = signalNodes.get(e.fromNode());
+            Graph.Node to = signalNodes.get(e.toNode());
+            if (from == null || to == null) continue;
+            Port port = to.type().inputPort(e.toPort());
+            if (port != null && port.type() == PortType.AUDIO) {
+                audioAdj.get(from.id()).add(to.id());
+            }
+        }
+
+        Map<String, Integer> indices = new HashMap<>();
+        Map<String, Integer> lowlink = new HashMap<>();
+        Deque<String> stack = new ArrayDeque<>();
+        Set<String> onStack = new HashSet<>();
+        List<List<String>> sccs = new ArrayList<>();
+        int[] counter = new int[1];
+
+        for (String u : signalNodes.keySet()) {
+            if (!indices.containsKey(u)) {
+                tarjan(u, audioAdj, indices, lowlink, stack, onStack, sccs, counter);
+            }
+        }
+
+        for (List<String> scc : sccs) {
+            boolean isCycle = scc.size() > 1 || (scc.size() == 1 && audioAdj.get(scc.getFirst()).contains(scc.getFirst()));
+            if (!isCycle) continue;
+            boolean hasReverb = scc.stream().anyMatch(id -> signalNodes.get(id).type() == NodeType.REVERB);
+            if (!hasReverb) continue;
+
+            List<String> delays = scc.stream().filter(id -> signalNodes.get(id).type() == NodeType.DELAY).toList();
+            if (delays.isEmpty()) {
+                throw new IllegalArgumentException("Zero-delay graph cycle");
+            }
+
+            Set<String> sccSet = new HashSet<>(scc);
+            Set<String> delaySet = new HashSet<>(delays);
+
+            Map<String, List<String>> cutAdj = new HashMap<>();
+            Map<String, Integer> inDegree = new HashMap<>();
+            for (String id : scc) {
+                cutAdj.put(id, new ArrayList<>());
+                inDegree.put(id, 0);
+            }
+            for (String u : scc) {
+                for (String v : audioAdj.get(u)) {
+                    if (sccSet.contains(v) && !delaySet.contains(v)) {
+                        cutAdj.get(u).add(v);
+                        inDegree.put(v, inDegree.get(v) + 1);
+                    }
+                }
+            }
+
+            Deque<String> zeroIn = new ArrayDeque<>();
+            for (String id : scc) {
+                if (inDegree.get(id) == 0) zeroIn.add(id);
+            }
+            List<String> topo = new ArrayList<>();
+            while (!zeroIn.isEmpty()) {
+                String curr = zeroIn.poll();
+                topo.add(curr);
+                for (String next : cutAdj.get(curr)) {
+                    int deg = inDegree.get(next) - 1;
+                    inDegree.put(next, deg);
+                    if (deg == 0) zeroIn.add(next);
+                }
+            }
+            require(topo.size() == scc.size(), "Zero-delay graph cycle");
+
+            int k = delays.size();
+            double[][] M = new double[k][k];
+            for (int j = 0; j < k; j++) {
+                String delayJ = delays.get(j);
+                Map<String, Double> A = new HashMap<>();
+                for (String v : topo) {
+                    Graph.Node nodeV = signalNodes.get(v);
+                    if (nodeV.type() == NodeType.DELAY) {
+                        A.put(v, v.equals(delayJ) ? 1.0 : 0.0);
+                    } else {
+                        List<Double> inVals = new ArrayList<>();
+                        for (Graph.Edge e : edges) {
+                            if (e.toNode().equals(v)) {
+                                Port p = nodeV.type().inputPort(e.toPort());
+                                if (p != null && p.type() == PortType.AUDIO) {
+                                    inVals.add(sccSet.contains(e.fromNode()) ? A.getOrDefault(e.fromNode(), 0.0) : 0.0);
+                                }
+                            }
+                        }
+                        double aVal;
+                        switch (nodeV.type()) {
+                            case MIX_BUS -> {
+                                boolean modulated = edges.stream().anyMatch(e -> e.toNode().equals(v) && e.toPort().equals("gain"));
+                                double gainBound = modulated ? 1.0 : param(nodeV, NodeParam.GAIN, 1.0);
+                                double sum = 0.0;
+                                for (double val : inVals) sum += val;
+                                aVal = gainBound * sum;
+                            }
+                            case FILTER -> {
+                                int mode = (int) param(nodeV, NodeParam.MODE, 0);
+                                double Q = param(nodeV, NodeParam.RESONANCE_Q, Biquad.DEFAULT_Q);
+                                double peak;
+                                if (mode == 2 || mode == 3) {
+                                    peak = 1.0;
+                                } else {
+                                    double qPeak = (Q > 1.0 / Math.sqrt(2.0)) ? (Q / Math.sqrt(1.0 - 1.0 / (4.0 * Q * Q))) : 1.0;
+                                    peak = qPeak * 1.05;
+                                }
+                                double inVal = inVals.isEmpty() ? 0.0 : inVals.getFirst();
+                                aVal = peak * inVal;
+                            }
+                            case REVERB -> {
+                                double inVal = inVals.isEmpty() ? 0.0 : inVals.getFirst();
+                                aVal = 0.95 * inVal;
+                            }
+                            default -> {
+                                double inVal = inVals.isEmpty() ? 0.0 : inVals.getFirst();
+                                aVal = inVal;
+                            }
+                        }
+                        A.put(v, aVal);
+                    }
+                }
+
+                for (int i = 0; i < k; i++) {
+                    String delayI = delays.get(i);
+                    double arriving = 0.0;
+                    for (Graph.Edge e : edges) {
+                        if (e.toNode().equals(delayI)) {
+                            Port p = signalNodes.get(delayI).type().inputPort(e.toPort());
+                            if (p != null && p.type() == PortType.AUDIO) {
+                                if (sccSet.contains(e.fromNode())) {
+                                    arriving = A.getOrDefault(e.fromNode(), 0.0);
+                                }
+                                break;
+                            }
+                        }
+                    }
+                    M[i][j] = arriving;
+                }
+            }
+
+            for (int i = 0; i < k; i++) {
+                double rowSum = 0.0;
+                for (int j = 0; j < k; j++) rowSum += M[i][j];
+                if (rowSum > 0.89) {
+                    throw new IllegalArgumentException(String.format(Locale.ROOT,
+                            "Feedback loop through reverb can exceed unity gain (bound %.2f)", rowSum));
+                }
+            }
+        }
+    }
+
+    private static void tarjan(String u, Map<String, List<String>> adj,
+                              Map<String, Integer> indices, Map<String, Integer> lowlink,
+                              Deque<String> stack, Set<String> onStack,
+                              List<List<String>> sccs, int[] counter) {
+        indices.put(u, counter[0]);
+        lowlink.put(u, counter[0]);
+        counter[0]++;
+        stack.push(u);
+        onStack.add(u);
+
+        for (String v : adj.get(u)) {
+            if (!indices.containsKey(v)) {
+                tarjan(v, adj, indices, lowlink, stack, onStack, sccs, counter);
+                lowlink.put(u, Math.min(lowlink.get(u), lowlink.get(v)));
+            } else if (onStack.contains(v)) {
+                lowlink.put(u, Math.min(lowlink.get(u), indices.get(v)));
+            }
+        }
+
+        if (lowlink.get(u).equals(indices.get(u))) {
+            List<String> scc = new ArrayList<>();
+            while (true) {
+                String w = stack.pop();
+                onStack.remove(w);
+                scc.add(w);
+                if (w.equals(u)) break;
+            }
+            sccs.add(scc);
         }
     }
 

@@ -10,7 +10,7 @@ public enum NodeType {
     LFO, ENVELOPE, ATTENUVERTER, STEP_SEQUENCE,
     AUDIO_RENDER, FILTER, DELAY, MIX_BUS, TRIGGER_RENDER, ALTERNATE, PROBABILITY, POLYMETER,
     TRANSPOSE, SCALE_SEQUENCE, CHORD, SAMPLE_SLICE,
-    REVERSE, SWING;
+    REVERSE, SWING, REVERB;
 
     private static final java.util.List<Port> PATTERN_OUTPUT = java.util.List.of(new Port("out", PortType.PATTERN, 0, 128));
     private static final java.util.List<Port> PATTERN_INPUT = java.util.List.of(new Port("in", PortType.PATTERN, 1, 1));
@@ -37,7 +37,7 @@ public enum NodeType {
             case OUTPUT -> NO_PORTS;
             case LFO, ENVELOPE, ATTENUVERTER -> MOD_OUTPUT;
             case STEP_SEQUENCE -> STEP_SEQUENCE_OUTPUT;
-            case AUDIO_RENDER, FILTER, DELAY, MIX_BUS -> AUDIO_OUTPUT;
+            case AUDIO_RENDER, FILTER, DELAY, MIX_BUS, REVERB -> AUDIO_OUTPUT;
             case TRIGGER_RENDER -> TRIGGER_OUTPUT;
             default -> PATTERN_OUTPUT;
         };
@@ -53,14 +53,14 @@ public enum NodeType {
             case ENVELOPE -> ENVELOPE_INPUT;
             case ATTENUVERTER -> ATTENUVERTER_INPUT;
             case FILTER -> FILTER_INPUT;
-            case DELAY -> DELAY_INPUT;
+            case DELAY, REVERB -> DELAY_INPUT;
             case MIX_BUS -> MIX_BUS_INPUT;
         };
     }
 
     public boolean isSignalNode() {
         return switch (this) {
-            case LFO, ENVELOPE, ATTENUVERTER, STEP_SEQUENCE, AUDIO_RENDER, FILTER, DELAY, MIX_BUS, TRIGGER_RENDER -> true;
+            case LFO, ENVELOPE, ATTENUVERTER, STEP_SEQUENCE, AUDIO_RENDER, FILTER, DELAY, MIX_BUS, TRIGGER_RENDER, REVERB -> true;
             default -> false;
         };
     }

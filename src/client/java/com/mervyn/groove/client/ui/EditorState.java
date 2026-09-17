@@ -158,6 +158,9 @@ public final class EditorState {
      *  structure with a +20px spatial offset, including edges internal to the selection. */
     public void cloneSelected() {
         if (selection.isEmpty()) return;
+        long currentReverbs = nodes.values().stream().filter(n -> n.type() == NodeType.REVERB).count();
+        long clonedReverbs = selection.stream().map(nodes::get).filter(n -> n != null && n.type() == NodeType.REVERB).count();
+        if (currentReverbs + clonedReverbs > 2) return;
         pushUndo();
         Map<String, String> renamed = new LinkedHashMap<>();
         for (String id : selection) renamed.put(id, uniqueId(id));
@@ -201,9 +204,14 @@ public final class EditorState {
                 && (to.type() == NodeType.OUTPUT || e.toPort().equals(toPort))).count();
         boolean roomForMore = currentInputs < target.maxConnections()
                 && target.accepts(nodes.get(fromId).type().outputPort(fromPort));
-        return roomForMore
-                && !edges.contains(new Graph.Edge(fromId, fromPort, toId, toPort))
-                && (to.type() == NodeType.DELAY || !reaches(toId, fromId));
+        if (!roomForMore || edges.contains(new Graph.Edge(fromId, fromPort, toId, toPort))) return false;
+        if (to.type() != NodeType.DELAY && reaches(toId, fromId)) return false;
+        if (nodes.values().stream().anyMatch(n -> n.type() == NodeType.REVERB)) {
+            Set<Graph.Edge> candidate = new LinkedHashSet<>(edges);
+            candidate.add(new Graph.Edge(fromId, fromPort, toId, toPort));
+            if (!groove.engine.SignalGraph.isLoopGainValid(nodes.values(), candidate)) return false;
+        }
+        return true;
     }
     private boolean reaches(String fromId, String targetId) {
         Deque<String> stack = new ArrayDeque<>(List.of(fromId));
@@ -340,7 +348,14 @@ public final class EditorState {
             params.put(NodeParam.PULSES, Math.min(params.get(NodeParam.STEPS),
                     params.getOrDefault(NodeParam.PULSES, defaultParams(NodeType.EUCLID).get(NodeParam.PULSES))));
         }
-        nodes.put(node.id(), new Graph.Node(node.id(), node.type(), params, node.sample(), node.birthNanos()));
+        Graph.Node updated = new Graph.Node(node.id(), node.type(), params, node.sample(), node.birthNanos());
+        if (nodes.values().stream().anyMatch(n -> n.type() == NodeType.REVERB)) {
+            Map<String, Graph.Node> candidate = new LinkedHashMap<>(nodes);
+            candidate.put(node.id(), updated);
+            // Server rejects loops through a reverb above -1 dB, so keep the last valid value
+            if (!groove.engine.SignalGraph.isLoopGainValid(candidate.values(), edges)) return;
+        }
+        nodes.put(node.id(), updated);
         markDirty();
     }
 
@@ -391,7 +406,8 @@ public final class EditorState {
             case NodeParam.SYNC, NodeParam.MODE, NodeParam.WAVE, NodeParam.STEPS,
                     NodeParam.FRAMES, NodeParam.SEED, NodeParam.STEPS_PER_CYCLE,
                     NodeParam.PULSES, NodeParam.ROTATION, NodeParam.ROOT, NodeParam.CHORD, NodeParam.INVERSION,
-                    NodeParam.START_FRAME, NodeParam.END_FRAME, NodeParam.SLICES, NodeParam.INDEX, NodeParam.REVERSE, NodeParam.SUBDIVISION, NodeParam.DIVISION -> true;
+                    NodeParam.START_FRAME, NodeParam.END_FRAME, NodeParam.SLICES, NodeParam.INDEX, NodeParam.REVERSE, NodeParam.SUBDIVISION, NodeParam.DIVISION,
+                    NodeParam.PRE_DELAY_MS -> true;
             default -> false;
         };
     }
@@ -400,10 +416,11 @@ public final class EditorState {
      *  variations; continuous parameters favor a comfortable range sweep. */
     private static double sensitivity(String param) {
         return switch (param) {
-            case NodeParam.FREQUENCY, NodeParam.CUTOFF_HZ -> 40.0;
+            case NodeParam.FREQUENCY, NodeParam.CUTOFF_HZ, NodeParam.DAMPING_HZ, NodeParam.BANDWIDTH_HZ -> 40.0;
             case NodeParam.GAIN -> 0.005;
             case NodeParam.PAN -> 0.01;
             case NodeParam.PITCH_RATIO -> 0.02;
+            case NodeParam.DECAY_SECONDS -> 0.02;
             case NodeParam.WAVE -> 0.05;
             case NodeParam.PULSE_WIDTH -> 0.01;
             case NodeParam.CHANCE -> .01;
@@ -420,6 +437,7 @@ public final class EditorState {
             case "value0", "value1", "value2", "value3", "value4", "value5", "value6", "value7" -> .01;
             case NodeParam.OFFSET -> 40;
             case NodeParam.FRAMES -> 120;
+            case NodeParam.PRE_DELAY_MS -> 1.0;
             default -> 1.0;
         };
     }
@@ -452,6 +470,9 @@ public final class EditorState {
             case NodeParam.SCALE, NodeParam.OFFSET -> Math.max(-20000,Math.min(20000,value));
             case NodeParam.CUTOFF_HZ -> Math.max(20,Math.min(20000,value));
             case NodeParam.RESONANCE_Q -> Math.max(.1,Math.min(20,value));
+            case NodeParam.DECAY_SECONDS -> Math.max(0.1, Math.min(20.0, value));
+            case NodeParam.DAMPING_HZ, NodeParam.BANDWIDTH_HZ -> Math.max(200.0, Math.min(20000.0, value));
+            case NodeParam.PRE_DELAY_MS -> Math.max(0.0, Math.min(500.0, value));
             default -> Math.max(-1,Math.min(1,value));
         };
         return switch (param) {
@@ -544,6 +565,14 @@ public final class EditorState {
             }
             case REVERSE -> Map.of();
             case SWING -> Map.of(NodeParam.SUBDIVISION, 16.0, NodeParam.AMOUNT, 0.333);
+            case REVERB -> {
+                Map<String, Double> m = new LinkedHashMap<>();
+                m.put(NodeParam.DECAY_SECONDS, 1.8);
+                m.put(NodeParam.DAMPING_HZ, 6000.0);
+                m.put(NodeParam.BANDWIDTH_HZ, 12000.0);
+                m.put(NodeParam.PRE_DELAY_MS, 0.0);
+                yield m;
+            }
             default -> Map.of();
         };
     }
@@ -578,6 +607,7 @@ public final class EditorState {
     public void closeQuickSpawn() { quickSpawnAt = null; }
     public void spawnNode(String id, NodeType type) {
         if (quickSpawnAt == null || nodes.containsKey(id)) return;
+        if (type == NodeType.REVERB && nodes.values().stream().filter(n -> n.type() == NodeType.REVERB).count() >= 2) return;
         pushUndo();
         nodes.put(id, new Graph.Node(id, type, defaultParams(type)));
         layout.place(id, quickSpawnAt);

@@ -12,6 +12,9 @@ public final class SignalRuntime {
     private final Biquad[] filtersLeft, filtersRight;
     private final Biquad.Mode[] filterModes;
     private final boolean[] filterCoefficientsSet;
+    private final Reverb[] reverbs;
+    private final double[] reverbOut = new double[2];
+    private long reverbGuardHits = 0;
     private final LookaheadScheduler.Window[] triggerWindowByNode;
     private static final LookaheadScheduler.Window[] NO_TRIGGERS = new LookaheadScheduler.Window[0];
     private long controlBlock = Long.MIN_VALUE;
@@ -32,10 +35,20 @@ public final class SignalRuntime {
         delayLeft = new double[size][]; delayRight = new double[size][]; cursors = new int[size];
         filtersLeft = new Biquad[size]; filtersRight = new Biquad[size]; filterCoefficientsSet = new boolean[size];
         filterModes = new Biquad.Mode[size];
+        reverbs = new Reverb[size];
         triggerWindowByNode = new LookaheadScheduler.Window[size];
         nodeParams = new double[size][];
         for (int i=0;i<size;i++) {
             Graph.Node n = graph.nodes[i];
+            if (n.type() == NodeType.REVERB) {
+                reverbs[i] = new Reverb();
+                reverbs[i].setParams(
+                        p(n, NodeParam.DECAY_SECONDS, 1.8),
+                        p(n, NodeParam.DAMPING_HZ, 6000.0),
+                        p(n, NodeParam.BANDWIDTH_HZ, 12000.0),
+                        p(n, NodeParam.PRE_DELAY_MS, 0.0)
+                );
+            }
             if (n.type() == NodeType.DELAY) {
                 boolean sync = p(n, NodeParam.SYNC, 0) == 1;
                 int frames;
@@ -103,6 +116,7 @@ public final class SignalRuntime {
         for (int i=0;i<graph.nodes.length;i++) {
             if (delayLeft[i] != null) { Arrays.fill(delayLeft[i],0); Arrays.fill(delayRight[i],0); }
             if (filtersLeft[i] != null) { filtersLeft[i].reset(); filtersRight[i].reset(); filterCoefficientsSet[i] = false; }
+            if (reverbs[i] != null) reverbs[i].reset();
         }
     }
 
@@ -163,6 +177,13 @@ public final class SignalRuntime {
                     }
                     left[i] = bounded(filtersLeft[i].process(left[inputs[0]]));
                     right[i] = bounded(filtersRight[i].process(right[inputs[0]]));
+                }
+                case REVERB -> {
+                    double in = 0.5 * (left[inputs[0]] + right[inputs[0]]);
+                    long absoluteFrame = Math.round(serverNanos * (LiveRenderer.SAMPLE_RATE / 1e9));
+                    reverbs[i].process(in, absoluteFrame, reverbOut);
+                    left[i] = boundedReverb(reverbOut[0]);
+                    right[i] = boundedReverb(reverbOut[1]);
                 }
                 case OUTPUT -> { left[i] = left[inputs[0]]; right[i] = right[inputs[0]]; }
                 default -> { }
@@ -307,4 +328,22 @@ public final class SignalRuntime {
     private static double p(Graph.Node n,String key,double fallback) { return SignalGraph.param(n,key,fallback); }
     private static double bounded(double v) { return Double.isFinite(v) ? clamp(v,-8,8) : 0; }
     private static double clamp(double v,double min,double max) { return Math.max(min,Math.min(max,v)); }
+
+    public long reverbGuardHits() { return reverbGuardHits; }
+
+    private double boundedReverb(double v) {
+        if (!Double.isFinite(v)) {
+            reverbGuardHits++;
+            return 0;
+        }
+        if (v < -8.0) {
+            reverbGuardHits++;
+            return -8.0;
+        }
+        if (v > 8.0) {
+            reverbGuardHits++;
+            return 8.0;
+        }
+        return v;
+    }
 }
