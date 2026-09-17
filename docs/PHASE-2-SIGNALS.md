@@ -129,20 +129,32 @@ order, then writes all delay inputs. Delays therefore retain their exact sample 
 across callback sizes. Programs can be shared by monitor and speaker renderers;
 mutable filters, delay memory, cursors and control buffers are renderer-private.
 Publication, resync, seek and recovery after a missed schedule rebuild an approximation
-of recent effect state locally. For graphs containing a FILTER or DELAY, LiveRenderer
+of recent effect state locally. For graphs containing a FILTER, DELAY or REVERB, LiveRenderer
 starts from cleared state and silently replays up to one second before the requested
 position through all audio sources, trigger windows and routing. Replay is clipped to
 the current revision's effective time and the common prepared-window coverage. The
 immutable windows are retained during recovery; no pattern queries, allocations or
 network snapshots are needed in the audio callback.
 
-For each active program, an output frame performs at most four historical frames, catching a moving clock
-in roughly one third of the initial lookback duration (up to about 333 ms at normal
-playback speed), then fades in over 5 ms. The completion frame can also render one
+For each active program, an output frame performs at most two historical frames, catching a moving clock
+in about the initial lookback duration (up to about one second at normal playback speed),
+then fades in over 5 ms. The completion frame can also render one
 current frame. An outgoing program continues during replacement recovery; a fresh
 join or seek with no usable outgoing audio is silent until recovery completes.
 `historyRecoveries()` and `historyFrames()` expose recovery starts and replay work.
+The outgoing program is the last timeline that was ready to mix, so a republish during a
+recovery keeps the older audio instead of silence. Once a scheduled commit is in effect,
+only the pending program replays; the current program it replaces never starts one.
 Plain pattern and stateless signal graphs keep their immediate join behavior.
+
+Renderers can share a `ReplayBudget` (Phase 4, step 6 of [PHASE-4-PLAN.md](PHASE-4-PLAN.md)).
+At most `k` programs on a budget replay at once; others wait silently in FIFO order, and
+their history length is taken when the lease is granted. A renderer that stops rendering
+for `STALE_NANOS` on the budget's local clock loses its leases, and one that registers into
+a full budget evicts the stalest slot. `new LiveRenderer()` uses an unlimited budget, which
+grants every replay at once. `replayLeases()`, `replayQueuedFrames()`,
+`replayMaxWaitFrames()`, `replayQueueDepth()`, `replayReclaims()` and `replayEvictions()`
+expose lease activity.
 
 This is bounded approximation, not exact late-join equivalence: echoes older than
 the available lookback, long delay chains, persistent feedback and previous graph or

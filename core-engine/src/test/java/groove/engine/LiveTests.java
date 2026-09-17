@@ -109,6 +109,7 @@ public final class LiveTests {
         LiveRenderer joining = new LiveRenderer(); joining.publish(compiled);
         joining.render(bAudio, 1024, joinedAt);
         check(Arrays.equals(aAudio, bAudio), "Late join and stall recovery use the same phase");
+        ReplayLeaseTests.run();
         System.out.printf("Passed %d live/backend checks in %.2f ms.%n", checks, (System.nanoTime() - startNanos) / 1_000_000.0);
     }
     private static Graph.Node node(String id, NodeType type, Map<String, Double> params) { return new Graph.Node(id, type, params); }

@@ -96,6 +96,7 @@ final class SpeakerLinkTests {
                 java.util.Collections.nCopies(SpeakerPackets.MAX_LISTED + 1, false)), "Oversized speaker list is rejected");
 
         fadeOutChecks();
+        fadeCancelChecks();
         for (boolean mono : new boolean[] {false, true})
             for (boolean underwater : new boolean[] {false, true})
                 for (int frames : new int[] {1, 2048, 4096}) exactFadeChecks(mono, frames, underwater);
@@ -191,6 +192,51 @@ final class SpeakerLinkTests {
             }
             check(stream.readQueued(bytesPerFrame, 0) == null, "Completed fade returns EOF");
         } finally { stream.close(); }
+    }
+    /** fadeOut while waiting for or holding a replay lease cancels before that read renders. */
+    private static void fadeCancelChecks() {
+        long now = System.nanoTime();
+        var clock = new groove.engine.ClockSync();
+        clock.observe(now, now, now);
+        var budget = new groove.engine.ReplayBudget(1, 2);
+        var holderRenderer = new groove.engine.LiveRenderer(budget);
+        var waiterRenderer = new groove.engine.LiveRenderer(budget);
+        // Two seconds in, so a join onto the delay graph has history to replay
+        var timeline = groove.engine.LiveRenderer.Timeline.compile(new groove.engine.SessionTimeline.Snapshot(
+                new groove.engine.SessionState(1, now - 2_000_000_000L, 0, 120, true, groove.engine.SignalDemo.graph()), null));
+        timeline.prepare(now);
+        holderRenderer.publish(timeline);
+        waiterRenderer.publish(timeline);
+        var holder = new com.mervyn.groove.client.music.GrooveAudioStream(holderRenderer, clock);
+        var waiter = new com.mervyn.groove.client.music.GrooveAudioStream(waiterRenderer, clock);
+        int bytes = 512 * 4;
+        try {
+            freeRead(holder, bytes);
+            freeRead(waiter, bytes);
+            check(budget.activeLeases() == 1 && budget.queueDepth() == 1 && holderRenderer.historyFrames() > 0,
+                    "Holder replays while the other stream waits");
+
+            waiter.fadeOut(com.mervyn.groove.client.music.GrooveAudioStream.FADE_FRAMES);
+            long waiterWork = waiterRenderer.historyFrames();
+            freeRead(waiter, bytes);
+            check(budget.queueDepth() == 0 && budget.activeLeases() == 1, "fadeOut while queued leaves the queue before that read renders");
+            check(waiterRenderer.historyFrames() == waiterWork && waiterRenderer.replayLeases() == 0, "The fading waiter does no replay work");
+
+            holder.fadeOut(com.mervyn.groove.client.music.GrooveAudioStream.FADE_FRAMES);
+            long holderWork = holderRenderer.historyFrames();
+            freeRead(holder, bytes);
+            check(budget.activeLeases() == 0 && holderRenderer.historyFrames() == holderWork,
+                    "fadeOut while replaying releases before that read renders, so the read does no replay work");
+            freeRead(holder, bytes);
+            freeRead(waiter, bytes);
+            check(budget.activeLeases() == 0 && budget.queueDepth() == 0 && holderRenderer.historyFrames() == holderWork
+                    && waiterRenderer.historyFrames() == waiterWork, "Fading streams never request again");
+        } finally { holder.close(); waiter.close(); }
+    }
+    private static void freeRead(com.mervyn.groove.client.music.GrooveAudioStream stream, int bytes) {
+        var pcm = stream.readQueued(bytes, 0);
+        check(pcm != null, "Stream produced a chunk");
+        org.lwjgl.system.MemoryUtil.memFree(pcm);
     }
     private static void fadeOutChecks() {
         long now = System.nanoTime();

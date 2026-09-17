@@ -386,4 +386,34 @@ runs: six B1-only runs gave 4.4 to 5.1 ms except one at 11.6 ms, with Gradle and
 alike. Recorded stalls after warm-up had no GC, deoptimization or safepoint nearby, so they are
 treated as OS preemption. Use p99, not max, for pass criteria.
 
+### B8 replay leasing (`perfBench -PperfOnly=B8`)
+
+Renderers share one `ReplayBudget` (k = 2) and join the same graph together, one second after a
+scheduled commit took effect, so every pending program replays one second of history. A block round
+is one 512-frame render by every renderer in turn, as the sound thread pays it, timed only while a
+replay is in progress. Each storm uses a fresh budget, timeline and renderers, built outside the
+timed rounds. The graph is B6 with its last source replaced by 25 sustained loops, the most that fit
+in 64 nodes.
+
+Results from 2026-09-17, pinned, throttling off, `REPLAY_PER_FRAME = 2`:
+
+| Id | Scenario | Median (ms) | p99 (ms) | Max (ms) | RT Ratio | Publish Alloc (B) | Status |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| B8x1 | 1 renderer replaying, per block round | 5.7741 | 8.0119 | 12.0347 | 0.5412 | 3,537,200 | settled |
+| B8x4 | 4 renderers replaying, per block round | 16.4415 | 21.8155 | 27.9090 | 1.5409 | 2,794,056 | settled |
+| B8x8 | 8 renderers replaying, per block round | 22.3636 | 34.2357 | 47.1620 | 2.0959 | 2,795,352 | settled |
+| B8q | 8 renderers waiting for a lease, per block round | 0.1568 | 0.3390 | 0.8793 | 0.0147 | 0 | settled |
+
+Each trial times whole storms, so every grant in a storm is measured. Max replay work per round was
+3,584 frames at 8 renderers, within the bound of `2k · REPLAY_PER_FRAME · 512 = 4,096`: a lease freed
+mid-block can serve a later renderer's whole block in the same round, so the bound allows each lease
+one handoff per round. A lease handoff (release, grant, requeue with 7 waiters) costs about 62 ns.
+
+One replaying renderer fits the 10.67 ms block budget. The 8-renderer p99 gate of 5.33 ms fails, and
+not because of replay: this graph costs about 2.3 ms per steady block, so 8 renderers need about
+18 ms per round with no replay at all.
+
+With `REPLAY_PER_FRAME = 4` (the first run) one replaying renderer took p99 15.75 ms, and rounds
+reached 5,120 frames of replay work against the original bound of `k · 4 · 512 = 4,096`.
+
 

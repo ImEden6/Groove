@@ -215,6 +215,11 @@ public final class GoldenTests {
             LiveRenderer renderer = new LiveRenderer();
             renderer.publish(new LiveRenderer.Timeline(program, null));
             renderer.render(output, FRAMES, 0L);
+            float[] budgeted = new float[SAMPLES];
+            LiveRenderer budgetedRenderer = new LiveRenderer(ReplayBudget.unlimited());
+            budgetedRenderer.publish(new LiveRenderer.Timeline(program, null));
+            budgetedRenderer.render(budgeted, FRAMES, 0L);
+            check(java.util.Arrays.equals(output, budgeted), "Scenario " + name + " renders identically through the unlimited budget");
 
             double energy = 0;
             for (float v : output) energy += v * v;

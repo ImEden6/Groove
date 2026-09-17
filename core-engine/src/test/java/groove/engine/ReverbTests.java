@@ -619,8 +619,8 @@ final class ReverbTests {
 
     private static void lateJoin() {
         Graph g = reverbSong(0.5);
-        // Replay of 1 s history takes about 16,000 frames to catch the clock, then fade and 100 ms
-        int joinAt = 98400, compareFrom = joinAt + 16000 + 240 + 4800, end = compareFrom + 9600;
+        // Compare at a fixed, audible point of the song; join early enough for replay of 1 s history, fade and 100 ms
+        int compareFrom = 119440, joinAt = compareFrom - (LiveRenderer.FULL_RECOVERY_FRAMES + 240 + 4800), end = compareFrom + 9600;
         float[] reference = renderLive(g, end + 64, 64);
         var timeline = new LiveRenderer.Timeline(new LiveRenderer.Program(
                 new SessionState(1, 0, 0, 120, true, g), GraphCompiler.compile(g)), null);

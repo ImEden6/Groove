@@ -7,9 +7,11 @@ package groove.engine;
  */
 public final class LiveRenderer {
     public static final int SAMPLE_RATE = 48000, MAX_VOICES = 32;
-    // Per VoiceProgram: four replay frames for each output frame gain three frames on
-    // the moving clock. One second of history therefore takes about 1/3 second to join.
-    private static final int HISTORY_FRAMES = SAMPLE_RATE, REPLAY_PER_FRAME = 4;
+    // Per VoiceProgram: two replay frames for each output frame gain one frame on the
+    // moving clock. One second of history therefore takes about one second to join.
+    static final int HISTORY_FRAMES = SAMPLE_RATE, REPLAY_PER_FRAME = 2;
+    /** Output frames one full history replay takes to catch the moving clock. */
+    public static final int FULL_RECOVERY_FRAMES = (HISTORY_FRAMES + REPLAY_PER_FRAME - 2) / (REPLAY_PER_FRAME - 1);
     public static final class Program {
         private final SessionState state;
         private final LoopPlan plan;
@@ -110,6 +112,10 @@ public final class LiveRenderer {
         boolean recovering;
         long recoveryOrigin, recoveryFrame;
         double recoveryGain = 1;
+        /** Only top-level programs with stateful effects replay, so only they hold a lease. */
+        final ReplayBudget.Lease lease;
+        /** Reset with history to replay, but the replay has not started yet. */
+        boolean unrecovered;
         final groove.engine.samples.PreparedSamples samples;
         final ActiveVoice[] voices;
         final ActiveVoice[] tails;
@@ -124,13 +130,14 @@ public final class LiveRenderer {
          *  timing, so it's excluded here even though (like any plain pattern Program) its own
          *  program.sources is null. Derived from Program's own isTriggerSource rather than
          *  passed as a second, separately-named flag, so the two can't drift out of sync. */
-        VoiceProgram(Program program) {
+        VoiceProgram(Program program, LiveRenderer owner) {
             state = program.state(); plan = program.plan(); samples = program.preparedSamples; scheduler = program.scheduler;
             signals = plan.signals() == null ? null : plan.signals().runtime(state);
             boolean stateful = false;
             if (plan.signals() != null) for (Graph.Node node : plan.signals().nodes)
                 if (node.type() == NodeType.DELAY || node.type() == NodeType.FILTER || node.type() == NodeType.REVERB) stateful = true;
             recoverEffects = stateful;
+            lease = stateful ? new ReplayBudget.Lease(owner) : null;
             int capacity = program.sources == null && !program.isTriggerSource ? MAX_VOICES : 0;
             voices = new ActiveVoice[capacity]; tails = new ActiveVoice[capacity];
             events = new int[capacity]; data = new Event[capacity]; onsets = new double[capacity]; hashes = new int[capacity];
@@ -139,12 +146,12 @@ public final class LiveRenderer {
             if (program.sources != null) {
                 sources = new VoiceProgram[program.sources.length];
                 sourceStereo = new double[sources.length][2];
-                for (int i = 0; i < sources.length; i++) sources[i] = new VoiceProgram(program.sources[i]);
+                for (int i = 0; i < sources.length; i++) sources[i] = new VoiceProgram(program.sources[i], owner);
             } else { sources = null; sourceStereo = null; }
             if (program.triggers != null) {
                 triggers = new VoiceProgram[program.triggers.length];
                 triggerWindows = new LookaheadScheduler.Window[triggers.length];
-                for (int i = 0; i < triggers.length; i++) triggers[i] = new VoiceProgram(program.triggers[i]);
+                for (int i = 0; i < triggers.length; i++) triggers[i] = new VoiceProgram(program.triggers[i], owner);
             } else { triggers = null; triggerWindows = null; }
             for (int i = 0; i < capacity; i++) {
                 voices[i] = new ActiveVoice(); tails[i] = new ActiveVoice();
@@ -181,19 +188,37 @@ public final class LiveRenderer {
             STEAL_FADE[i] = .5 * (1 + Math.cos(Math.PI * i / (STEAL_FRAMES - 1)));
     }
     private volatile Playback timeline;
+    private volatile long publishEpoch;
+    /** Publish epoch read with the timeline at the start of the current render. */
+    private long renderEpoch;
+    private boolean observedWasReady;
     private boolean initialized;
     private long origin;
     private double elapsed;
     private static final System.Logger LOGGER = System.getLogger("groove.engine.LiveRenderer");
     private volatile long resyncs, scheduleMisses;
     private volatile long historyFrames, historyRecoveries;
+    private volatile long replayQueuedFrames, replayLeases, replayQueueDepth, replayMaxWaitFrames, replayReclaims, replayEvictions;
+    private final ReplayBudget replayBudget;
+    /** Budget slot and its generation at registration; written by the budget on the sound thread. */
+    int replaySlot = -1;
+    long replayGeneration;
+    private boolean replayCancelled;
     private volatile long loopFallbacks, loopClamps;
     private double fade;
     private Playback observed, previous;
     private double programBlend = 1;
+    private long lastFrameNanos;
     private final double[] currentStereo = new double[2];
     private final double[] prevStereo = new double[2];
     private final double[] tempStereo = new double[2];
+    public LiveRenderer() { this(ReplayBudget.unlimited()); }
+
+    /** Renderers sharing a budget must all render on the same sound thread. */
+    public LiveRenderer(ReplayBudget replayBudget) {
+        this.replayBudget = java.util.Objects.requireNonNull(replayBudget);
+    }
+
     /** Control-thread only: prepare renderer-private filters before the volatile handoff.
      *  Programs remain shareable; only the audio owner mutates the prepared filters.
      *  Superseded playback state is released after its crossfade, without a map lookup. */
@@ -201,8 +226,11 @@ public final class LiveRenderer {
         java.util.Objects.requireNonNull(value);
         auditProgram(value.current());
         if (value.pending() != null) auditProgram(value.pending());
-        timeline = new Playback(new VoiceProgram(value.current()),
-                value.pending() == null ? null : new VoiceProgram(value.pending()));
+        var next = new Playback(new VoiceProgram(value.current(), this),
+                value.pending() == null ? null : new VoiceProgram(value.pending(), this));
+        // Epoch first: a render that sees the new timeline always sees its epoch
+        publishEpoch++;
+        timeline = next;
     }
 
     private void auditProgram(Program p) {
@@ -223,6 +251,12 @@ public final class LiveRenderer {
     public long scheduleMisses() { return scheduleMisses; }
     public long historyFrames() { return historyFrames; }
     public long historyRecoveries() { return historyRecoveries; }
+    public long replayQueuedFrames() { return replayQueuedFrames; }
+    public long replayLeases() { return replayLeases; }
+    public long replayQueueDepth() { return replayQueueDepth; }
+    public long replayMaxWaitFrames() { return replayMaxWaitFrames; }
+    public long replayReclaims() { return replayReclaims; }
+    public long replayEvictions() { return replayEvictions; }
     public long loopFallbacks() { return loopFallbacks; }
     public long loopClamps() { return loopClamps; }
     public long reverbGuardHits() {
@@ -249,6 +283,8 @@ public final class LiveRenderer {
 
     public void render(float[] output, int frames, long targetStartNanos) {
         if (frames < 0 || frames * 2L > output.length) throw new IllegalArgumentException("Output too small");
+        // A reclaimed or evicted renderer must not keep replaying without a lease
+        if (!replayBudget.heartbeat(this)) { dropReplays(observed); dropReplays(previous); }
         if (!initialized) { origin = targetStartNanos; initialized = true; }
         double error = (targetStartNanos - origin) - elapsed;
         if (Math.abs(error) > 250_000_000) {
@@ -258,11 +294,19 @@ public final class LiveRenderer {
         double step = 1e9 / SAMPLE_RATE;
         if (frames != 0) step += Math.max(-step * .001, Math.min(step * .001, error / frames));
         Playback currentTimeline = timeline;
+        renderEpoch = publishEpoch;
         if (currentTimeline != observed) {
-            previous = observed; observed = currentTimeline;
-            programBlend = previous == null ? 1 : 0;
+            // Previous is the last timeline that was ready to mix, so a republish during a wait keeps it audible
+            if (observedWasReady) {
+                releaseReplay(previous);
+                previous = observed;
+                programBlend = previous == null ? 1 : 0;
+            } else releaseReplay(observed);
+            observed = currentTimeline;
+            observedWasReady = false;
         }
         capture(currentTimeline); capture(previous);
+        if (hasQueued(currentTimeline) || hasQueued(previous)) replayBudget.decide();
         for (int f = 0; f < frames; f++, elapsed += step) {
             long now = origin + Math.round(elapsed);
             fade = Math.min(1, fade + 1.0 / 240);
@@ -276,9 +320,77 @@ public final class LiveRenderer {
             }
             output[f * 2] = (float) (Math.tanh(left) * fade);
             output[f * 2 + 1] = (float) (Math.tanh(right) * fade);
-            if (ready(currentTimeline, now)) programBlend = Math.min(1, programBlend + 1.0 / 240);
-            if (programBlend == 1) previous = null;
+            lastFrameNanos = now;
+            if (ready(currentTimeline, now)) {
+                observedWasReady = true;
+                programBlend = Math.min(1, programBlend + 1.0 / 240);
+            }
+            if (programBlend == 1 && previous != null) { releaseReplay(previous); previous = null; }
         }
+        replayQueueDepth = replayBudget.queueDepth();
+    }
+
+    /** Sound thread: stops every replay and wait, and never requests again. For a renderer fading to silence. */
+    public void cancelRecovery() {
+        replayCancelled = true;
+        cancelReplays(observed);
+        cancelReplays(previous);
+    }
+
+    private void cancelReplays(Playback playback) {
+        if (playback == null) return;
+        cancelReplay(playback.current);
+        cancelReplay(playback.pending);
+    }
+
+    /** Keeps the program silent: sampling without replay leaves an unrecovered program muted. */
+    private void cancelReplay(VoiceProgram program) {
+        if (program == null || program.lease == null || !(program.recovering || program.unrecovered)) return;
+        replayBudget.release(program.lease);
+        program.recovering = false;
+        program.unrecovered = true;
+        program.recoveryGain = 0;
+    }
+
+    private void dropReplays(Playback playback) {
+        if (playback == null) return;
+        dropReplay(playback.current);
+        dropReplay(playback.pending);
+    }
+
+    /** The budget already freed the lease; restart so the next sample requeues and takes history at grant. */
+    private void dropReplay(VoiceProgram program) {
+        if (program == null || program.lease == null || !(program.recovering || program.unrecovered)) return;
+        replayBudget.release(program.lease);
+        reset(program);
+        program.missed = true;
+    }
+
+    void countReplayReclaim() { replayReclaims++; }
+    void countReplayEviction() { replayEvictions++; }
+
+    private static boolean hasQueued(Playback playback) {
+        return playback != null && (queued(playback.current) || queued(playback.pending));
+    }
+
+    private static boolean queued(VoiceProgram program) {
+        return program != null && program.lease != null && program.lease.state == ReplayBudget.Lease.QUEUED;
+    }
+
+    private void releaseReplay(Playback playback) {
+        if (playback == null) return;
+        releaseReplay(playback.current);
+        releaseReplay(playback.pending);
+    }
+
+    /** Frees the lease of a program that stops being sampled; a later sample starts over. */
+    private void releaseReplay(VoiceProgram program) {
+        if (program == null || program.lease == null || program.lease.state == ReplayBudget.Lease.IDLE) return;
+        replayBudget.release(program.lease);
+        program.recovering = false;
+        program.unrecovered = false;
+        program.recoveryGain = 1;
+        program.missed = true;
     }
 
     private static void capture(Playback playback) {
@@ -302,8 +414,10 @@ public final class LiveRenderer {
         return true;
     }
 
-    private static void markMissed(VoiceProgram program) {
+    private void markMissed(VoiceProgram program) {
         program.missed = true;
+        // A queued lease keeps its place; a started replay gives its lease back
+        if (program.recovering) replayBudget.release(program.lease);
         program.recovering = false;
         // Keep recovering==false and recoveryGain==1 as a joint invariant (see ready()) instead
         // of leaving recoveryGain stale until the next reset() call happens to fix it up.
@@ -326,16 +440,21 @@ public final class LiveRenderer {
         double pendL = out[0] * timeBlend, pendR = out[1] * timeBlend;
         double oldWeight = 1 - timeBlend * timeline.pending.recoveryGain;
         if (oldWeight > 0) {
-            sample(timeline.current, now, tempStereo);
+            // Pending is already in effect, so a replay of current would end after pending replaces it
+            sample(timeline.current, now, tempStereo, false);
             out[0] = pendL + tempStereo[0] * oldWeight;
             out[1] = pendR + tempStereo[1] * oldWeight;
         } else {
+            releaseReplay(timeline.current);
             out[0] = pendL;
             out[1] = pendR;
         }
     }
 
-    private void sample(VoiceProgram program, long now, double[] out) {
+    private void sample(VoiceProgram program, long now, double[] out) { sample(program, now, out, true); }
+
+    /** mayReplay false: plays a program that is already running, but never starts or waits for a replay. */
+    private void sample(VoiceProgram program, long now, double[] out, boolean mayReplay) {
         if (program == null || !program.state.playing() || now < program.state.effectiveNanos()) {
             out[0] = 0; out[1] = 0; return;
         }
@@ -354,28 +473,65 @@ public final class LiveRenderer {
         }
         if (program.missed || program.lastResync != resyncs || program.lastNow == Long.MIN_VALUE
                 || now < program.lastNow || now - program.lastNow > 250_000_000L) {
+            // A started replay restarts from the back of the queue
+            if (program.recovering) replayBudget.release(program.lease);
             reset(program);
             if (program.recoverEffects) {
-                double earliest = Math.max(program.state.anchorCycle(), historyStart(program));
-                double availableSeconds = Math.max(0, (cycles - earliest) * secondsPerCycle);
-                long frames = (long)Math.min(HISTORY_FRAMES, Math.floor(availableSeconds * SAMPLE_RATE));
-                if (frames > 0) {
-                    program.recoveryOrigin = now - Math.round(frames * 1e9 / SAMPLE_RATE);
-                    program.recoveryFrame = 0;
-                    program.recovering = true;
+                if (availableHistory(program, cycles, secondsPerCycle) > 0) {
+                    program.unrecovered = true;
                     program.recoveryGain = 0;
-                    historyRecoveries++;
-                }
+                    // A waiting program keeps its place and takes the current epoch
+                    if (program.lease.state != ReplayBudget.Lease.DROPPED) program.lease.epoch = renderEpoch;
+                } else replayBudget.release(program.lease);
             }
         }
         program.missed = false;
         program.lastResync = resyncs;
         program.lastNow = now;
+        if (program.unrecovered) {
+            if (!mayReplay || replayCancelled) {
+                replayBudget.release(program.lease);
+                out[0] = 0; out[1] = 0; return;
+            }
+            // Dropped for an older epoch but still sampled, so this renderer still wants it
+            if (program.lease.state == ReplayBudget.Lease.DROPPED && program.lease.epoch < renderEpoch) replayBudget.release(program.lease);
+            if (program.lease.state == ReplayBudget.Lease.IDLE) {
+                program.lease.epoch = renderEpoch;
+                replayBudget.request(program.lease);
+            }
+            if (program.lease.state == ReplayBudget.Lease.DROPPED) { out[0] = 0; out[1] = 0; return; }
+            if (program.lease.state == ReplayBudget.Lease.QUEUED) {
+                // Waiting is silent; capture keeps the window fresh so it cannot miss
+                replayQueuedFrames++;
+                replayMaxWaitFrames = Math.max(replayMaxWaitFrames, ++program.lease.waitedFrames);
+                out[0] = 0; out[1] = 0; return;
+            }
+            // History length is taken at grant, not at request
+            long frames = availableHistory(program, cycles, secondsPerCycle);
+            program.unrecovered = false;
+            if (frames > 0) {
+                program.recoveryOrigin = now - Math.round(frames * 1e9 / SAMPLE_RATE);
+                program.recoveryFrame = 0;
+                program.recovering = true;
+                program.recoveryGain = 0;
+                historyRecoveries++;
+                replayLeases++;
+                // A handed-over lease replays from the next frame, so one frame never holds two replays
+                if (program.lease.waited) { out[0] = 0; out[1] = 0; return; }
+            } else {
+                replayBudget.release(program.lease);
+                program.recoveryGain = 1;
+            }
+        }
         if (program.sources != null) {
             int work = 0;
             while (program.recovering) {
                 long replayNow = program.recoveryOrigin + Math.round(program.recoveryFrame * 1e9 / SAMPLE_RATE);
-                if (replayNow >= now - 1e9 / SAMPLE_RATE / 2) { program.recovering = false; break; }
+                if (replayNow >= now - 1e9 / SAMPLE_RATE / 2) {
+                    program.recovering = false;
+                    replayBudget.release(program.lease);
+                    break;
+                }
                 if (work == REPLAY_PER_FRAME) { out[0] = out[1] = 0; return; }
                 sampleSources(program, replayNow, out);
                 program.recoveryFrame++; work++; historyFrames++;
@@ -457,9 +613,37 @@ public final class LiveRenderer {
         for (ActiveVoice v : program.tails) v.event = -1;
         if (program.signals != null) program.signals.reset();
         program.lastNow = Long.MIN_VALUE; program.lastResync = resyncs;
-        program.missed = false; program.recovering = false; program.recoveryGain = 1;
+        program.missed = false; program.recovering = false; program.recoveryGain = 1; program.unrecovered = false;
         if (program.sources != null) for (VoiceProgram source : program.sources) reset(source);
         if (program.triggers != null) for (VoiceProgram trigger : program.triggers) reset(trigger);
+    }
+
+    private static long availableHistory(VoiceProgram program, double cycles, double secondsPerCycle) {
+        double earliest = Math.max(program.state.anchorCycle(), historyStart(program));
+        double availableSeconds = Math.max(0, (cycles - earliest) * secondsPerCycle);
+        return (long) Math.min(HISTORY_FRAMES, Math.floor(availableSeconds * SAMPLE_RATE));
+    }
+
+    /** True while a program holds or waits for a lease, or the audible program is still fading in. */
+    long publishEpoch() { return publishEpoch; }
+
+    /** Sound thread: true once the latest published timeline's audible program has finished any wait, replay and fade-in. */
+    public boolean mixReady() {
+        Playback latest = observed;
+        return latest != null && latest == timeline && ready(latest, lastFrameNanos);
+    }
+
+    boolean replayInProgress() {
+        return leased(observed) || leased(previous) || (observed != null && !ready(observed, lastFrameNanos));
+    }
+
+    private static boolean leased(Playback playback) {
+        return playback != null && (leased(playback.current) || leased(playback.pending));
+    }
+
+    private static boolean leased(VoiceProgram program) {
+        return program != null && program.lease != null
+                && (program.lease.state != ReplayBudget.Lease.IDLE || program.recovering);
     }
 
     private static double historyStart(VoiceProgram program) {

@@ -13,6 +13,7 @@ import dev.emi.trinkets.api.TrinketsApi;
 import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientChunkEvents;
 import groove.engine.ClockSync;
 import groove.engine.LiveRenderer;
+import groove.engine.ReplayBudget;
 import groove.engine.SessionState;
 import groove.engine.SessionTimeline;
 import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientLifecycleEvents;
@@ -62,7 +63,14 @@ public final class MusicClient {
     private static long previewRevision = -1;
     private static long previewGeneration;
     private static volatile LiveRenderer.Timeline previewProgram;
-    private static LiveRenderer previewRenderer = new LiveRenderer();
+    private static final int MAX_EMITTERS = 8;
+    /** Every speaker emitter shares one budget: 8 active plus up to 16 fading renderers. */
+    private static final ReplayBudget SPEAKER_REPLAY = new ReplayBudget(MAX_EMITTERS + MAX_EMITTERS * 2);
+    private static final ReplayLog SPEAKER_REPLAY_LOG = new ReplayLog("Speaker");
+    private static final ReplayLog PREVIEW_REPLAY_LOG = new ReplayLog("Headphone");
+    /** The preview plays one renderer at a time, so each preview renderer gets its own budget. */
+    private static LiveRenderer previewRenderer = new LiveRenderer(new ReplayBudget(1));
+    private static ReplayBudget previewReplay;
     private static GrooveSound previewSound;
     private static GrooveAudioStream previewStream;
     private static int previewRetryTicks;
@@ -70,7 +78,6 @@ public final class MusicClient {
     private static final Map<Emitter, Long> fadingEmitters = new java.util.IdentityHashMap<>();
     private static final Map<BlockPos, Emitter> emitters = new HashMap<>();
     private static final Map<BlockPos, SpeakerLink> speakerLinks = new ConcurrentHashMap<>();
-    private static final int MAX_EMITTERS = 8;
     private static final double MAX_AUDIBLE_DIST_SQR = 64.0 * 64.0;
     private static int emitterScanCooldown;
 
@@ -154,6 +161,8 @@ public final class MusicClient {
         ClientLifecycleEvents.CLIENT_STOPPING.register(client -> { reset(client); COMPILER.shutdownNow(); PREVIEW_COMPILER.shutdownNow(); SPEAKER_COMPILER.shutdownNow(); SCHEDULER.shutdownNow(); });
         ClientTickEvents.END_CLIENT_TICK.register(client -> {
             reapFadingEmitters(client);
+            SPEAKER_REPLAY_LOG.update(SPEAKER_REPLAY);
+            if (previewReplay != null) PREVIEW_REPLAY_LOG.update(previewReplay);
             if (client.getConnection() == null || !ClientPlayNetworking.canSend(MusicPackets.Ping.TYPE)) return;
             if (speakerLevel != client.level) {
                 stopEmitters(client);
@@ -361,7 +370,7 @@ public final class MusicClient {
                     if (emitter != null && emitter.height == height && !emitter.stream.closed()
                             && client.getSoundManager().isActive(emitter.sound)) return;
                     if (emitter != null) stopEmitter(emitter);
-                    LiveRenderer sourceRenderer = new LiveRenderer();
+                    LiveRenderer sourceRenderer = new LiveRenderer(SPEAKER_REPLAY);
                     sourceRenderer.publish(speakerLinks.get(pos).program);
                     GrooveAudioStream sourceStream = new GrooveAudioStream(sourceRenderer, clock, true);
                     GrooveSound sourceSound = new GrooveSound(sourceStream, pos, height);
@@ -430,7 +439,8 @@ public final class MusicClient {
         if (previewProgram != null && (previewSound == null || previewStream.closed() || !client.getSoundManager().isActive(previewSound))) {
             if (previewSound != null) client.getSoundManager().stop(previewSound);
             if (previewStream != null) previewStream.close();
-            previewRenderer = new LiveRenderer();
+            previewReplay = new ReplayBudget(1);
+            previewRenderer = new LiveRenderer(previewReplay);
             previewRenderer.publish(previewProgram);
             previewStream = new GrooveAudioStream(previewRenderer, clock);
             previewStream.setUnderwater(underwater);
@@ -490,6 +500,29 @@ public final class MusicClient {
     }
 
     private record Emitter(GrooveSound sound, GrooveAudioStream stream, int height, LiveRenderer renderer) {}
+
+    /** Logs replay lease activity on the main thread; the sound thread only updates counters. */
+    static final class ReplayLog {
+        private final String name;
+        private ReplayBudget budget;
+        private long grants, reclaims, evictions, maxWaitFrames;
+
+        ReplayLog(String name) { this.name = name; }
+
+        void update(ReplayBudget current) {
+            if (current != budget) { budget = current; grants = reclaims = evictions = maxWaitFrames = 0; }
+            long nowGrants = current.grants(), nowReclaims = current.reclaims();
+            long nowEvictions = current.evictions(), nowMaxWait = current.maxWaitFrames();
+            if (nowGrants != grants || nowReclaims != reclaims)
+                GrooveMod.LOGGER.info("{} replay leases: {} granted, {} reclaimed from stopped renderers", name, nowGrants, nowReclaims);
+            if (nowMaxWait != maxWaitFrames && nowMaxWait > LiveRenderer.FULL_RECOVERY_FRAMES)
+                GrooveMod.LOGGER.warn("{} replay wait reached {} frames, longer than one full recovery ({} frames)",
+                        name, nowMaxWait, LiveRenderer.FULL_RECOVERY_FRAMES);
+            if (nowEvictions != evictions)
+                GrooveMod.LOGGER.warn("{} replay budget evicted a live renderer ({} total); too many renderers for its slots", name, nowEvictions);
+            grants = nowGrants; reclaims = nowReclaims; evictions = nowEvictions; maxWaitFrames = nowMaxWait;
+        }
+    }
 
     /** One speaker's polled link state: what it should play, if anything, and the in-flight
      *  request bookkeeping to avoid re-polling every tick. */

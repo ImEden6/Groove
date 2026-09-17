@@ -163,16 +163,17 @@ Criteria that must hold everywhere are checked in `check` by counting work, not 
 | B5 | 8 audio sources, filters, feedback delay | 1 |
 | B6 | B5 plus 2 reverbs | 5b |
 | B7 | 32 sustained looped voices, and a variant with dense one-shots beside one loop | 4 |
-| B8 | 1, 4 and 8 renderers on one thread publishing the B6+B7 graph together, plus a scheduled commit (current and pending both recovering), measured during recovery | 6 |
+| B8 | 1, 4 and 8 renderers on one thread publishing the B6+B7 graph together, plus a scheduled commit already in effect (pending recovering), measured during recovery | 6 |
 | B9 | Adversarial: 128 events per cycle (compiler maximum), 8 sources, 2 trigger sources with dense patterns, 32 looped stereo voices at 15.996x, 2 reverbs at 20 s | 4, then 5b |
 
 **Pass criteria [W14].**
 
-- B8 (reference machine): pooled p99 ≤ 5.33 ms and max ≤ 10.67 ms at 8 renderers.
+- B8 (reference machine): pooled p99 ≤ 5.33 ms at 8 renderers; max recorded, not gated, since
+  single-block maxima vary between runs (`ENGINE-UPGRADE-STAGES.md`).
 - B9 (reference machine): pooled p99 ≤ 10.67 ms for one renderer; bytes per publish recorded
   and gated at the step-5b value + 10%.
 - Everywhere (`check`): replay work per output frame across all renderers sharing a budget
-  never exceeds `leases × 4` frames (counted, see step 6).
+  never exceeds `leases × REPLAY_PER_FRAME` frames (counted, see step 6).
 
 ### 1c. Golden renders [W4]
 
@@ -589,7 +590,8 @@ implementation: with a 64-frame delay the trips term alone is 13 ms, while the t
 - Memory is per `VoiceProgram` per renderer, not per graph: up to 3.07 MB of delay plus about 1 MB
   for two reverbs per `SignalRuntime`, times current, pending and previous programs, times the
   client's renderers. `perfBench` records bytes per publish; pooling runtime buffers is follow-up
-  work if GC pauses show in B8.
+  work if GC pauses show in B8. Step 6 keeps previous alive until the replacement is ready, so a
+  program queued for a replay lease holds up to two sets of these buffers for the whole wait.
 - Pre-existing: delay feedback loops without a reverb can still saturate at ±8, which makes late
   joiners diverge. Unchanged by Phase 4.
 
@@ -625,8 +627,8 @@ In `check`:
 - Param bounds: 0.1, 20, 200, 20000 accepted; 0.09, 20.1, 199, 20001 rejected with a range message.
 - Block independence: chunk sizes 1, 64, 512 give identical output.
 - Offline/live parity; two runtimes with identical input give identical output.
-- Late join at `decaySeconds = 0.5`: after history replay catches the clock (about 16,000 frames for
-  1 s of history), the 240-frame fade and 100 ms, within 1e-3 of a continuous run [N7].
+- Late join at `decaySeconds = 0.5`: after history replay catches the clock (`FULL_RECOVERY_FRAMES`,
+  48,000 frames for 1 s of history since `REPLAY_PER_FRAME = 2`), the 240-frame fade and 100 ms, within 1e-3 of a continuous run [N7].
 - Graph limit: exactly 2 accepted, 3 rejected, through compile, `decodeDraft` and the editor.
 - `GraphJson` round trip; a partly set reverb passes `decodeDraft`.
 - Late join triggers `historyRecoveries` for a graph whose only stateful node is a reverb.
@@ -640,48 +642,254 @@ and 20 s, feedback convergence at 20 s, 10 s noise soak.
 
 ## 6. Replay leasing [R2]
 
-Adding REVERB to the stateful set makes replayed joins the common case: each recovery runs up to 4
-extra frames per output frame (`REPLAY_PER_FRAME`) until it catches the moving clock. It gains 3
-frames per output frame, so 48,000 history frames take `ceil(48000/3) = 16,000` output frames
-(about 333 ms). An editor commit publishes to every linked emitter, all rendering on one sound thread,
-each stream reading its own chunk (`GrooveAudioStream.java:71`).
+Status: build order stages 1 to 6 are implemented (`ReplayBudget.java`, `ReplayLeaseTests`, client
+wiring in `MusicClient` and `GrooveAudioStream`, B8 in `perfBench`). B8 meets its work bound and fails
+its timing gate; see "B8 results" below and `ENGINE-UPGRADE-STAGES.md`. Where the code differs from the text below,
+see "Implementation notes" before the build order. `LiveRenderer.java` line citations in this section point at the code
+before this step (commit `8b2180a`). Revision 8. Review history and the latest gate are in
+[PHASE-4-PLAN.step6.review5.json](PHASE-4-PLAN.step6.review5.json); this revision also defines when
+grant decisions run and moves the fade-cancel stream test to `SpeakerLinkTests`.
+
+Adding REVERB to the stateful set makes replayed joins the common case: each recovery runs up to
+`REPLAY_PER_FRAME` extra frames per output frame until it catches the moving clock
+(`LiveRenderer.java:12,374-382`). Net gain is `REPLAY_PER_FRAME − 1` per output frame, so a full
+`HISTORY_FRAMES` recovery takes `ceil(HISTORY_FRAMES / (REPLAY_PER_FRAME − 1))` output frames
+(48,000 / 1 = 48,000, about 1 s, now that `REPLAY_PER_FRAME = 2`; it was 16,000 frames at 4). An editor commit publishes to every
+linked emitter, all rendering on one sound thread, each stream reading its own chunk
+(`GrooveAudioStream.java:71`).
 
 A shared per-frame budget cannot work: a recovery that gets ≤ 1 replay frame per output frame never
-catches up (`LiveRenderer.java:322-326`), and there is no shared block to reset on. Leasing instead:
+catches up, and there is no shared block to reset on. Leasing instead:
 
-1. **`ReplayBudget`, injected.** Passed to `LiveRenderer`'s constructor. The client creates one per
-   sound thread; tests create their own. Default for existing constructors: a private unlimited
-   budget, preserving today's behaviour.
-2. **Leases, not fractions.** At most `k = 2` programs on a budget recover at once, each at the full 4
-   replay frames per output frame. Programs wanting recovery queue FIFO. Current and pending programs
-   of a scheduled commit are separate requests.
-3. **Waiting is not recovering.** A queued program keeps capturing fresh windows (so its window never
-   goes stale and `markMissed` cannot loop), outputs silence, and `ready()` is false. Recovery start
-   and history length are computed when the lease is granted. The lease is released when
-   `recovering` becomes false, on reset, or when the program is dropped. When an emitter is stopped
-   or closed (e.g. `GrooveAudioStream.close()` or `MusicClient.closeEmitter`), the stream invokes a
-   cleanup hook (`renderer.reset()`) that unregisters any queued recovery request and immediately
-   releases any active lease back to `ReplayBudget`, preventing lease leakage [W3].
-4. **Previous stays audible.** `previous` points at the last program for which `ready()` was true, not
-   at the last observed program. A republish while a program waits or recovers therefore keeps the
-   last ready audio playing through the crossfade instead of silence.
-5. **Worst-case wait**, computed and documented: with `n` queued programs, the last starts after
-   `ceil(n/k) − 1` recoveries of at most 16,000 frames each. 8 renderers with 2 scheduled commits
-   (`n = 10`): at most 4 × 333 ms ≈ 1.33 s before the last recovery starts.
-6. **Counters [W15]:** `replayQueuedFrames` (frames spent waiting for a lease) and `replayLeases`,
-   next to `historyRecoveries`.
+1. **`ReplayBudget`, new file, injected.** New overload `LiveRenderer(ReplayBudget)`; the existing
+   implicit no-arg constructor is declared explicitly and delegates to a private unlimited budget,
+   preserving today's behaviour bit-for-bit (rollback path: revert to the no-arg constructor).
+   The client creates one shared budget for all speaker emitters plus a separate one for the preview
+   renderer, passed via the `LiveRenderer` or stream constructor; tests create their own. Both
+   budgets run on the same sound thread, so that thread's worst case is the sum of their lease work.
+   Single-thread-confined to the sound thread: preallocated slot and FIFO arrays, no allocation and
+   no synchronization inside `render`/`sample` (`LiveRenderer.java:250-282,338-386`). A second thread
+   rendering through the same budget fails loudly.
 
-Tests in `check`:
+   **No cross-thread release calls.** Every teardown path in the client runs on the main thread
+   (`MusicClient.java:444-490`), and `GrooveAudioStream.close()` only sets a volatile flag
+   (`GrooveAudioStream.java:109`). A closed stream is never read again (`readQueued` returns null), so
+   a flag handed to the sound thread would never be seen. The budget therefore owns lifetime itself:
 
-- One renderer: recovery completes within `16,000 + 240` output frames and ends with
-  `recovering == false` [W5].
-- 8 renderers on one budget, all publishing the same frame, 2 of them with a scheduled commit (so
-  `n = 10` recovering programs): every program reaches `recovering == false` within
-  `ceil(n/k) · 16,000 + 240 = 80,240` output frames; total replay
-  work per output frame never exceeds `2 · 4` (counted); no program's window is missed while queued.
-- A republish while queued keeps the previous ready program audible (RMS > −40 dBFS through the wait).
+   - **Heartbeat clock.** Staleness uses local monotonic time, not playback time. Playback time
+     cannot work: each stream renders at `clock.serverTime(now) + lead` (`GrooveAudioStream.java:70-71`),
+     where `lead` is that source's queued OpenAL audio (`GrooveChannelMixin.java:47-49`) and differs
+     between streams, and `ClockSync` sets its offset in one jump on the first sample
+     (`ClockSync.java:18`). `ReplayBudget` takes an allocation-free `LongSupplier` clock, default
+     `System::nanoTime`; tests pass a counter.
+   - **Heartbeat.** A renderer registers a slot on its first render and stamps `lastSeenNanos` with the
+     budget clock on every render. A slot not stamped for `STALE_NANOS` is stale. A playing stream is
+     read about once per `CHUNK_FRAMES` (2,048 frames, 42.7 ms), so `STALE_NANOS = 250 ms` is about 6
+     missed reads. When the whole sound executor stalls, no renderer renders and no grant decision
+     runs, so a stall does not reclaim anyone by itself.
+   - **Reclaim.** Before every grant decision the budget releases stale holders and removes stale
+     waiters. A grant decision runs on every new request, on every release, and on every render by a
+     renderer that has a queued program, before it samples. The last trigger matters: a holder that
+     stops rendering never releases and waiters make no new requests, so without it both leases could
+     stay taken indefinitely. Each decision scans at most `slots` slots, `k` holders and `4 × slots`
+     queue entries, all preallocated. Closed
+     streams, chunk unloads, disconnects, level changes and paused channels all end this way, with no
+     call from the main thread. Counted as `replayReclaims`.
+   - **Slot capacity.** `slots = MAX_EMITTERS + MAX_EMITTERS × 2` renderers (8 active plus up to 16
+     fading, `MusicClient.java:73,475`), passed in by the client; the preview budget has 1 renderer.
+     Relinks can create renderers faster than stale slots expire (a new `LiveRenderer` per emitter
+     start, `MusicClient.java:364`). When registration finds no free slot it evicts the slot with the
+     oldest `lastSeenNanos`, counted as `replayEvictions`. A live renderer only goes that long
+     without rendering if it is effectively dead; if it was alive it re-registers on its next render
+     and requeues at the back, which is slower but never wedges the budget.
+   - **Slot generations.** Each slot has a `generation` that increments whenever the budget
+     reclaims or evicts it. A renderer stores the generation it registered with and compares it at the
+     start of every render. On a mismatch, every program it holds drops `recovering` and `queued`,
+     resets through `reset(VoiceProgram)` (`LiveRenderer.java:455`), outputs silence, and requeues,
+     with history recomputed at grant. A renderer that lost its lease therefore never keeps
+     replaying, so no more than `k` programs replay at once.
+2. **Leases, not fractions.** At most `k = 2` programs on a budget recover at once, each at the full
+   `REPLAY_PER_FRAME` replay frames per output frame. Requests are counted per top-level recovering
+   `VoiceProgram` (the aggregate program that owns `recovering`, not its source children), not per
+   renderer. One renderer can request for up to 4 programs: current and pending of the observed
+   timeline, and current and pending of previous after a resync (`recoveredUnderrun()` resets every
+   program the renderer holds; previous can itself carry a commit that took effect). The request queue
+   holds `4 × slots` entries, so it cannot overflow and nothing is ever dropped. Queue is
+   strict FIFO (the pending 5 ms effective-time fade at `LiveRenderer.java:321-331` never reorders it).
+   Each `LiveRenderer` keeps a volatile publish epoch bumped by `publish()` (`LiveRenderer.java:200-206`,
+   main thread). The budget checks the epoch at grant time, so a queued-but-superseded program is never
+   granted and never counted in `n`. A superseded program that already holds a lease is released on
+   the sound thread in `render()`, where the renderer notices the new timeline
+   (`LiveRenderer.java:261`), not in `publish()`.
+3. **Waiting is not recovering.** A queued program keeps capturing fresh windows every render (so its
+   window never goes stale and `markMissed` cannot loop), outputs silence, and a new public
+   `mixReady()` returns false (the existing private static `ready(Playback, now)` at
+   `LiveRenderer.java:448-453` keeps driving `programBlend` unchanged). `capture()` skips programs with
+   `recovering` set (`LiveRenderer.java:292`), so a queued program uses its own `queued` state and only
+   sets `recovering` on grant. Recovery start frame and history length are computed when the lease is
+   granted, not at first sample (moving that logic out of `LiveRenderer.java:358-368`).
 
-Benchmark: B8 against its pass criteria (1b).
+   A lease is released on the sound thread only: when `recovering` becomes false, when the renderer
+   sees a superseding publish, through the new public `cancelRecovery()` (distinct from the existing
+   private `reset(VoiceProgram)` at `LiveRenderer.java:455`, which stays internal), or by stale
+   reclaim. Fading emitters cancel: `GrooveAudioStream.readQueued` already picks up the main thread's
+   `fadeOut` request on the sound thread (`fadeRequest`), and at that point calls
+   `renderer.cancelRecovery()` and stops the renderer requesting again, since a stream fading to
+   silence does not need its tail rebuilt. Today `readQueued` renders (`GrooveAudioStream.java:71`)
+   before reading `fadeRequest` (`:75`); the read moves above the render and cancels first, so the
+   first faded chunk does no replay work. Resync during a wait requeues with the current epoch.
+   No watchdog: a holder that keeps rendering finishes within one full recovery by construction, and a
+   holder that stops rendering is reclaimed as stale.
+4. **Previous stays audible.** `previous` points at the last program for which `mixReady()` was true,
+   not at the last observed program. A republish while a program waits or recovers therefore keeps the
+   last ready audio playing through the crossfade instead of silence. This keeps previous's delay and
+   reverb buffers alive for the whole wait (see 5f). Fresh joins with `previous == null` have no such
+   cover: they output silence while queued, bounded by the wait in item 5 and disclosed as a stage
+   dropout bound, with a dedicated silence/RMS test below.
+5. **Worst-case wait**, derived from named constants, documented as start-latency and completion-latency
+   separately: with `n` requesting programs, the last starts after `ceil(n/k) − 1` recoveries of at most
+   `ceil(HISTORY_FRAMES / (REPLAY_PER_FRAME − 1))` frames each, and completes one full recovery plus the
+   240-frame fade later. B8 topology used by the tests below is 8 renderers sharing one budget, 2 of them
+   with a scheduled commit, i.e. `n = 6×1 + 2×2 = 10` programs: start after at most 4 × 48,000 frames
+   (≈ 4 s) at today's constants. Fading renderers never request. The all-pending corner (`n = 16`)
+   and the resync corner (`n = 24`) are also tested. These `n` count current and pending separately;
+   as implemented, the current of a commit already in effect never replays, so at most one program
+   per timeline replays and the speaker budget's real worst case is 8 renderers × 2 timelines,
+   `n = 16` (see implementation notes).
+6. **Counters and logs [W15]:** `replayQueuedFrames` (frames spent waiting, per waiting program per
+   frame), `replayLeases` (grants), `replayQueueDepth` (gauge), `replayMaxWaitFrames`,
+   `replayReclaims` and `replayEvictions`, all next to `historyRecoveries` at `LiveRenderer.java:189`.
+   The sound thread only updates counters, since logging allocates. `MusicClient`'s tick logs on the
+   main thread when they change: INFO for grants and reclaims, WARN when `replayMaxWaitFrames` exceeds
+   one full recovery or `replayEvictions` rises.
+
+Tests in `check` (`core-engine` `ReplayLeaseTests` and `SpeakerLinkTests`):
+
+- One renderer: recovery completes within `ceil(HISTORY_FRAMES / (REPLAY_PER_FRAME − 1)) + 240`
+  output frames and ends with `recovering == false`, `historyRecoveries == 1`, `replayLeases == 1` [W5].
+- 8 renderers on one budget publishing the same frame, 2 with a scheduled commit (`n = 10` programs):
+  every program reaches `recovering == false` within `ceil(n/k) · 48,000 + 240 = 240,240` output frames
+  at today's constants (formula asserted from constants, not literals). Renderers are interleaved one
+  output frame at a time, so the summed replay work per output frame (`historyFrames` deltas) is well
+  defined and never exceeds `k · REPLAY_PER_FRAME`. FIFO grant order vector asserted; `k = 2` cap
+  probed under a same-frame storm; no program's window is missed while queued (`scheduleMisses == 0`).
+  Repeat the accounting for all-pending `n = 16` and resync-while-pending `n = 24`.
+- A republish while queued keeps the previous ready program audible (RMS > −40 dBFS through the wait,
+  silent fixture for determinism); a fresh join with no previous asserts the bounded-silence dropout
+  instead of masking it.
+- Lease lifetime, all driven from the sound thread or by staleness, never by a main-thread call:
+  - a renderer that stops rendering while queued or while holding a lease is reclaimed once the
+    injected clock passes `STALE_NANOS`, and the next waiter is granted on that same decision;
+  - a holder stops rendering while waiters keep rendering and nothing else requests: the first waiter
+    is granted within `STALE_NANOS` plus one render;
+  - reclaim-while-active and evict-while-active on a renderer that is still rendering: its generation
+    check drops the replay, summed replay work stays within `k · REPLAY_PER_FRAME` on every frame,
+    and the program requeues and still completes;
+  - supersede-while-queued is never granted; supersede-while-active releases on the next render;
+  - `cancelRecovery()` while queued or active releases within the same render and the renderer does
+    not requeue;
+  - resync and tempo commit while queued requeue with the current epoch;
+  - `n = 0/1` and `k >= n` fast paths;
+  - registering `slots + 1` renderers evicts the stalest, increments `replayEvictions`, and an evicted
+    live renderer re-registers and still completes;
+  - after every case, active + queued counts return to 0 and `k` slots are drainable.
+- Heartbeat clock: with the injected clock held still, playback-time changes (different stream
+  leads, a resync to an earlier `targetStartNanos`, a `ClockSync` offset jump) never make a renderer
+  stale; advancing the injected clock past `STALE_NANOS` does.
+- In `SpeakerLinkTests` (`backendTest`, which can reach client classes): `fadeOut` while queued or
+  active cancels before that read renders, so the read does no replay work.
+- Zero allocation on the render path (queued + active + grant + reclaim + registration) via the step
+  1e fail-closed helper.
+- Goldens within 1e-7 unchanged on the unlimited-budget path; new counters are volatile-only, never
+  serialized.
+
+Benchmark: B8 (1b table row at `:166`, criterion at `:171`) with a multi-renderer path (1/4/8 renderers
+sharing one budget, joining after a scheduled commit took effect, so pending recovers and current
+stays silent) reusing the B6+B7 graph. `perfBench` renders
+512-frame blocks, so the counted-work bound is per block: summed `historyFrames` delta
+≤ `2k · REPLAY_PER_FRAME · blockFrames` for every block round. Renderers render whole blocks in turn,
+so a lease released partway through one renderer's block can serve a later renderer's whole block in
+the same round; a recovery outlasts a block, so each lease changes hands at most once per round. (The
+original `k · REPLAY_PER_FRAME · blockFrames` was exceeded in the first B8 run.) Pass/fail uses that bound and
+reference-machine pooled p99; max is recorded but not gated, since single-block maxima vary between
+runs with no engine cause (`ENGINE-UPGRADE-STAGES.md`). Queued-capture cost and per-grant
+overhead are recorded separately.
+
+Implementation notes (stages 1 to 6), where the code refines the text above:
+
+- **`REPLAY_PER_FRAME = 2`** (was 4), decided 2026-09-17 after the first B8 run showed one renderer
+  replaying the B8 graph at p99 15.75 ms, over the 10.67 ms block budget. A replaying program now costs
+  about three times its steady render instead of five, and a full recovery takes 48,000 output frames
+  (about 1 s) instead of 16,000. `LiveRenderer.FULL_RECOVERY_FRAMES` carries the derived value; tests
+  and the client WARN threshold use it.
+
+- **Programs per renderer.** The queue holds `PROGRAMS_PER_RENDERER = 4` entries per renderer, not 3,
+  because previous can carry a commit of its own (item 2).
+- **Current of an in-effect commit never replays.** Once a pending program's effective time has
+  passed, pending replaces current before any replay of current could finish. Current is sampled
+  with replay disabled: it plays if it is already running, but never requests, waits or starts a
+  replay, and gives up a lease it has not started. This holds on every budget, including the
+  unlimited one. In the storm tests `n = 10/16/24` produce 8, 8 and 16 grants.
+- **Handover frame.** A lease granted from the queue starts replaying on the owner's next sample,
+  not in the frame that released it, so one output frame never holds a finished replay and a new one.
+  The `ceil(n/k) · FULL_RECOVERY_FRAMES + 240` bound still holds in the tests.
+- **Grant-time history.** The history length is computed on the owner's first sample after the
+  grant, which is the same frame or the next one.
+- **Dropped requests.** A request superseded by a newer publish is dropped, not granted. If the
+  renderer still samples that program after it renders the new timeline (a kept previous), it requests
+  again under the new epoch.
+- **Previous and fresh timelines.** A timeline that never became ready is dropped on republish
+  instead of crossfaded. This also applies to the unlimited budget.
+- **Reclaim scope.** Only stale slots that hold or wait for a lease are reclaimed, so a paused renderer
+  with nothing to replay keeps its slot. A reclaimed or evicted slot is freed and its generation bumped.
+- **Stale slots are reused, not evicted.** When registration finds no free slot and the stalest slot
+  is stale, it takes that slot without counting an eviction (a reclaim if it still held a lease). Only
+  taking a slot from a renderer seen within `STALE_NANOS` counts as `replayEvictions`. Without this,
+  every emitter after the first 24 closed ones would log an eviction WARN.
+- **Sound thread handoff.** A sound engine reload joins Minecraft's `Sound engine` thread and starts
+  a new one (`SoundEngineExecutor.flush`). A budget used from a new thread adopts it if the old owner
+  thread is dead, vacating every slot (leases held count as reclaims); it still throws while the old
+  thread is alive.
+- **Counters.** `replayReclaims` and `replayEvictions` on a renderer count its own slot being reclaimed
+  or evicted. `ReplayBudget.grants()`, `reclaims()`, `evictions()` and `maxWaitFrames()` are volatile
+  budget-wide totals; renderers come and go, so `MusicClient.ReplayLog` logs from those each tick,
+  with `LiveRenderer.FULL_RECOVERY_FRAMES` as the WARN threshold for waits.
+- **Client budgets.** `MusicClient` holds one static speaker budget with `MAX_EMITTERS × 3` slots.
+  The headphone preview replaces its renderer on every restart, so each preview renderer gets its own
+  1-renderer budget rather than evicting its dead predecessor.
+- **Fade cancel.** `GrooveAudioStream.readQueued` reads `fadeRequest` before rendering and calls
+  `cancelRecovery()` once when the fade arms.
+- **`cancelRecovery()`** marks the renderer so it never requests again; a program that still needed a
+  replay stays silent.
+- **Tests.** Resync while queued is covered; a tempo commit while queued is covered only as a
+  supersede-while-queued republish.
+
+B8 results (2026-09-17, reference machine, pinned, throttling off, `REPLAY_PER_FRAME = 2`):
+
+- **Graph.** B6 plus B7 does not fit one graph: `GraphCompiler.MAX_NODES = 64`, and a stack takes at
+  most 16 inputs. B8 replaces B6's last audio source with 25 sustained loops under two stacks.
+- **Work bound passes.** Max replay work per block round was 1,024 frames at 1 renderer and 3,584 at
+  8, within the `2k` bound of 4,096 (the old `k` bound, 2,048, would fail). `perfBench` throws if it
+  is exceeded.
+- **Timing gate fails.** Pooled p99 per block round is 8.01 ms at 1 renderer, 21.82 ms at 4 and
+  34.24 ms at 8, against 5.33 ms. One replaying renderer now fits the 10.67 ms block budget, but
+  8 renderers do not even once replay ends: the graph costs about 2.3 ms per steady block, so 8 of
+  them take about 18 ms with no replay at all. Leasing cannot meet this gate for this graph; waiting
+  is cheap (B8q, 8 queued renderers: p99 0.34 ms per round) and a lease handoff costs about 62 ns.
+
+Build order, each stage leaving `check` green (1 to 6 done; B8 timing gate fails):
+
+1. `ReplayBudget` with only the unlimited path, the `LiveRenderer(ReplayBudget)` overload and the new
+   counters. Goldens unchanged within 1e-7.
+2. `k`-limited leasing and FIFO with a single renderer: queued state, grant-time history, one-renderer
+   test.
+3. Multiple renderers on one budget: epoch supersede, `mixReady`, previous kept audible, `n = 10/16/24`
+   accounting tests, fresh-join silence test.
+4. Heartbeat, injected clock, reclaim with its grant triggers, eviction and slot generations, with
+   the lifetime and heartbeat clock tests.
+5. Client wiring: shared speaker budget and preview budget, fade cancel before render, main-thread
+   counter logging.
+6. B8 in `perfBench`.
 
 ---
 

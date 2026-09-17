@@ -9,7 +9,7 @@ import java.util.*;
 
 /**
  * Stage 4 baseline performance benchmark harness.
- * Measures scenarios B1..B7 with warmup convergence, pooled block timings,
+ * Measures scenarios B1..B8 with warmup convergence, pooled block timings,
  * real-time ratio, publish allocations, and system metadata.
  */
 public final class PerfBench {
@@ -63,7 +63,7 @@ public final class PerfBench {
                 new Scenario("B7b", "112 hat one-shots per cycle beside one loop", b7DenseGraph(STEREO_REF_192K, hatRef), sampleBank));
 
         System.out.println("--------------------------------------------------------------------------------");
-        System.out.println("Running scenarios B1..B7...");
+        System.out.println("Running scenarios B1..B8...");
         System.out.println("--------------------------------------------------------------------------------");
 
         List<Result> results = new ArrayList<>();
@@ -75,7 +75,196 @@ public final class PerfBench {
             printResult(result);
         }
 
+        if (only.isEmpty() || Arrays.asList(only.split(",")).contains("B8")) {
+            Graph b8 = b8Graph(STEREO_REF_192K);
+            Result gated = null;
+            for (int renderers : new int[] {1, 4, 8}) {
+                Result result = runReplayScenario(renderers, b8, sampleBank);
+                results.add(result);
+                printResult(result);
+                if (renderers == 8) gated = result;
+            }
+            Result queued = runQueuedScenario(b8, sampleBank);
+            results.add(queued);
+            printResult(queued);
+            printSummaryTable(results);
+            System.out.printf(Locale.ROOT, "B8 gate (8 renderers, pooled p99 <= %.2f ms per block round): %s at %.4f ms%n",
+                    B8_P99_GATE_MS, gated.p99BlockMs() <= B8_P99_GATE_MS ? "PASS" : "FAIL", gated.p99BlockMs());
+            System.out.printf(Locale.ROOT, "B8 grant overhead: %.1f ns per release, grant and requeue with 7 waiters%n", grantOverheadNanos());
+            return;
+        }
         printSummaryTable(results);
+    }
+
+    private static final double B8_P99_GATE_MS = BLOCK_BUDGET_MS / 2;
+    private static final long B8_JOIN_NANOS = 3_000_000_000L;
+
+    /**
+     * B8: renderers on one budget join the B6+B7 graph together after a scheduled commit took effect,
+     * so every pending program replays; blocks are timed as one round of all renderers, as the sound
+     * thread pays it, only while replay is in progress.
+     */
+    private static Result runReplayScenario(int renderers, Graph graph, Map<AssetRef, SampleData> bank) {
+        String id = "B8x" + renderers;
+        int minRoundsPerTrial = Math.max(250, BLOCKS_PER_TRIAL / renderers);
+        int leaseRounds = (renderers + ReplayBudget.DEFAULT_LEASES - 1) / ReplayBudget.DEFAULT_LEASES;
+        int stormRounds = leaseRounds * ((LiveRenderer.FULL_RECOVERY_FRAMES + BLOCK_FRAMES - 1) / BLOCK_FRAMES + 1) + 2;
+        long stepNanos = Math.round(BLOCK_FRAMES * 1e9 / LiveRenderer.SAMPLE_RATE);
+        // Renderers render whole blocks in turn, so a lease freed mid-block can serve a later renderer's
+        // whole block in the same round; each recovery outlasts a block, so a lease changes hands at most once
+        long workBound = 2L * ReplayBudget.DEFAULT_LEASES * LiveRenderer.REPLAY_PER_FRAME * BLOCK_FRAMES;
+        LoopPlan plan = GraphCompiler.compile(graph);
+        float[] blockBuf = new float[BLOCK_FRAMES * 2];
+
+        var bean = AllocHelper.bean();
+        LiveRenderer probe = new LiveRenderer(new ReplayBudget(1));
+        LiveRenderer.Timeline probeTimeline = b8Timeline(graph, plan, bank);
+        long allocBefore = bean != null ? bean.getThreadAllocatedBytes(Thread.currentThread().threadId()) : 0;
+        probe.publish(probeTimeline);
+        long allocAfter = bean != null ? bean.getThreadAllocatedBytes(Thread.currentThread().threadId()) : 0;
+
+        long startNanos = System.nanoTime();
+        List<double[]> trialBlockTimes = new ArrayList<>();
+        List<Double> trialMedians = new ArrayList<>();
+        boolean settled = false;
+        long gcCountBefore = getGcCount(), gcTimeBefore = getGcTimeMs();
+        long storms = 0, grants = 0, maxRoundWork = 0, rounds = 0;
+
+        while (true) {
+            // Whole storms only, so later grants in a storm are timed as often as the first
+            double[] blockTimes = new double[minRoundsPerTrial + stormRounds + 64];
+            int filled = 0;
+            while (filled < minRoundsPerTrial) {
+                // Each storm starts fresh: a new budget, timeline and renderers, all outside the timed rounds
+                var budget = new ReplayBudget(renderers);
+                var timeline = b8Timeline(graph, plan, bank);
+                var group = new LiveRenderer[renderers];
+                for (int r = 0; r < renderers; r++) { group[r] = new LiveRenderer(budget); group[r].publish(timeline); }
+                long target = B8_JOIN_NANOS;
+                boolean busy = true;
+                while (busy) {
+                    if (filled == blockTimes.length) throw new IllegalStateException(id + " storm ran past " + stormRounds + " rounds");
+                    timeline.prepare(target);
+                    long workBefore = 0;
+                    for (var renderer : group) workBefore += renderer.historyFrames();
+                    long t0 = System.nanoTime();
+                    for (var renderer : group) renderer.render(blockBuf, BLOCK_FRAMES, target);
+                    long elapsed = System.nanoTime() - t0;
+                    long work = -workBefore;
+                    busy = false;
+                    for (var renderer : group) {
+                        work += renderer.historyFrames();
+                        busy |= renderer.replayInProgress();
+                        if (renderer.scheduleMisses() > 0)
+                            throw new IllegalStateException(id + " missed " + renderer.scheduleMisses() + " schedule windows");
+                    }
+                    rounds++;
+                    if (work > workBound) throw new IllegalStateException(id + " replayed " + work + " frames in one block round, bound " + workBound);
+                    maxRoundWork = Math.max(maxRoundWork, work);
+                    blockTimes[filled++] = elapsed / 1_000_000.0;
+                    target += stepNanos;
+                }
+                storms++;
+                grants += budget.grants();
+            }
+
+            blockTimes = Arrays.copyOf(blockTimes, filled);
+            double[] sorted = blockTimes.clone();
+            Arrays.sort(sorted);
+            trialBlockTimes.add(blockTimes);
+            trialMedians.add(sorted[filled / 2]);
+            int n = trialMedians.size();
+            if (n >= 4) {
+                double m1 = trialMedians.get(n - 3), m2 = trialMedians.get(n - 2), m3 = trialMedians.get(n - 1);
+                double min = Math.min(m1, Math.min(m2, m3)), max = Math.max(m1, Math.max(m2, m3));
+                if (min > 0 && (max - min) / min <= 0.05) { settled = true; break; }
+            }
+            if (System.nanoTime() - startNanos >= MAX_WARMUP_NANOS) break;
+        }
+        System.out.printf(Locale.ROOT, "  %s: %d storms, %d grants, max replay work %d frames per block round (bound 2k: %d) over %d rounds%n",
+                id, storms, grants, maxRoundWork, workBound, rounds);
+        return pooledResult(id, renderers + " renderers replaying B6 + " + b8Loops(graph) + " loops on one budget, per block round",
+                settled, trialBlockTimes, trialMedians.size(), Math.max(0, allocAfter - allocBefore),
+                getGcCount() - gcCountBefore, getGcTimeMs() - gcTimeBefore);
+    }
+
+    /** Queued-capture cost: 8 renderers whose requests all wait behind leases that are never released. */
+    private static Result runQueuedScenario(Graph graph, Map<AssetRef, SampleData> bank) {
+        LoopPlan plan = GraphCompiler.compile(graph);
+        var budget = new ReplayBudget(8);
+        for (int i = 0; i < budget.leases(); i++) budget.request(new ReplayBudget.Lease());
+        var timeline = b8Timeline(graph, plan, bank);
+        var group = new LiveRenderer[8];
+        for (int r = 0; r < group.length; r++) { group[r] = new LiveRenderer(budget); group[r].publish(timeline); }
+        float[] blockBuf = new float[BLOCK_FRAMES * 2];
+        long stepNanos = Math.round(BLOCK_FRAMES * 1e9 / LiveRenderer.SAMPLE_RATE);
+        long target = B8_JOIN_NANOS;
+        long gcCountBefore = getGcCount(), gcTimeBefore = getGcTimeMs();
+        List<double[]> trials = new ArrayList<>();
+        for (int trial = 0; trial < 4; trial++) {
+            double[] times = new double[BLOCKS_PER_TRIAL];
+            for (int b = 0; b < BLOCKS_PER_TRIAL; b++) {
+                timeline.prepare(target);
+                long t0 = System.nanoTime();
+                for (var renderer : group) renderer.render(blockBuf, BLOCK_FRAMES, target);
+                times[b] = (System.nanoTime() - t0) / 1_000_000.0;
+                target += stepNanos;
+            }
+            trials.add(times);
+        }
+        for (var renderer : group)
+            if (renderer.historyFrames() != 0 || renderer.scheduleMisses() != 0 || renderer.replayQueuedFrames() == 0)
+                throw new IllegalStateException("B8q renderers must wait without replaying or missing windows");
+        // The first trial warms the JIT and is dropped by pooling the last three
+        return pooledResult("B8q", "8 renderers waiting for a lease, per block round", true, trials, trials.size(), 0,
+                getGcCount() - gcCountBefore, getGcTimeMs() - gcTimeBefore);
+    }
+
+    /** Average cost of one lease handoff: release the holder, grant the queue head, requeue the old holder. */
+    private static double grantOverheadNanos() {
+        var budget = new ReplayBudget(1, 8);
+        var leases = new ReplayBudget.Lease[8];
+        for (int i = 0; i < leases.length; i++) { leases[i] = new ReplayBudget.Lease(); budget.request(leases[i]); }
+        int holder = 0, cycles = 2_000_000;
+        for (int warm = 0; warm < 2; warm++) {
+            long t0 = System.nanoTime();
+            for (int i = 0; i < cycles; i++) {
+                budget.release(leases[holder]);
+                budget.request(leases[holder]);
+                holder = (holder + 1) % leases.length;
+            }
+            if (warm == 1) return (System.nanoTime() - t0) / (double) cycles;
+        }
+        throw new AssertionError();
+    }
+
+    private static Result pooledResult(String id, String description, boolean settled, List<double[]> trials, int trialsRun,
+                                       long publishAlloc, long gcCollections, long gcTimeMs) {
+        int trialsToPool = Math.min(3, trials.size());
+        double[] pooled = new double[0];
+        for (int i = trials.size() - trialsToPool; i < trials.size(); i++) {
+            double[] trial = trials.get(i);
+            int at = pooled.length;
+            pooled = Arrays.copyOf(pooled, at + trial.length);
+            System.arraycopy(trial, 0, pooled, at, trial.length);
+        }
+        Arrays.sort(pooled);
+        double median = pooled[pooled.length / 2];
+        return new Result(id, description, settled ? "settled" : "unsettled", trialsRun, publishAlloc, median,
+                pooled[(int) (pooled.length * 0.99)], pooled[pooled.length - 1], median / BLOCK_BUDGET_MS, gcCollections, gcTimeMs);
+    }
+
+    private static long b8Loops(Graph graph) {
+        return graph.nodes().stream().filter(node -> node.id().startsWith("loop") && node.type() == NodeType.GENERATOR_SAMPLE).count();
+    }
+
+    private static LiveRenderer.Timeline b8Timeline(Graph graph, LoopPlan plan, Map<AssetRef, SampleData> bank) {
+        var current = new SessionState(1, 0, 0, 120, true, graph);
+        // The commit took effect a second before the join, so pending has a full second of history
+        var pending = new SessionState(2, B8_JOIN_NANOS - 1_000_000_000L, current.cycleAt(B8_JOIN_NANOS - 1_000_000_000L), 120, true, graph);
+        var timeline = new LiveRenderer.Timeline(new LiveRenderer.Program(current, plan, bank), new LiveRenderer.Program(pending, plan, bank));
+        timeline.prepare(B8_JOIN_NANOS);
+        return timeline;
     }
 
     private record Result(
@@ -508,6 +697,29 @@ public final class PerfBench {
         edges.add(Graph.edge("room", "master"));
         edges.add(Graph.edge("hall", "master"));
         edges.add(new Graph.Edge("master", "out", "out", "audio"));
+        return new Graph(3, nodes, edges);
+    }
+
+    // B8: B6 with its last audio source replaced by B7's sustained loops, as many as MAX_NODES allows
+    private static Graph b8Graph(AssetRef stereoRef192k) {
+        Graph b6 = b6Graph();
+        List<Graph.Node> nodes = new ArrayList<>();
+        for (var node : b6.nodes()) if (!node.id().equals("tone7") && !node.id().equals("rhythm7")) nodes.add(node);
+        List<Graph.Edge> edges = new ArrayList<>();
+        for (var edge : b6.edges()) if (!edge.fromNode().equals("tone7") && !edge.fromNode().equals("rhythm7")) edges.add(edge);
+        // A stack takes at most 16 inputs, so the loops split across two like B7
+        nodes.add(new Graph.Node("loops", NodeType.STACK, Map.of()));
+        nodes.add(new Graph.Node("loopsA", NodeType.STACK, Map.of()));
+        nodes.add(new Graph.Node("loopsB", NodeType.STACK, Map.of()));
+        edges.add(Graph.edge("loops", "render7"));
+        edges.add(Graph.edge("loopsA", "loops"));
+        edges.add(Graph.edge("loopsB", "loops"));
+        int loops = GraphCompiler.MAX_NODES - nodes.size();
+        for (int i = 0; i < loops; i++) {
+            String id = "loop" + i;
+            nodes.add(new Graph.Node(id, NodeType.GENERATOR_SAMPLE, loopParams(1.0 + i * 0.01, 0.8 / loops), stereoRef192k));
+            edges.add(Graph.edge(id, i < 16 ? "loopsA" : "loopsB"));
+        }
         return new Graph(3, nodes, edges);
     }
 

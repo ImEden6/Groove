@@ -67,13 +67,17 @@ public final class GrooveAudioStream implements AudioStream {
                 java.util.concurrent.locks.LockSupport.parkNanos(remaining);
         }
         int frames = Math.min(CHUNK_FRAMES, bytes / (mono ? 2 : 4));
+        int requestedFade = fadeRequest.get();
+        if (fadeFrames < 0 && requestedFade > 0) {
+            fadeFrames = requestedFade; fadeRemaining = requestedFade;
+            // A stream fading to silence needs no rebuilt tail, so the first faded read does no replay work
+            renderer.cancelRecovery();
+        }
         long target = clock.serverTime(System.nanoTime()) + Math.round(queuedFrames * 1e9 / LiveRenderer.SAMPLE_RATE);
         renderer.render(samples, frames, target);
         maxQueuedFrames = Math.max(maxQueuedFrames, queuedFrames);
         ByteBuffer pcm = MemoryUtil.memAlloc(frames * (mono ? 2 : 4)).order(ByteOrder.LITTLE_ENDIAN);
         double blockPeak = peak;
-        int requestedFade = fadeRequest.get();
-        if (fadeFrames < 0 && requestedFade > 0) { fadeFrames = requestedFade; fadeRemaining = requestedFade; }
         boolean wantMuffle = underwater;
         if (wantMuffle != muffleActive) {
             muffleLeft.reset(); muffleRight.reset();

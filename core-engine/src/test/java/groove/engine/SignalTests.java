@@ -427,28 +427,36 @@ final class SignalTests {
                 n("filter",NodeType.FILTER,Map.of("cutoffHz",800.0)),n("out",NodeType.OUTPUT,Map.of())),
                 List.of(Graph.edge("tone","pulse"),Graph.edge("pulse","render"),Graph.edge("render","mix"),
                         Graph.edge("mix","delay"),Graph.edge("delay","mix"),Graph.edge("mix","filter"),out("filter")));
-        float[] reference = renderFrames(g,36032,128);
+        // 0.4 s of history at the join, recovered at REPLAY_PER_FRAME - 1 net frames per output frame
+        int joinFrame=19200, compareFrom=joinFrame+joinFrame/(LiveRenderer.REPLAY_PER_FRAME-1)/64*64+640, endFrame=compareFrom+9600;
+        float[] reference = renderFrames(g,endFrame+32,128);
         var timeline = new LiveRenderer.Timeline(new LiveRenderer.Program(state(g,0,0,120),GraphCompiler.compile(g)),null);
         LiveRenderer joined = new LiveRenderer(); joined.publish(timeline);
         float[] block = new float[128]; double energy=0, error=0;
         // There is no new note between .125 and 2 seconds: this measures historical echoes.
-        for (int at=19200;at<36000;at+=64) {
+        for (int at=joinFrame;at<endFrame;at+=64) {
             long now=Math.round(at*1e9/48000); timeline.prepare(now);
             long before=joined.historyFrames(); joined.render(block,64,now);
-            check(joined.historyFrames()-before<=64*4,"Recovery work bounded per callback");
-            if (at>=26400) for(int i=0;i<128;i++) {
+            check(joined.historyFrames()-before<=64*LiveRenderer.REPLAY_PER_FRAME,"Recovery work bounded per callback");
+            if (at>=compareFrom) for(int i=0;i<128;i++) {
                 energy+=block[i]*block[i]; double delta=block[i]-reference[at*2+i]; error+=delta*delta;
             }
         }
         check(energy>.001 && error<energy*.00001,"Recovered delay/filter history matches continuous playback: "+error+" / "+energy);
         check(joined.historyRecoveries()==1 && joined.scheduleMisses()==0,"One complete recovery without worker starvation");
         // A much later seek caps the initial history at one second, then catches the moving
-        // clock in about 1/3 second. A rewind during recovery must restart it cleanly.
+        // clock after FULL_RECOVERY_FRAMES. A rewind during recovery must restart it cleanly.
         timeline.prepare(20_000_000_000L); joined.resynchronize();
         long before=joined.historyFrames();
-        for(int i=0;i<260;i++) joined.render(block,64,20_000_000_000L+Math.round(i*64*1e9/48000));
+        int catchUpBlocks=LiveRenderer.FULL_RECOVERY_FRAMES/64+20;
+        for(int i=0;i<catchUpBlocks;i++) {
+            long seekNow=20_000_000_000L+Math.round(i*64*1e9/48000);
+            if(i%32==0) timeline.prepare(seekNow);
+            joined.render(block,64,seekNow);
+        }
         long replayed=joined.historyFrames()-before;
-        check(replayed>=48000 && replayed<=64004,"One-second history cap and bounded catch-up: "+replayed);
+        check(replayed>=48000 && replayed<=48000+LiveRenderer.FULL_RECOVERY_FRAMES+LiveRenderer.REPLAY_PER_FRAME,
+                "One-second history cap and bounded catch-up: "+replayed);
         joined.resynchronize(); timeline.prepare(400_000_000L);
         joined.render(block,64,400_000_000L);
         joined.resynchronize(); timeline.prepare(200_000_000L);
@@ -521,7 +529,7 @@ final class SignalTests {
                 continuous.render(a,64,now);
                 if(at<60032) continue;
                 joined.render(b,64,now); pending.render(c,64,now);
-                if(at>=86400) for(int i=0;i<128;i++) {
+                if(at>=(60032+LiveRenderer.FULL_RECOVERY_FRAMES+480)/64*64) for(int i=0;i<128;i++) {
                     close(b[i],a[i],1e-6,context);
                     close(c[i],a[i],1e-6,"Recovered pending constant sample equals standalone");
                 }
