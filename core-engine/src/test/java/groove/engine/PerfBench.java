@@ -67,7 +67,9 @@ public final class PerfBench {
         System.out.println("--------------------------------------------------------------------------------");
 
         List<Result> results = new ArrayList<>();
+        String only = System.getProperty("perf.only", "").trim();
         for (Scenario scenario : scenarios) {
+            if (!only.isEmpty() && !Arrays.asList(only.split(",")).contains(scenario.id())) continue;
             Result result = runScenario(scenario);
             results.add(result);
             printResult(result);
@@ -245,6 +247,18 @@ public final class PerfBench {
             "public static class GrooveCpuSets {",
             "    [DllImport(\"kernel32.dll\")]",
             "    static extern bool GetSystemCpuSetInformation(IntPtr info, uint length, out uint returned, IntPtr process, uint flags);",
+            "    [DllImport(\"kernel32.dll\")]",
+            "    static extern IntPtr OpenProcess(uint access, bool inherit, uint id);",
+            "    [DllImport(\"kernel32.dll\")]",
+            "    static extern bool SetProcessInformation(IntPtr process, int infoClass, int[] info, uint size);",
+            "    [DllImport(\"kernel32.dll\")]",
+            "    static extern bool CloseHandle(IntPtr handle);",
+            "    public static bool DisablePowerThrottling(uint id) {",
+            "        IntPtr handle = OpenProcess(0x2000, false, id);",
+            "        if (handle == IntPtr.Zero) return false;",
+            "        try { return SetProcessInformation(handle, 4, new[] { 1, 1, 0 }, 12); }",
+            "        finally { CloseHandle(handle); }",
+            "    }",
             "    public static long PerformanceMask() {",
             "        uint needed;",
             "        GetSystemCpuSetInformation(IntPtr.Zero, 0, out needed, IntPtr.Zero, 0);",
@@ -265,9 +279,11 @@ public final class PerfBench {
             "'@",
             "$mask = if ($Override) { [Convert]::ToInt64($Override, 16) } else { [GrooveCpuSets]::PerformanceMask() }",
             "if ($mask -ne 0) { (Get-Process -Id $ProcessId).ProcessorAffinity = [IntPtr]$mask }",
-            "'{0:X}' -f $mask");
+            "$fullSpeed = [GrooveCpuSets]::DisablePowerThrottling([uint32]$ProcessId)",
+            "'{0:X} {1}' -f $mask, $fullSpeed");
 
-    /** Hybrid CPUs move busy threads onto efficiency cores after a few seconds, which halves throughput mid-run. */
+    /** Hybrid CPUs move busy threads onto efficiency cores after a few seconds, and Windows throttles
+     *  windowless children of the Gradle daemon; either halves throughput. */
     private static String pinToPerformanceCores() {
         String override = System.getProperty("perf.affinity", "").trim();
         if (override.equalsIgnoreCase("none")) return "not pinned (perf.affinity=none)";
@@ -282,9 +298,11 @@ public final class PerfBench {
                 if (!override.isEmpty()) command.addAll(List.of("-Override", override));
                 Process p = new ProcessBuilder(command).redirectErrorStream(true).start();
                 String output = new String(p.getInputStream().readAllBytes()).trim();
-                if (p.waitFor() != 0 || !output.matches("[0-9A-F]+") || output.equals("0"))
+                if (p.waitFor() != 0 || !output.matches("[0-9A-F]+ (True|False)") || output.startsWith("0 "))
                     return "not pinned (" + output.replaceAll("\\s+", " ") + ")";
-                return "0x" + output + (override.isEmpty() ? " (performance cores)" : " (perf.affinity)");
+                String[] parts = output.split(" ");
+                return "0x" + parts[0] + (override.isEmpty() ? " (performance cores)" : " (perf.affinity)")
+                        + (parts[1].equals("True") ? ", power throttling off" : ", power throttling unchanged");
             } finally {
                 Files.deleteIfExists(script);
             }
