@@ -124,6 +124,10 @@ public final class LiveRenderer {
         final double[] onsets;
         final int[] hashes, planHashes;
         int count, tailCursor;
+        /** Cached voice selection, valid for cycles in [selectionFrom, selectionUntil) on selectedWindow. */
+        boolean selectionValid;
+        LookaheadScheduler.Window selectedWindow;
+        double selectionFrom, selectionUntil;
         long lastNow = Long.MIN_VALUE, lastResync;
         /** A voice pool (ActiveVoice[MAX_VOICES]) is only needed by a leaf program that's
          *  actually mixed as audio; a trigger child is never mixed, only scheduled for onset
@@ -200,6 +204,10 @@ public final class LiveRenderer {
     private volatile long historyFrames, historyRecoveries;
     private volatile long replayQueuedFrames, replayLeases, replayQueueDepth, replayMaxWaitFrames, replayReclaims, replayEvictions;
     private final ReplayBudget replayBudget;
+    /** False keeps the original per-frame selection, for differential tests. */
+    private final boolean cachedSelection;
+    /** Tests only: voices started and stolen, to compare selection strategies. */
+    long voiceStarts, voiceSteals, selections;
     /** Budget slot and its generation at registration; written by the budget on the sound thread. */
     int replaySlot = -1;
     long replayGeneration;
@@ -215,8 +223,11 @@ public final class LiveRenderer {
     public LiveRenderer() { this(ReplayBudget.unlimited()); }
 
     /** Renderers sharing a budget must all render on the same sound thread. */
-    public LiveRenderer(ReplayBudget replayBudget) {
+    public LiveRenderer(ReplayBudget replayBudget) { this(replayBudget, true); }
+
+    LiveRenderer(ReplayBudget replayBudget, boolean cachedSelection) {
         this.replayBudget = java.util.Objects.requireNonNull(replayBudget);
+        this.cachedSelection = cachedSelection;
     }
 
     /** Control-thread only: prepare renderer-private filters before the volatile handoff.
@@ -541,29 +552,60 @@ public final class LiveRenderer {
             out[0] *= program.recoveryGain; out[1] *= program.recoveryGain;
             return;
         }
+        if (!cachedSelection || !program.selectionValid || program.selectedWindow != program.window
+                || !(cycles >= program.selectionFrom && cycles < program.selectionUntil))
+            select(program, cycles, secondsPerCycle);
+        out[0] = 0; out[1] = 0;
+        for (ActiveVoice v : program.voices) if (v.event >= 0) addVoice(program, v, cycles, secondsPerCycle, 1, out);
+        for (ActiveVoice v : program.tails) if (v.event >= 0) {
+            addVoice(program, v, cycles, secondsPerCycle, STEAL_FADE[v.fadeFrame++], out);
+            if (v.fadeFrame == STEAL_FRAMES) v.event = -1;
+        }
+    }
+
+    /**
+     * Chooses which events sound and starts or steals voices to match. The result only changes when some
+     * event's "has started" or "is still sounding" test flips, so a cached selection is reused until the
+     * earliest cycle where one could.
+     */
+    private void select(VoiceProgram program, double cycles, double secondsPerCycle) {
+        double until = Double.POSITIVE_INFINITY;
+        selections++;
         program.count = 0;
         if (program.scheduler != null) {
             for (int i = 0; i < program.window.size(); i++) {
                 var entry = program.window.entry(i);
                 Event event = entry.event();
                 double onset = event.whole().start();
-                if (onset > cycles) break;
+                if (onset > cycles) { until = Math.min(until, onset); break; }
                 if (event.sample() != null && !event.sample().loop() && onset < program.state.anchorCycle()) continue;
                 double duration = entry.durationSeconds();
                 if (duration < 0) continue;
-                if ((cycles - onset) * secondsPerCycle < duration) program.candidate(entry.ordinal(), onset, event, entry.matchHash());
+                if ((cycles - onset) * secondsPerCycle < duration) {
+                    program.candidate(entry.ordinal(), onset, event, entry.matchHash());
+                    until = Math.min(until, endBefore(onset, duration, secondsPerCycle));
+                }
             }
-        } else for (int i = 0; i < program.plan.size(); i++) {
-            Event event = program.plan.event(i);
-            double onset = Math.floor(cycles) + event.whole().start();
-            if (onset > cycles) onset--;
-            double duration = eventDuration(program, event, secondsPerCycle);
-            if (duration < 0) continue;
-            for (int overlap = 0; overlap < MAX_VOICES && (event.sample() != null && event.sample().loop() || onset >= program.state.anchorCycle()); overlap++, onset--) {
-                if ((cycles - onset) * secondsPerCycle >= duration) break;
-                program.candidate(i, onset, event, program.planHashes[i]);
+        } else {
+            double floor = Math.floor(cycles);
+            until = Math.min(until, floor + 1);
+            for (int i = 0; i < program.plan.size(); i++) {
+                Event event = program.plan.event(i);
+                double onset = floor + event.whole().start();
+                if (onset > cycles) { until = Math.min(until, onset); onset--; }
+                double duration = eventDuration(program, event, secondsPerCycle);
+                if (duration < 0) continue;
+                for (int overlap = 0; overlap < MAX_VOICES && (event.sample() != null && event.sample().loop() || onset >= program.state.anchorCycle()); overlap++, onset--) {
+                    if ((cycles - onset) * secondsPerCycle >= duration) break;
+                    program.candidate(i, onset, event, program.planHashes[i]);
+                    until = Math.min(until, endBefore(onset, duration, secondsPerCycle));
+                }
             }
         }
+        program.selectionValid = true;
+        program.selectedWindow = program.window;
+        program.selectionFrom = cycles;
+        program.selectionUntil = until;
         for (ActiveVoice v : program.voices) {
             v.wanted = false;
             for (int i = 0; i < program.count; i++)
@@ -578,6 +620,7 @@ public final class LiveRenderer {
             program.voices[i] = program.tails[tail];
             program.voices[i].event = -1;
             program.tails[tail] = v; v.fadeFrame = 0;
+            voiceSteals++;
         }
         for (int i = 0; i < program.count; i++) {
             boolean exists = false;
@@ -590,15 +633,17 @@ public final class LiveRenderer {
             if (duration < 0) continue;
             for (ActiveVoice v : program.voices) if (v.event < 0) {
                 v.start(event, program.events[i], program.hashes[i], program.onsets[i], duration,
-                        event.sample() == null ? null : program.samples.get(event.sample())); break;
+                        event.sample() == null ? null : program.samples.get(event.sample()));
+                voiceStarts++;
+                break;
             }
         }
-        out[0] = 0; out[1] = 0;
-        for (ActiveVoice v : program.voices) if (v.event >= 0) addVoice(program, v, cycles, secondsPerCycle, 1, out);
-        for (ActiveVoice v : program.tails) if (v.event >= 0) {
-            addVoice(program, v, cycles, secondsPerCycle, STEAL_FADE[v.fadeFrame++], out);
-            if (v.fadeFrame == STEAL_FRAMES) v.event = -1;
-        }
+    }
+
+    /** A cycle safely before (cycles - onset) * secondsPerCycle reaches duration, with room for rounding. */
+    private static double endBefore(double onset, double duration, double secondsPerCycle) {
+        double span = duration / secondsPerCycle;
+        return onset + span - 1e-9 * (1 + Math.abs(onset) + span);
     }
 
     private static boolean ready(Playback playback, long now) {
@@ -613,6 +658,7 @@ public final class LiveRenderer {
         for (ActiveVoice v : program.tails) v.event = -1;
         if (program.signals != null) program.signals.reset();
         program.lastNow = Long.MIN_VALUE; program.lastResync = resyncs;
+        program.selectionValid = false;
         program.missed = false; program.recovering = false; program.recoveryGain = 1; program.unrecovered = false;
         if (program.sources != null) for (VoiceProgram source : program.sources) reset(source);
         if (program.triggers != null) for (VoiceProgram trigger : program.triggers) reset(trigger);

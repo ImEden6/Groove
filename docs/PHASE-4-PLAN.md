@@ -965,6 +965,28 @@ The current selection stays as a package-private strategy in main code. A random
 runs both over patterns with window swaps, pruning, more than 32 active events, resync, seek, leases and
 recovery, and asserts identical voice starts and stops per frame.
 
+As implemented (2026-09-17):
+
+- **Condition met.** JFR profiles after steps 3, 6 and 7 put voice selection (the window scan, the
+  `matches` loops and `candidate`) at 20% of B7 and about 28% of B9 and one-renderer B8.
+- **No 64-frame recompute.** Recomputing once per control block would start and stop voices up to
+  63 frames late, which changes output. `LiveRenderer.select` instead records the earliest cycle at
+  which any "has started" or "is still sounding" test could flip: the first future onset exactly, each
+  sounding event's end with a small rounding margin, and the next whole cycle for hand-built plans.
+  The cached selection is reused while the cycle stays in that range, on the same window, with no
+  reset since. Recovery, lease grants, resyncs, seeks and missed windows all reset the program, which
+  drops the cache.
+- **Tests.** `SelectionCacheTests` renders a cached and a per-frame renderer (`LiveRenderer(budget,
+  false)`) side by side through random block sizes, resyncs, seeks and republishes, over hand-built
+  plans with 40 overlapping one-shots, compiled patterns with more than 32 sounding voices and a loop,
+  and a delay graph under k = 1 leases. Output must match bit for bit, with equal voice starts, steals,
+  misses and replay work. A sparse pattern (one note every 16 cycles, past the 4-cycle lookahead) checks
+  that a window swap drops the cache. Removing the end-of-note boundary or the window check each makes
+  the test fail.
+- **Result.** Medians fell 20-70% (B1 0.74 to 0.22 ms, B7 2.90 to 2.35 ms, B9 3.36 to 2.59 ms); B8 at
+  8 renderers went from p99 38.97 to 26.41 ms, still failing its gate. Full table in
+  `ENGINE-UPGRADE-STAGES.md`.
+
 ---
 
 ## 9. Demo audio [R5]

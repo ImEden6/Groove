@@ -386,6 +386,30 @@ runs: six B1-only runs gave 4.4 to 5.1 ms except one at 11.6 ms, with Gradle and
 alike. Recorded stalls after warm-up had no GC, deoptimization or safepoint nearby, so they are
 treated as OS preemption. Use p99, not max, for pass criteria.
 
+### After P3 and P4 (step 7 and step 8)
+
+Pinned, throttling off, 2026-09-17. "Before" is the full run after P3 (the 15.996x level change),
+"after" adds P4 (cached voice selection). B4 was not re-run for "after".
+
+| Id | Median before (ms) | Median after (ms) | p99 before (ms) | p99 after (ms) |
+| --- | --- | --- | --- | --- |
+| B1 | 0.7438 | 0.2207 | 1.3558 | 0.3464 |
+| B2 | 0.1091 | 0.0167 | 2.1616 | 1.6346 |
+| B3 | 0.1078 | 0.0164 | 2.8277 | 2.2992 |
+| B5 | 0.5725 | 0.3221 | 0.8997 | 0.5821 |
+| B6 | 0.6613 | 0.4000 | 1.3306 | 0.8317 |
+| B7 | 2.9039 | 2.3483 | 4.2342 | 3.5745 |
+| B7b | 0.6129 | 0.3542 | 0.9770 | 0.6273 |
+| B9 | 3.3613 | 2.5910 | 5.8140 | 5.0507 |
+| B8x1 | 5.9509 | 4.7006 | 9.5572 | 7.1972 |
+| B8x4 | 16.9727 | 12.8068 | 23.4388 | 18.2451 |
+| B8x8 | 23.2004 | 17.6738 | 38.9681 | 26.4099 |
+| B8q | 0.1535 | 0.1541 | 0.2690 | 0.2764 |
+
+Compared with the step 6 run, P3 alone took B9 from a 4.60 ms median and 8.27 ms p99 to 3.36 and
+5.81 ms. B9's publish bytes after P4 are 1,211,344, within its 1,323,132 gate. B8 at 8 renderers
+still fails its 5.33 ms gate.
+
 ### B9 adversarial (`perfBench -PperfOnly=B9`)
 
 One renderer on a graph at the compiler's limits: 128 events per cycle (32 loops, 7 audio sources
