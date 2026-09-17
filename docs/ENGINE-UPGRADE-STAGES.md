@@ -334,6 +334,20 @@ Stage 3 adds automated build targets and offline demonstration scripts:
   (8.0s, 48 kHz stereo PCM), demonstrating dual live sources, LFO-modulated biquad filtering,
   and tempo-synced feedback delay via `LiveRenderer`.
 
+Stage 4 (Phase 4 step 9) reworks both demos around reverb:
+
+- `renderSampleDemo` now plays four scores for 7 cycles at 120 BPM (14 s) plus a 2 s tail: the
+  sliced swung kit (cycle 3 reversed) through a short room mixed low, dry pulse bass, the swung
+  lead through the synced 1/8 echo and a long hall, and a sustained pad (the kick's first half,
+  looped and voiced 2:3:4) into the hall. The hall sits after the echo loop.
+- `renderSignalDemo` renders `SignalDemo.reverbSources()`: the bass filter and echo mix gains a
+  reverb outside the delay loop, and the lead stays dry.
+- `/groove sample-demo` loads `FactorySamples.reverbDemo()` and `/groove signal-demo` loads
+  `reverbSources()`. In game the patterns loop, so there is no tail.
+- `DemoTests` checks both in `check`: finite samples, peak at most 1.0, every sample-demo cycle and
+  every signal-demo second above -40 dBFS, and the sample-demo tail above -50 dBFS at 14.0-14.2 s
+  and below it by 15.8-16.0 s.
+
 ## Stage 4 baseline performance on reference machine
 
 ### Reference machine specification

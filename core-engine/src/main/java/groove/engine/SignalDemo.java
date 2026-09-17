@@ -7,14 +7,39 @@ import java.util.Map;
 /** Slow shared-clock filter sweep with quiet, 250 ms feedback echoes. */
 public final class SignalDemo {
     private SignalDemo() {}
+    public static final int TOTAL_FRAMES = LiveRenderer.SAMPLE_RATE * 8;
+
     public static void main(String[] args) throws Exception {
         Path path = Path.of(args.length == 0 ? "signal-demo.wav" : args[0]);
-        Graph graph = multipleSources();
-        SessionState state = new SessionState(1, 0, 0, 120, true, graph);
+        Demo.writeWav(path, render(reverbSources(), TOTAL_FRAMES), LiveRenderer.SAMPLE_RATE);
+    }
+
+    /** Renders a sample-free graph live from time zero, preparing lookahead each block as the worker would. */
+    static float[] render(Graph graph, int totalFrames) {
+        var state = new SessionState(1, 0, 0, 120, true, graph);
+        var timeline = new LiveRenderer.Timeline(new LiveRenderer.Program(state, GraphCompiler.compile(graph)), null);
         LiveRenderer renderer = new LiveRenderer();
-        LiveRenderer.Program program = new LiveRenderer.Program(state, GraphCompiler.compile(graph));
-        renderer.publish(new LiveRenderer.Timeline(program, null));
-        Demo.write(path, renderer, LiveRenderer.SAMPLE_RATE, LiveRenderer.SAMPLE_RATE * 8);
+        renderer.publish(timeline);
+        float[] output = new float[totalFrames * 2], block = new float[1024];
+        for (int at = 0; at < totalFrames; at += 512) {
+            int frames = Math.min(512, totalFrames - at);
+            long now = Math.round(at * 1e9 / LiveRenderer.SAMPLE_RATE);
+            timeline.prepare(now);
+            renderer.render(block, frames, now);
+            System.arraycopy(block, 0, output, at * 2, frames * 2);
+        }
+        return output;
+    }
+
+    /** multipleSources() with a reverb on the filtered bass and its echoes, outside the delay loop; the lead stays dry. */
+    public static Graph reverbSources() {
+        Graph dry = multipleSources();
+        var nodes = new java.util.ArrayList<>(dry.nodes());
+        nodes.add(new Graph.Node("space", NodeType.REVERB, Map.of(NodeParam.DECAY_SECONDS, 1.8, NodeParam.DAMPING_HZ, 6000.0)));
+        var edges = new java.util.ArrayList<>(dry.edges());
+        edges.add(Graph.edge("mix", "space"));
+        edges.add(Graph.edge("space", "master"));
+        return new Graph(3, nodes, edges);
     }
     /** Independent dry lead alongside the filtered bass/feedback source. */
     public static Graph multipleSources() {

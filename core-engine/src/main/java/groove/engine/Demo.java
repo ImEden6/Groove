@@ -35,59 +35,57 @@ public final class Demo {
         }
         System.out.println("Rendered " + score.size() + " notes to " + path.toAbsolutePath());
     }
-    static void write(Path path, LiveRenderer renderer, int sampleRate, int totalFrames) throws java.io.IOException {
-        Files.createDirectories(path.toAbsolutePath().getParent());
-        float[] buffer = new float[1024];
-        int bytes = totalFrames * 4;
-        try (DataOutputStream out = new DataOutputStream(new BufferedOutputStream(Files.newOutputStream(path)))) {
-            out.writeBytes("RIFF"); le32(out, 36 + bytes); out.writeBytes("WAVEfmt ");
-            le32(out, 16); le16(out, 1); le16(out, 2); le32(out, sampleRate);
-            le32(out, sampleRate * 4); le16(out, 4); le16(out, 16);
-            out.writeBytes("data"); le32(out, bytes);
-            int at = 0;
-            while (at < totalFrames) {
-                int frames = Math.min(512, totalFrames - at);
-                renderer.render(buffer, frames, Math.round(at * 1e9 / sampleRate));
-                for (int i = 0; i < frames * 2; i++) le16(out, (int) Math.round(buffer[i] * 32767));
-                at += frames;
-            }
+    /**
+     * Plays each score into the signal graph's audio_render node of the same id, and keeps processing silence
+     * after the scores end so effects ring out. Output is scaled down to -1 dBFS only if it would exceed that.
+     */
+    static float[] render(java.util.Map<String, Score> scores, Graph graph, SessionState state, int totalFrames) {
+        SignalGraph signals = GraphCompiler.compile(graph).signals();
+        if (signals.sourceCount() != scores.size() || signals.triggerCount() != 0)
+            throw new IllegalArgumentException("Each audio_render source needs exactly one score, and no trigger sources");
+        SignalRuntime runtime = signals.runtime(state);
+        int sources = signals.sourceCount();
+        Renderer[] renderers = new Renderer[sources];
+        for (int source = 0; source < sources; source++) {
+            Score score = scores.get(signals.sourceNodeId(source));
+            if (score == null) throw new IllegalArgumentException("No score for source " + signals.sourceNodeId(source));
+            renderers[source] = new Renderer(score, 32);
         }
-        System.out.println("Rendered " + totalFrames + " frames to " + path.toAbsolutePath());
-    }
-    static void write(Path path, Score rhythm, Score lead, SignalRuntime delay) throws java.io.IOException {
-        Files.createDirectories(path.toAbsolutePath().getParent());
-        Renderer rhythmRenderer = new Renderer(rhythm, 32);
-        Renderer leadRenderer = new Renderer(lead, 16);
-        float[] rhythmBuffer = new float[1024];
-        float[] leadBuffer = new float[1024];
+        float[][] buffers = new float[sources][1024];
+        double[][] frame = new double[sources][2];
         double[] stereo = new double[2];
-        int sampleRate = rhythm.sampleRate();
-        long totalFrames = Math.max(rhythm.frames(), lead.frames());
-        int bytes = Math.toIntExact(totalFrames * 4);
+        float[] mixed = new float[totalFrames * 2];
+        double peak = 0;
+        for (int at = 0; at < totalFrames; at += 512) {
+            int frames = Math.min(512, totalFrames - at);
+            for (int source = 0; source < sources; source++) renderers[source].render(buffers[source], 0, frames);
+            for (int f = 0; f < frames; f++) {
+                for (int source = 0; source < sources; source++) {
+                    frame[source][0] = buffers[source][f * 2];
+                    frame[source][1] = buffers[source][f * 2 + 1];
+                }
+                runtime.process(frame, stereo, Math.round((at + f) * 1e9 / LiveRenderer.SAMPLE_RATE));
+                mixed[(at + f) * 2] = (float) stereo[0];
+                mixed[(at + f) * 2 + 1] = (float) stereo[1];
+                peak = Math.max(peak, Math.max(Math.abs(stereo[0]), Math.abs(stereo[1])));
+            }
+        }
+        double limit = Math.pow(10, -1.0 / 20);
+        if (peak > limit) for (int i = 0; i < mixed.length; i++) mixed[i] *= (float) (limit / peak);
+        return mixed;
+    }
+
+    static void writeWav(Path path, float[] interleaved, int sampleRate) throws java.io.IOException {
+        Files.createDirectories(path.toAbsolutePath().getParent());
+        int bytes = interleaved.length * 2;
         try (DataOutputStream out = new DataOutputStream(new BufferedOutputStream(Files.newOutputStream(path)))) {
             out.writeBytes("RIFF"); le32(out, 36 + bytes); out.writeBytes("WAVEfmt ");
             le32(out, 16); le16(out, 1); le16(out, 2); le32(out, sampleRate);
             le32(out, sampleRate * 4); le16(out, 4); le16(out, 16);
             out.writeBytes("data"); le32(out, bytes);
-            long at = 0;
-            while (at < totalFrames) {
-                int frames = (int) Math.min(512, totalFrames - at);
-                rhythmRenderer.render(rhythmBuffer, 0, frames);
-                leadRenderer.render(leadBuffer, 0, frames);
-                for (int i = 0; i < frames; i++) {
-                    stereo[0] = leadBuffer[i * 2];
-                    stereo[1] = leadBuffer[i * 2 + 1];
-                    long nanos = Math.round((at + i) * 1e9 / sampleRate);
-                    delay.process(stereo, nanos);
-                    double left = rhythmBuffer[i * 2] + stereo[0];
-                    double right = rhythmBuffer[i * 2 + 1] + stereo[1];
-                    le16(out, (int) Math.round(Math.tanh(left) * 32767));
-                    le16(out, (int) Math.round(Math.tanh(right) * 32767));
-                }
-                at += frames;
-            }
+            for (float value : interleaved) le16(out, Math.round(Math.max(-1f, Math.min(1f, value)) * 32767));
         }
-        System.out.println("Rendered " + (rhythm.size() + lead.size()) + " notes to " + path.toAbsolutePath());
+        System.out.println("Rendered " + interleaved.length / 2 + " frames to " + path.toAbsolutePath());
     }
     static void le16(DataOutputStream out, int n) throws java.io.IOException {
         out.writeByte(n); out.writeByte(n >>> 8);

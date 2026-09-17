@@ -26,6 +26,7 @@ public final class EngineTests {
         ReverbTests.run();
         DenormalTests.run();
         SelectionCacheTests.run();
+        DemoTests.run();
         // Voice matching rejects on matchHash first, so equal matched fields must hash equally
         Tone matchTone = new Tone(Tone.Wave.SAW, 220, .2, 0, 20000, Biquad.DEFAULT_Q, .5);
         Event firstPart = new Event(new Arc(0, 2), new Arc(0, 1), matchTone, null);

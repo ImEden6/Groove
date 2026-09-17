@@ -26,8 +26,8 @@ Enable cheats in a test single-player world, or use an operator account on a ser
 | `/groove stop` | Stop on a safe downbeat |
 | `/groove tempo 140` | Change tempo while preserving cycle position |
 | `/groove demo` | Replace the patch with the built-in demo |
-| `/groove sample-demo` | Load the factory sample-based drum demo |
-| `/groove signal-demo` | Load the v3 filter sweep/feedback bass and independent dry lead demo |
+| `/groove sample-demo` | Load the factory sample-based drum demo, through a short room reverb |
+| `/groove signal-demo` | Load the v3 filter sweep/feedback bass with reverb and an independent dry lead |
 | `/groove save` | Save the accepted patch and tempo in the world folder |
 | `/groove load` | Validate and load graph and BPM from `groove-session.json` (legacy two-file saves remain readable) |
 

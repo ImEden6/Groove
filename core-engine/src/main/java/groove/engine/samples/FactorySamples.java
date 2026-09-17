@@ -36,6 +36,23 @@ public final class FactorySamples {
         }
         return b.array();
     }
+    /** The kit from demo() as a v3 signal graph through a short room reverb, mixed under the dry beat. */
+    public static Graph reverbDemo() {
+        return new Graph(3, List.of(new Graph.Node("kick", NodeType.GENERATOR_SAMPLE, Map.of(), ref("factory:basic/kick.wav")),
+                new Graph.Node("beat", NodeType.EUCLID, Map.of(NodeParam.STEPS, 8.0, NodeParam.PULSES, 4.0)),
+                new Graph.Node("hat", NodeType.GENERATOR_SAMPLE, Map.of(NodeParam.GAIN, .4), ref("factory:basic/hat.wav")),
+                new Graph.Node("hats", NodeType.EUCLID, Map.of(NodeParam.STEPS, 16.0, NodeParam.PULSES, 7.0)),
+                new Graph.Node("mix", NodeType.STACK, Map.of()),
+                new Graph.Node("kit", NodeType.AUDIO_RENDER, Map.of()),
+                new Graph.Node("room", NodeType.REVERB, Map.of(NodeParam.DECAY_SECONDS, .6, NodeParam.DAMPING_HZ, 8000.0)),
+                new Graph.Node("roomLevel", NodeType.MIX_BUS, Map.of(NodeParam.GAIN, .35)),
+                new Graph.Node("master", NodeType.MIX_BUS, Map.of(NodeParam.GAIN, .9)),
+                new Graph.Node("out", NodeType.OUTPUT, Map.of())),
+                List.of(Graph.edge("kick", "beat"), Graph.edge("hat", "hats"), Graph.edge("beat", "mix"), Graph.edge("hats", "mix"),
+                        Graph.edge("mix", "kit"), Graph.edge("kit", "master"), Graph.edge("kit", "room"),
+                        Graph.edge("room", "roomLevel"), Graph.edge("roomLevel", "master"),
+                        new Graph.Edge("master", "out", "out", "audio")));
+    }
     public static Graph demo() {
         return new Graph(2, List.of(new Graph.Node("kick", NodeType.GENERATOR_SAMPLE, Map.of(), ref("factory:basic/kick.wav")),
                 new Graph.Node("beat", NodeType.EUCLID, Map.of(NodeParam.STEPS, 8.0, NodeParam.PULSES, 4.0)),

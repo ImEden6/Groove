@@ -1036,6 +1036,20 @@ and lets the effects ring out.
   every source played), tail RMS over 14.0-14.2 s > −50 dBFS, and RMS over 15.8-16.0 s below it.
 - `SignalDemo` only: RMS > −40 dBFS in every 1 s window.
 
+As implemented (`DemoTests`, run from `EngineTests`):
+
+- Built from the prototype in `scratch/phase4-demo/ReverbDemo.java`. The pad is the kick's first
+  half (`slice(2, 0)`), looped at 0.25-0.6 with a 40 ms fade and voiced at pitch 2, 3 and 4.
+- Instead of `Demo.write(Path, Score[], SignalGraph, int)`, `Demo.render(Map<String, Score>, Graph,
+  SessionState, int)` maps each score to the `audio_render` node with its id and returns the samples,
+  so the checks run on the same audio `writeWav` saves. Output is scaled to -1 dBFS only if it would
+  exceed that. The old two-score `Demo.write` and the `LiveRenderer` one are gone.
+- "RMS over 15.8-16.0 s below it" is read as below -50 dBFS. Measured: cycles -19.4 to -19.7 dBFS,
+  tail -28.6 dBFS, 15.8-16.0 s -65.0 dBFS.
+- `SignalDemo.reverbSources()` adds a 1.8 s reverb (damping 6000 Hz) fed by `mix` and returned to
+  `master`, keeping the dry path. `FactorySamples.reverbDemo()` routes the kit through
+  `audio_render` into a 0.6 s room at gain 0.35 under the dry signal; `DemoTests` also plays it.
+
 ---
 
 ## 10. Docs
