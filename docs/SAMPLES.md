@@ -86,6 +86,10 @@ steps and cycle boundaries while sharing the 32-voice limit.
 (end=0 means asset end) and `reverse` (0/1). The `sample_slice` pattern node
 selects an equal region with `slices`, `index`, and `reverse`; connect several
 slices to `polymeter` to rearrange a break. These controls are in the editor.
+Set `loop` to 1 to sustain a sample for its whole event, cycling between `loopStart` and
+`loopEnd` (fractions of the region, defaults 0.25 and 0.9) with a `loopFadeMs` crossfade
+(default 20, up to 500). The editor warns when a loop is too short or had to move inward; see
+[Stage 4](ENGINE-UPGRADE-STAGES.md#sustained-sample-loops).
 Regions are isolated and prefiltered before playback, with a combined memory
 budget. Invalid regions or region-budget overflow reject preparation of the
 replacement program. See [Stage 2](ENGINE-UPGRADE-STAGES.md#stage-2-usage) for

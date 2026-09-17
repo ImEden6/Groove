@@ -7,7 +7,7 @@
 | 1 | Note names, scale-degree sequences, transpose, chords, filter modes | Implemented; automated checks pass |
 | 2 | Shared voice DSP, offline samples, sample regions and slicing | Implemented; automated checks pass |
 | 3 | Pattern reverse, swing, pulse/PWM, tempo-synced delay | Implemented; automated checks pass |
-| 4 | Reverb, sustained sample loops, measured performance improvements | In progress |
+| 4 | Reverb, sustained sample loops, replay leasing, measured performance improvements | Implemented; automated checks pass; B8 8-renderer timing gate fails |
 
 ## Stage 1 usage
 
@@ -348,7 +348,180 @@ Stage 4 (Phase 4 step 9) reworks both demos around reverb:
   every signal-demo second above -40 dBFS, and the sample-demo tail above -50 dBFS at 14.0-14.2 s
   and below it by 15.8-16.0 s.
 
-## Stage 4 baseline performance on reference machine
+## Stage 4 usage
+
+Stage 4 (Phase 4) adds the `reverb` node, sustained loops on `sample` nodes, shared replay leasing
+for speakers, and measured performance work. Graphs stay at version 3; every new param has a
+default, so Phase 3 saves load unchanged. Downgrading to Phase 3 is unsupported; see
+[BACKEND-USAGE.md](BACKEND-USAGE.md#compatibility-and-version-checks).
+
+### Reverb
+
+`reverb` takes `in`: AUDIO and outputs `out`: AUDIO, wet signal only (like `delay`). Mix it back
+with a `mix_bus`. The node is a Dattorro plate: mono in (`(L + R) / 2`), stereo out, fixed memory
+and a modulated tank that avoids metallic ringing.
+
+| Param | Range | Default | Meaning |
+| --- | --- | --- | --- |
+| `decaySeconds` | 0.1..20 | 1.8 | Nominal T60 |
+| `dampingHz` | 200..20000 | 6000 | One-pole low-pass inside the tank |
+| `bandwidthHz` | 200..20000 | 12000 | One-pole low-pass on the input |
+| `preDelayMs` | 0..500 | 0 | Delay before the plate |
+
+- **Limit.** At most 2 reverbs per graph (`"At most 2 reverbs per graph"`), separate from the
+  192,000-frame delay budget. The editor enforces the same limit.
+- **Loudness contract.** Peak magnitude response is −1 dB at every `decaySeconds`. Saved patches
+  rely on this, so the node is never retuned in place; other algorithms would be new node types.
+  The contract fixes peak response, not tail energy: broadband tail energy still falls by about
+  9 dB from 1 s to 20 s, and `mix_bus` gain is capped at 1, so set the dry level lower instead.
+- **Decay.** The tank applies a decay multiplier every `τ = 0.181 s`, with
+  `g = 10^(−3 · τ / decaySeconds)`. Measured T60 is within ±20% from 1 s up; below 0.5 s it is
+  uncalibrated.
+- **Filters.** `damping: y = (1 − d)·x + d·y₋₁` with `d = exp(−2π·dampingHz / fs)`;
+  `bandwidth: y = b·x + (1 − b)·y₋₁` with `b = 1 − exp(−2π·bandwidthHz / fs)`. Cutoffs clamp to
+  0.45 · fs.
+- **Memory.** About 36,330 frames of tank at 48 kHz (about 290 KB) plus up to 24,000 frames of
+  predelay (about 190 KB) per reverb.
+- **Denormals.** Feedback writes below 1e-30 snap to zero so a decaying tail never turns into slow
+  subnormal numbers. The same applies to delay writes and filter state.
+
+#### Loop-gain rule
+
+A feedback loop that contains a reverb must provably stay below unity gain, or the graph is
+rejected with `"Feedback loop through reverb can exceed unity gain (bound <x>)"`. The compiler
+cuts edges into each `delay`, then bounds the amplitude arriving back at every delay from every
+other: `mix_bus` multiplies the summed inputs by its gain (1 when modulated), a low- or high-pass
+`filter` by its resonance peak `Q / sqrt(1 − 1/(4Q²))` for `Q > 0.707` (times 1.05), and a reverb
+by 0.95. Any delay whose incoming bounds sum above 0.89 (−1 dB) rejects the graph. For example,
+`delay → reverb → mix_bus(gain 0.5) → delay` is accepted, while `mix_bus(delay, reverb(delay)) →
+delay` at gain 1 is not. Loops without a reverb keep their Phase 3 behaviour and are not checked.
+
+Below that bound, two listeners who joined at different times converge: any difference shrinks by
+at least 11% per trip around the loop, on top of the reverb's own T60.
+
+#### Known limitations
+
+- Late joins, resyncs and every publish (including knob drags and the headphone preview) replay at
+  most 1 s of history, and stopping the transport cuts tails. Two speakers that joined at different
+  times differ until the unreplayed part of the tail has decayed: at most T60 for a reverb outside a
+  loop, plus the loop convergence time for one inside a loop.
+- Effect memory is per program per renderer, not per graph: up to 3.07 MB of delay plus about 1 MB
+  for two reverbs per program, times current, pending and previous programs, times the client's
+  renderers. A program waiting for a replay lease keeps the previous program alive too.
+- Delay feedback loops without a reverb can still saturate at ±8, which makes late joiners diverge.
+  This predates Stage 4.
+
+### Sustained sample loops
+
+`sample` nodes take four more params. With `loop = 0` the other three are ignored and the node
+behaves, saves and hashes exactly as in Phase 3.
+
+| Param | Range | Default when looping | Meaning |
+| --- | --- | --- | --- |
+| `loop` | 0 or 1 | 0 | 1 sustains the voice for its whole event |
+| `loopStart` | 0..1 | 0.25 | Fraction of the prepared region, in playback order |
+| `loopEnd` | 0..1 | 0.9 | Fraction of the prepared region, in playback order |
+| `loopFadeMs` | 0..500 | 20 | Crossfade length at the seam |
+
+The compiler requires `loopStart < loopEnd`. The region is the one after `startFrame`/`endFrame`,
+slicing and reverse, so loop points follow the audio as it actually plays. A looped voice lasts as
+long as its event, with a 1 ms attack and a 20 ms release ending at the event's end; one-shots
+keep their natural length.
+
+**Geometry.** Loop points are resolved once per voice on the control thread, deterministically from
+the asset, so every client agrees. The loop must keep the resampler's full reach `R` inside real
+audio:
+
+```
+step0 = assetRate · pitchRatio / outputRate
+level = halvings while step ≥ 1.96        (level ≤ 4)
+band  = ceil(max(0, step0 / 2^level − 1) · 64)
+R     = (ceil(24 · (1 + band/64)) + 1) · 2^level + 48 · (2^level − 1)
+```
+
+Steps 1, 2, 15.996 and 16 give `R` = 25, 98, 1,120 and 1,120. With `N` prepared frames, the fade is
+first limited to half the loop, then the loop is moved inward to `[max(Ls, R + fade), min(Le,
+N − R))`. If fewer than 128 frames remain, the voice plays one-shot instead.
+
+**Seam.** Across the last `X` frames before the loop end, the voice crossfades toward the matching
+audio one period back. The fade gains adapt to how alike the two windows are (their correlation ρ,
+measured over at most 8,192 frame pairs and clamped to −0.5): identical material keeps its
+amplitude, uncorrelated material keeps its power, and opposite-phase material dips by at most 6 dB.
+
+**Warnings.** The editor checks each looped node against its locally loaded asset and shows
+`"Loop too short for this sample; playing one-shot"` or `"Loop points moved inward to fit"`.
+Listeners never see UI; their renderers count `loopFallbacks` and `loopClamps` and log them once per
+program. The server validates ranges only, since it has no asset lengths.
+
+**Limitations.**
+
+- A looped voice's position comes from cycles at the current tempo, so a sustain that crosses a
+  tempo change jumps position. Every listener hears the same jump, inside the 240-frame program
+  crossfade.
+- Sustained voices hold the 32 voice slots longer, so dense patterns steal earlier.
+- Loop variants count toward the 128 prepared voice variants; they share PCM with the unlooped
+  region.
+
+### Replay leasing and join time
+
+Graphs with a `filter`, `delay` or `reverb` rebuild up to 1 s of history when a listener joins,
+resyncs or receives a new publish. Replay runs two history frames per output frame, so a full
+second takes about one second of silent catch-up, then a 5 ms fade-in. A publish during a replay
+keeps the previous ready audio playing; a fresh join is silent until its replay completes.
+
+All speaker emitters on a client share one `ReplayBudget`: at most 2 programs replay at once and the
+rest wait silently in order. With 8 speakers joining together, the last starts after at most 3 full
+recoveries (about 3 s) and finishes about 1 s later. Once a scheduled commit has taken effect, only
+the incoming program replays. The headphone preview uses its own budget. A renderer that stops
+rendering for 250 ms (a closed or paused stream) loses its lease, and a fading speaker cancels its
+replay. `MusicClient` logs grants and reclaims at INFO, and at WARN when a wait exceeds one full
+recovery or a live renderer is evicted. Details: [PHASE-2-SIGNALS.md](PHASE-2-SIGNALS.md).
+
+### Performance changes
+
+- **Resampler level near powers of two.** A pitch step within 2% below a power of two uses the next
+  octave level, where its kernel is narrowest. This is Stage 4's one intentional output change; see
+  [ENGINE-EVOLUTION.md](ENGINE-EVOLUTION.md).
+- **Voice selection.** Each program reuses its chosen voices until a note could start or stop,
+  instead of rescanning every frame. Output is bit-identical to the per-frame scan.
+- **Denormal snap** in delay, filter and reverb state, as above.
+
+### Verification
+
+`./gradlew check` covers Stage 4 with `ReverbTests` (T60, peak gain, stability, stereo width,
+loop-gain rule, feedback convergence, parity, allocation), `LoopTests` (geometry, seam matrix,
+late join, tempo, stealing, parity), `ReplayLeaseTests` and `SpeakerLinkTests` (leases, storms,
+lifetime, fade cancel), `DenormalTests`, `ResamplerTests` (including the 15.7x-16x spectral gate),
+`SelectionCacheTests` (cached versus per-frame differential), `DemoTests` and the float64 goldens.
+`./gradlew :core-engine:longTest` runs the 20 s reverb decays. `perfBench` scenarios B1-B9 are
+below.
+
+## Stage 4 performance on reference machine
+
+### Stage 4 before and after
+
+Pinned, throttling off, 2026-09-17. "Before" is the baseline table below, recorded before replay
+leasing, denormals, the resampler level change and cached voice selection; B9 and B8 use their first
+runs (B8 with the original replay rate of 4). "After" is the final run. B4 was last run after the
+resampler change, before cached voice selection.
+
+| Id | Median before (ms) | Median after (ms) | p99 before (ms) | p99 after (ms) |
+| --- | --- | --- | --- | --- |
+| B1 | 0.7424 | 0.2207 | 1.1199 | 0.3464 |
+| B2 | 0.1073 | 0.0167 | 2.0310 | 1.6346 |
+| B3 | 0.1075 | 0.0164 | 4.0361 | 2.2992 |
+| B4 | 0.1076 | 0.1061 | 2.8192 | 2.4730 |
+| B5 | 0.5833 | 0.3221 | 0.9877 | 0.5821 |
+| B6 | 0.6435 | 0.4000 | 1.1351 | 0.8317 |
+| B7 | 2.9563 | 2.3483 | 4.0684 | 3.5745 |
+| B7b | 0.6196 | 0.3542 | 1.1930 | 0.6273 |
+| B9 | 4.5970 | 2.5910 | 8.2684 | 5.0507 |
+| B8x8 | 34.1187 | 17.6738 | 47.5869 | 26.4099 |
+
+Gates: B9 passes (p99 ≤ 10.67 ms, publish ≤ 1,323,132 bytes). B8 at 8 renderers fails its
+5.33 ms p99 gate: the graph costs about 2 ms per steady block, so 8 renderers exceed it before any
+replay. Replay work per round stays within its `2k` bound.
+
 
 ### Reference machine specification
 - **CPU:** Intel64 Family 6 Model 186 Stepping 2, GenuineIntel (13th Gen Intel(R) Core(TM) i7-13620H)

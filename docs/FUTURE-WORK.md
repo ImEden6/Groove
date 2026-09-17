@@ -33,6 +33,11 @@ Ranked by impact on gameplay, creative expressiveness, and multiplayer usability
 
 The following items from earlier roadmaps are fully implemented and verified in the codebase:
 
+- **Engine Upgrade Stage 4 ([ENGINE-UPGRADE-STAGES.md](ENGINE-UPGRADE-STAGES.md#stage-4-usage))**:
+  - `reverb` node (Dattorro plate, −1 dB peak loudness contract, at most 2 per graph) with a compile-time loop-gain rule for feedback through reverb.
+  - Sustained sample loops (`loop`, `loopStart`, `loopEnd`, `loopFadeMs`) with correlation-aware seam crossfades and editor warnings.
+  - Shared replay leasing for speakers, a Groove protocol check on join, unreadable-project preservation and session `.bak` backups.
+  - Measured performance: `perfBench` B1-B9, denormal snaps, the resampler level change near powers of two, and cached voice selection (B1 median 0.74 to 0.22 ms).
 - **Engine Upgrade Stages 1, 2, and 3 ([ENGINE-UPGRADE-STAGES.md](ENGINE-UPGRADE-STAGES.md))**:
   - **Stage 1**: Note names (`C4`), scale-degree sequences (`scale_sequence`), transposition (`transpose`), chord voicings (`chord`), and multi-mode biquad filtering (HP, BP, notch).
   - **Stage 2**: Shared `VoiceDsp` foundation, sample region bounds and slicing (`sample_slice`), reversed sample playback, offline pattern sample compilation, and 32 MiB bank memory budget.
@@ -62,6 +67,13 @@ The following items from earlier roadmaps are fully implemented and verified in 
 ---
 
 ## DSP / Engine (Remaining)
+
+- **Stage 4 follow-ups.**
+  - Carry effect state across unchanged republishes, so knob drags and relinks do not rebuild tails from 1 s of history.
+  - Compute looped-voice age from onset nanoseconds, so a sustain crossing a tempo change does not jump position.
+  - Pool runtime delay and reverb buffers if GC pauses show up in B8.
+  - Extend the loop-gain check to feedback loops without a reverb, which can still saturate at ±8 and make late joiners diverge.
+  - Decide the B8 gate: 8 renderers of the B8 graph miss the 5.33 ms p99 gate even without replay (26.4 ms), so it needs a lighter graph or a different criterion.
 
 - **Exact effect-history reconstruction.** The three Phase 2 extensions have landed, including up to one second of local delay/filter replay for late joins and resyncs; see [signals](PHASE-2-SIGNALS.md). Recovering older feedback or state across graph/tempo revisions would require a richer history or authoritative snapshots. The current bounded approximation does not provide exact historical equivalence.
 - **No tempo automation, seeking, or non-integer-cycle start.** Dynamic tempo changes at runtime exist via `/groove tempo`, but score/pattern-side tempo curves and timeline seeking do not.
@@ -147,8 +159,9 @@ $$\text{frequency} = 440 \times 2^{\frac{\text{scaleInterval} - 69}{12}}$$
 
 **Stage 2 update:** source-frame regions, the `sample_slice` node, reversed
 sample playback, and offline pattern sample rendering are implemented.
-See [engine upgrade stages](ENGINE-UPGRADE-STAGES.md#stage-2-usage). Live slice-index
-modulation, granular time stretching, and sustained sample loops remain future work.
+See [engine upgrade stages](ENGINE-UPGRADE-STAGES.md#stage-2-usage). Sustained sample loops landed in
+[Stage 4](ENGINE-UPGRADE-STAGES.md#sustained-sample-loops). Live slice-index modulation and granular
+time stretching remain future work.
 
 One of Strudel’s most famous live-coding tricks is breakbeat slicing (jungle/drum & bass chops on the Amen break):
 
@@ -200,6 +213,6 @@ You have clipboard Base64 JSON and world transactional files, but no physical su
 | --- | --- | --- | --- |
 | **Rhythm** | Euclid, Fast/Slow, Alternate, Probability, Polymeter | Euclidean, alternation, degradation, polymeter | Implemented; dedicated input reordering UI deferred |
 | **Pitch** | Raw Frequency (Hz) / Pitch Ratio | Notes (`c3`, `eb4`), Scales, Chords, Microtuning | `ScaleQuantizer` & `ChordGen` nodes |
-| **Sampling** | One-shots, source regions, equal slicing, reverse, offline pattern rendering | Live slice modulation, time stretching, sustained looping | Extend the bounded region/playback model |
+| **Sampling** | One-shots, source regions, equal slicing, reverse, sustained loops, offline pattern rendering | Live slice modulation, time stretching, sustained looping | Live slice modulation and time stretching |
 | **Environment** | Static in-game blocks | N/A (Browser-based) | `SunClock`, `WeatherMod`, and `Proximity` sensory nodes |
 | **Progression** | Operator commands (`/groove`) | Text files / URL sharing | Physical craftable Discs / Cartridges for survival trading |

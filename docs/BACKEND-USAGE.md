@@ -74,6 +74,31 @@ without restarting every cycle. V3 adds LFO/envelope/sequence controls, filters,
 multiple mix buses and delayed feedback; see [signal graph usage](PHASE-2-SIGNALS.md)
 for sockets, parameter units, server phase rules and the eight-source limit.
 
+## Compatibility and version checks
+
+Server and client must run the same Groove protocol, currently 4. The check runs while a player
+connects, before any graph is sent:
+
+- A client without Groove, or with a Groove older than Phase 4, is disconnected with
+  `This server requires Groove protocol 4. Update Groove.`
+- A client with a different protocol number is disconnected with
+  `Groove version mismatch: server 4, client <n>`.
+- The server logs a warning with the player name and both versions. A newer client joining a
+  server without Groove's protocol channel is not disconnected.
+
+An editor project saved by a newer Groove loads without losing data. If its draft or its published
+patch cannot be decoded, the block keeps the raw saved text and writes it back unchanged. Edits,
+commits, tempo and play/stop changes are refused with `This project needs a newer Groove version`,
+linked speakers and headphones report it as unavailable, and its samples stay available. The
+server logs a warning with the block position.
+
+If `groove-session.json` cannot be decoded, the next save first copies it to
+`groove-session.json.bak` and logs a warning with the path. An existing `.bak` is never
+overwritten, so the first corrupt copy is kept.
+
+Saves are forward-only; see the warning at the top of this page. Back up the world before
+downgrading.
+
 ## Session persistence and transactional saves
 
 `/groove save` queues a save of both the selected graph and its BPM into the world's
@@ -100,7 +125,9 @@ and graph. Clients estimate clock offset from ping replies, compile immutable
 programs on a bounded worker queue, and switch at the scheduled audio time.
 Late joins reconstruct the current note phase directly, with a short fade-in.
 Graphs with filters, delays or reverbs first recover up to one second of prepared history,
-which can take about one second of silent catch-up before a 5 ms fade-in. Replacing a
+which can take about one second of silent catch-up before a 5 ms fade-in. Speakers on one client
+share a replay budget: at most two catch up at once while the others wait silently, so eight
+speakers joining together can take about four seconds to all sound. Replacing a
 program keeps outgoing audio during recovery. Older and cross-revision effect state
 is not recovered; see [signals](PHASE-2-SIGNALS.md).
 Small timing errors slew at up to 0.1%; gaps over 250 ms trigger a faded resync.

@@ -19,6 +19,7 @@ graphs and their v1/v2 serialization continue to work unchanged.
 | `filter` | `in`: AUDIO; optional `cutoff`: MOD_FLOAT | `out`: AUDIO | `cutoffHz=20000` (20–20000); `resonanceQ=.70710678` (.1–20) |
 | `delay` | `in`: AUDIO | `out`: AUDIO | `sync=0` (0=free frames, 1=tempo-synced); `frames=64` (integer 64–48000, at 48 kHz, used when `sync=0`); `division=2` (integer 0–7: 1/16, 1/8T, 1/8, 1/4T, 1/8D, 1/4, 1/4D, 1/2; used when `sync=1`) |
 | `mix_bus` | `in`: AUDIO, 1–16 sources; optional `gain`: MOD_FLOAT | `out`: AUDIO | `gain=1` (0–1) |
+| `reverb` | `in`: AUDIO | `out`: AUDIO (wet only) | `decaySeconds=1.8` (.1–20); `dampingHz=6000` (200–20000); `bandwidthHz=12000` (200–20000); `preDelayMs=0` (0–500); at most 2 per graph |
 | `output` | Either `in`: PATTERN or `audio`: AUDIO | None | Exactly one input across both sockets |
 
 Graphs support one through eight independent `audio_render` sources. Connect each
@@ -123,6 +124,18 @@ so a 1/2-note synced delay can use all 192000 frames on its own. See
 [Stage 3](ENGINE-UPGRADE-STAGES.md#tempo-synced-delay-and-memory-budgeting).
 Mix/filter output and feedback writes are bounded to ±8 to prevent runaway state;
 this is intentional overload saturation, not a transparent limiter.
+
+A loop that contains a `reverb` must provably stay below unity gain. After cutting delay inputs,
+the compiler bounds the amplitude each delay feeds back to every delay (mix gain, filter resonance
+peak, 0.95 per reverb) and rejects the graph if any delay's incoming bounds sum above 0.89 (−1 dB):
+`"Feedback loop through reverb can exceed unity gain (bound <x>)"`. This keeps late joiners
+converging on the same tail. Loops without a reverb are not checked and can still saturate at ±8.
+See [Stage 4](ENGINE-UPGRADE-STAGES.md#loop-gain-rule).
+
+Effect memory is owned per program per renderer: each renderer keeps delay and reverb buffers for
+its current, pending and previous programs. Two reverbs add about 1 MB per program on top of up to
+3.07 MB of delay, and a program waiting for a replay lease keeps the previous program's buffers
+alive until it is ready.
 
 Each frame first reads all delay cells, evaluates the remaining routing in dependency
 order, then writes all delay inputs. Delays therefore retain their exact sample count
