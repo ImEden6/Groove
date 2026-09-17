@@ -171,7 +171,8 @@ Criteria that must hold everywhere are checked in `check` by counting work, not 
 - B8 (reference machine): pooled p99 ≤ 5.33 ms at 8 renderers; max recorded, not gated, since
   single-block maxima vary between runs (`ENGINE-UPGRADE-STAGES.md`).
 - B9 (reference machine): pooled p99 ≤ 10.67 ms for one renderer; bytes per publish recorded
-  and gated at the step-5b value + 10%.
+  and gated at the step-5b value + 10%. B9 was added after step 6, so its baseline is the value
+  measured then (1,202,848 bytes); both gates pass (`ENGINE-UPGRADE-STAGES.md`).
 - Everywhere (`check`): replay work per output frame across all renderers sharing a budget
   never exceeds `leases × REPLAY_PER_FRAME` frames (counted, see step 6).
 

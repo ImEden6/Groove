@@ -386,6 +386,24 @@ runs: six B1-only runs gave 4.4 to 5.1 ms except one at 11.6 ms, with Gradle and
 alike. Recorded stalls after warm-up had no GC, deoptimization or safepoint nearby, so they are
 treated as OS preemption. Use p99, not max, for pass criteria.
 
+### B9 adversarial (`perfBench -PperfOnly=B9`)
+
+One renderer on a graph at the compiler's limits: 128 events per cycle (32 loops, 7 audio sources
+at 10 events and 2 trigger sources at 13), 8 audio sources, 2 trigger sources driving envelopes on
+the two mix gains, 32 looped stereo voices at 15.996x and 2 reverbs at 20 s. The sources share one
+tone and the triggers one pattern so it fits in 64 nodes; `perfBench` fails if a compiler change
+leaves B9 short of these limits.
+
+Results from 2026-09-17, pinned, throttling off (two runs agreed within 0.1 ms on median and p99):
+
+| Id | Scenario | Median (ms) | p99 (ms) | Max (ms) | RT Ratio | Status |
+| --- | --- | --- | --- | --- | --- | --- |
+| B9 | Adversarial, one renderer | 4.5970 | 8.2684 | 17.3549 | 0.4308 | settled |
+
+The p99 gate of 10.67 ms passes. Bytes per publish are measured as the smallest of 10 publishes
+after 2 warm-up publishes: 1,202,848 bytes, identical in both runs. B9 did not exist at step 5b, so
+this figure is the baseline and the gate is 1,323,132 bytes (+10%).
+
 ### B8 replay leasing (`perfBench -PperfOnly=B8`)
 
 Renderers share one `ReplayBudget` (k = 2) and join the same graph together, one second after a

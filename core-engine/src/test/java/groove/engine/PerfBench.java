@@ -9,7 +9,7 @@ import java.util.*;
 
 /**
  * Stage 4 baseline performance benchmark harness.
- * Measures scenarios B1..B8 with warmup convergence, pooled block timings,
+ * Measures scenarios B1..B9 with warmup convergence, pooled block timings,
  * real-time ratio, publish allocations, and system metadata.
  */
 public final class PerfBench {
@@ -60,19 +60,23 @@ public final class PerfBench {
                 new Scenario("B5", "8 audio sources, filters, feedback delay", b5Graph(), Map.of()),
                 new Scenario("B6", "B5 plus 2 reverbs", b6Graph(), Map.of()),
                 new Scenario("B7", "32 sustained looped stereo voices at 4x", b7Graph(STEREO_REF_192K), sampleBank),
-                new Scenario("B7b", "112 hat one-shots per cycle beside one loop", b7DenseGraph(STEREO_REF_192K, hatRef), sampleBank));
+                new Scenario("B7b", "112 hat one-shots per cycle beside one loop", b7DenseGraph(STEREO_REF_192K, hatRef), sampleBank),
+                new Scenario("B9", "Adversarial: 128 events, 8 sources, 2 triggers, 32 loops at 15.996x, 2 reverbs at 20 s",
+                        b9Graph(STEREO_REF_192K), sampleBank));
 
         System.out.println("--------------------------------------------------------------------------------");
-        System.out.println("Running scenarios B1..B8...");
+        System.out.println("Running scenarios B1..B9...");
         System.out.println("--------------------------------------------------------------------------------");
 
         List<Result> results = new ArrayList<>();
+        List<String> gates = new ArrayList<>();
         String only = System.getProperty("perf.only", "").trim();
         for (Scenario scenario : scenarios) {
             if (!only.isEmpty() && !Arrays.asList(only.split(",")).contains(scenario.id())) continue;
             Result result = runScenario(scenario);
             results.add(result);
             printResult(result);
+            if (scenario.id().equals("B9")) b9Gates(result, scenario, gates);
         }
 
         if (only.isEmpty() || Arrays.asList(only.split(",")).contains("B8")) {
@@ -87,13 +91,46 @@ public final class PerfBench {
             Result queued = runQueuedScenario(b8, sampleBank);
             results.add(queued);
             printResult(queued);
-            printSummaryTable(results);
-            System.out.printf(Locale.ROOT, "B8 gate (8 renderers, pooled p99 <= %.2f ms per block round): %s at %.4f ms%n",
-                    B8_P99_GATE_MS, gated.p99BlockMs() <= B8_P99_GATE_MS ? "PASS" : "FAIL", gated.p99BlockMs());
-            System.out.printf(Locale.ROOT, "B8 grant overhead: %.1f ns per release, grant and requeue with 7 waiters%n", grantOverheadNanos());
-            return;
+            gates.add(String.format(Locale.ROOT, "B8 gate (8 renderers, pooled p99 <= %.2f ms per block round): %s at %.4f ms",
+                    B8_P99_GATE_MS, gated.p99BlockMs() <= B8_P99_GATE_MS ? "PASS" : "FAIL", gated.p99BlockMs()));
+            gates.add(String.format(Locale.ROOT, "B8 grant overhead: %.1f ns per release, grant and requeue with 7 waiters", grantOverheadNanos()));
         }
         printSummaryTable(results);
+        gates.forEach(System.out::println);
+    }
+
+    /** Recorded 2026-09-17 on the reference machine when B9 was added; B9 did not exist at step 5b. */
+    private static final long B9_PUBLISH_BASELINE_BYTES = 1_202_848;
+
+    /** B9 criteria: one renderer's pooled p99 fits the block, and steady publish bytes stay within 10% of the baseline. */
+    private static void b9Gates(Result result, Scenario scenario, List<String> gates) {
+        gates.add(String.format(Locale.ROOT, "B9 gate (pooled p99 <= %.2f ms per block): %s at %.4f ms",
+                BLOCK_BUDGET_MS, result.p99BlockMs() <= BLOCK_BUDGET_MS ? "PASS" : "FAIL", result.p99BlockMs()));
+        long bytes = steadyPublishBytes(scenario);
+        if (B9_PUBLISH_BASELINE_BYTES < 0) {
+            gates.add(String.format(Locale.ROOT, "B9 publish: %,d bytes per publish, no baseline recorded yet", bytes));
+            return;
+        }
+        long limit = B9_PUBLISH_BASELINE_BYTES + B9_PUBLISH_BASELINE_BYTES / 10;
+        gates.add(String.format(Locale.ROOT, "B9 publish gate (<= %,d bytes, baseline %,d + 10%%): %s at %,d bytes",
+                limit, B9_PUBLISH_BASELINE_BYTES, bytes <= limit ? "PASS" : "FAIL", bytes));
+    }
+
+    /** The smallest of several publishes after a warm-up, so one-time class and JIT allocations don't count. */
+    private static long steadyPublishBytes(Scenario scenario) {
+        var bean = AllocHelper.bean();
+        if (bean == null) return -1;
+        var state = new SessionState(1, 0, 0, 120, true, scenario.graph());
+        var timeline = new LiveRenderer.Timeline(new LiveRenderer.Program(state, GraphCompiler.compile(scenario.graph()), scenario.sampleBank()), null);
+        LiveRenderer renderer = new LiveRenderer();
+        long id = Thread.currentThread().threadId(), smallest = Long.MAX_VALUE;
+        for (int i = 0; i < 12; i++) {
+            long before = bean.getThreadAllocatedBytes(id);
+            renderer.publish(timeline);
+            long bytes = bean.getThreadAllocatedBytes(id) - before;
+            if (i >= 2) smallest = Math.min(smallest, bytes);
+        }
+        return smallest;
     }
 
     private static final double B8_P99_GATE_MS = BLOCK_BUDGET_MS / 2;
@@ -721,6 +758,67 @@ public final class PerfBench {
             edges.add(Graph.edge(id, i < 16 ? "loopsA" : "loopsB"));
         }
         return new Graph(3, nodes, edges);
+    }
+
+    // B9: the compiler's limits at once. 128 events per cycle (32 loops + 7 audio sources at 10 + 2 triggers
+    // at 13), 8 audio sources, 2 trigger sources, 32 looped stereo voices at 15.996x, 2 reverbs at 20 s.
+    // Sources share one tone and the triggers share one pattern so the graph fits in 64 nodes.
+    private static Graph b9Graph(AssetRef stereoRef192k) {
+        List<Graph.Node> nodes = new ArrayList<>();
+        List<Graph.Edge> edges = new ArrayList<>();
+        nodes.add(new Graph.Node("loopsA", NodeType.STACK, Map.of()));
+        nodes.add(new Graph.Node("loopsB", NodeType.STACK, Map.of()));
+        nodes.add(new Graph.Node("loops", NodeType.STACK, Map.of()));
+        nodes.add(new Graph.Node("render0", NodeType.AUDIO_RENDER, Map.of()));
+        edges.add(Graph.edge("loopsA", "loops"));
+        edges.add(Graph.edge("loopsB", "loops"));
+        edges.add(Graph.edge("loops", "render0"));
+        for (int i = 0; i < 32; i++) {
+            String id = "loop" + i;
+            nodes.add(new Graph.Node(id, NodeType.GENERATOR_SAMPLE, loopParams(3.999, 0.4 / 32), stereoRef192k));
+            edges.add(Graph.edge(id, i < 16 ? "loopsA" : "loopsB"));
+        }
+        nodes.add(new Graph.Node("mix", NodeType.MIX_BUS, Map.of(NodeParam.GAIN, 0.5)));
+        edges.add(Graph.edge("render0", "mix"));
+        nodes.add(new Graph.Node("tone", NodeType.TONE, Map.of(NodeParam.WAVE, 1.0, NodeParam.FREQUENCY, 220.0, NodeParam.GAIN, 0.2 / 7)));
+        for (int i = 1; i < 8; i++) {
+            String fast = "dense" + i, render = "render" + i;
+            nodes.add(new Graph.Node(fast, NodeType.FAST, Map.of(NodeParam.FACTOR, 10.0)));
+            nodes.add(new Graph.Node(render, NodeType.AUDIO_RENDER, Map.of()));
+            edges.add(Graph.edge("tone", fast));
+            edges.add(Graph.edge(fast, render));
+            edges.add(Graph.edge(render, "mix"));
+        }
+        nodes.add(new Graph.Node("triggerPattern", NodeType.FAST, Map.of(NodeParam.FACTOR, 13.0)));
+        edges.add(Graph.edge("tone", "triggerPattern"));
+        nodes.add(new Graph.Node("master", NodeType.MIX_BUS, Map.of(NodeParam.GAIN, 0.5)));
+        for (int t = 0; t < 2; t++) {
+            String trig = "trig" + t, env = "env" + t;
+            nodes.add(new Graph.Node(trig, NodeType.TRIGGER_RENDER, Map.of()));
+            nodes.add(new Graph.Node(env, NodeType.ENVELOPE, Map.of()));
+            edges.add(Graph.edge("triggerPattern", trig));
+            edges.add(new Graph.Edge(trig, "out", env, "trigger"));
+            edges.add(new Graph.Edge(env, "out", t == 0 ? "mix" : "master", "gain"));
+        }
+        nodes.add(new Graph.Node("filter", NodeType.FILTER, Map.of(NodeParam.CUTOFF_HZ, 3000.0, NodeParam.RESONANCE_Q, 1.5)));
+        nodes.add(new Graph.Node("room", NodeType.REVERB, Map.of(NodeParam.DECAY_SECONDS, 20.0)));
+        nodes.add(new Graph.Node("hall", NodeType.REVERB, Map.of(NodeParam.DECAY_SECONDS, 20.0, NodeParam.PRE_DELAY_MS, 20.0)));
+        nodes.add(new Graph.Node("out", NodeType.OUTPUT, Map.of()));
+        edges.add(Graph.edge("mix", "filter"));
+        edges.add(Graph.edge("filter", "room"));
+        edges.add(Graph.edge("filter", "hall"));
+        edges.add(Graph.edge("filter", "master"));
+        edges.add(Graph.edge("room", "master"));
+        edges.add(Graph.edge("hall", "master"));
+        edges.add(new Graph.Edge("master", "out", "out", "audio"));
+        Graph graph = new Graph(3, nodes, edges);
+        // Fail loudly if a compiler change leaves B9 short of the limits it exists to probe
+        LoopPlan plan = GraphCompiler.compile(graph);
+        if (plan.size() != GraphCompiler.MAX_EVENTS || plan.signals().sourceCount() != SignalGraph.MAX_AUDIO_SOURCES
+                || plan.signals().triggerCount() != 2)
+            throw new IllegalStateException("B9 is no longer at the compiler limits: " + plan.size() + " events, "
+                    + plan.signals().sourceCount() + " sources, " + plan.signals().triggerCount() + " triggers");
+        return graph;
     }
 
     // B7: 32 sustained looped stereo voices at 4x
