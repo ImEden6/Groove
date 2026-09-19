@@ -213,7 +213,8 @@ Reverb transfers preserve the full predelay history so later predelay increases 
 effects use the existing short crossfade. `effectTransfers()` counts programs that carried.
 `EffectCarryTests` checks tails far older than the replay window across knob edits, same-graph
 republishes, scheduled commits, 20 rapid edits and three speakers on one replay budget, and that
-every fallback path still resets; `perfBench` B11 measures the copy.
+every fallback path still resets; `perfBench` B11 measures the copy and the switch round, and
+currently misses its targets ([known limitation](ENGINE-UPGRADE-STAGES.md#b11-effect-carry-perfbench--pperfonlyb11--known-limitation)).
 
 ## Editor and compatibility
 

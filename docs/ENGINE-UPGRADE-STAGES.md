@@ -667,24 +667,62 @@ p99 0.7752 ms. Before precomputing each loop's inputs and gain bounds once per l
 took about 1.6 ms. A full `perfBench` run before and after the loop-gain limit showed no rendering
 change: B2 to B9 and B8 medians within 4%, and B1 within 2% once rerun alternately with the old build.
 
-### B11 effect carry (`perfBench -PperfOnly=B11`)
+### B11 effect carry (`perfBench -PperfOnly=B11`) — known limitation
 
-Times `SignalRuntime.continueFrom`, the copy that carries effect state across a republish or commit
-on the sound thread, for 1 renderer and for 8 switching in the same block (a commit reaching 8
-linked speakers). Between trials each outgoing runtime renders a block and 64 MB is streamed, so
-copies start cold. Gates, against the 10.67 ms block of 512 frames: one switch p99 ≤ 0.5 ms, and 8
-switches p99 ≤ 1.33 ms, a quarter of the half-block headroom B8 uses.
+Two measurements, both against the 10.67 ms block of 512 frames:
 
-Results from 2026-09-19, four runs: a B6-class patch (B5 plus 2 reverbs) passes, one switch p99
-0.13–0.26 ms and 8 switches 0.83–1.01 ms. The worst case, report only (the full 192,000-frame delay
-budget and two reverbs at 500 ms predelay, about 4 MB per program), took p99 0.82–0.92 ms for one
-switch and 4.17–4.91 ms for 8. That misses the 8-switch budget, but the same patch already misses B8 on
-rendering alone. Meeting it would need the outgoing program to hand its buffers over instead of
-copying, which means reworking the crossfade so each carried effect is processed only once.
+- **Copy:** `SignalRuntime.continueFrom`, the sound-thread copy that carries effect state across a
+  republish or commit, for 1 renderer and for 8 switching in the same block (a commit reaching 8
+  linked speakers). Between trials each outgoing runtime renders a block and 64 MB is streamed, so
+  copies start cold. Reverbs copy their whole predelay line, so history survives a later predelay
+  increase after an unchanged republish.
+- **Switch round:** the whole block in which 8 `LiveRenderer`s on a B6-class patch switch, including
+  rendering, the copy and the outgoing program's crossfade, next to a steady round without a switch.
+  The same round without a session key (the old reset-and-replay path) is reported for comparison;
+  its renderers have unlimited replay budgets, so it overstates what speakers sharing a budget of 2
+  would pay.
+
+The targets were a p99 of 0.5 ms for one copy and 1.33 ms for eight (a quarter of B8's half-block
+headroom), and a switch round within the deadline. **They are not met reliably**, and they are not
+raised to make B11 pass. Results from 2026-09-19 on the reference machine, B6-class patch (B5 plus
+2 reverbs):
+
+| Measurement | Runs | Median | p99 | Target |
+| --- | --- | --- | --- | --- |
+| Copy, 1 switch | 5 | — | 0.24–0.48 ms | ≤ 0.5 ms, met |
+| Copy, 8 switches | 16 | 0.83–1.13 ms | 1.46–2.82 ms | ≤ 1.33 ms, missed in every run; ≥ 2.0 ms in 7 |
+| Switch round, 8 renderers | 8 | 5.9–6.6 ms | 8.8–12.2 ms | ≤ 10.67 ms deadline, missed in 4 |
+| Steady round, 8 renderers | 8 | 3.1–3.4 ms | 3.5–5.7 ms | — |
+| Old path switch round | 1 | 10.8 ms | 16.0 ms | — |
+
+The copy is not the main cost of a switch: a switch round costs about 3 ms more than a steady one at
+the median. B11 splits the switch block into three `render` calls, so nothing is added to
+`LiveRenderer`; rendering a steady block as three calls costs the same as one (3.21 against
+3.20 ms). Medians over 100 trials, 8 renderers:
+
+| Part of the block | Switching | Steady | Extra |
+| --- | --- | --- | --- |
+| Frame 0: switch, reset, copy, voice selection | 1.21 ms | 0.04 ms | 1.17 ms |
+| Frames 1–239: crossfade, outgoing program also renders | 3.14 ms | 1.48 ms | 1.66 ms |
+| Frames 240–511: incoming program only | 1.73 ms | 1.68 ms | 0.05 ms |
+
+The outgoing program rendering through the crossfade is the largest part, then the copy and reset.
+Once the crossfade ends the incoming program costs the same as in steady state.
+
+A shorter crossfade for carried switches was trialled (`CarryFadeTrial`, report only) and not
+adopted: at 64 frames a tone-gain or loop-gain jump scores about 6 times the click measure of the
+normal 240-frame fade. The trial also showed that a carried reverb whose decay changes steps in
+level about 9 ms after the switch, after any crossfade has ended, because its input gain changes at
+once; fade length cannot fix that. Smoothing changed parameters inside the incoming program would. In game the sound thread renders 2048-frame chunks with about 171 ms of
+buffering, so a single long block at a commit is unlikely to be audible, but it breaks this
+benchmark's convention.
+
+The worst-case patch (the full 192,000-frame delay budget and two reverbs at 500 ms predelay, about
+4 MB per program) is report only and separate from the B6-class figures: copy p99 0.67–1.04 ms for
+one switch and 3.97–5.42 ms for eight. The same patch already misses B8 on rendering alone.
+Ownership transfer (handing buffers over instead of copying, with a crossfade reworked so each
+carried effect is processed once) would remove the copy but not the rest of the switch cost, so it
+waits for the breakdown to show its benefit.
+
 A full `perfBench` run with carrying in place kept B1 to B10 within run-to-run noise, and B9's
 publish allocation rose by about 540 bytes (one transfer-plan map on its signal program).
-
-After the review fixes, reverb transfers copy the full predelay buffer, preserving history for
-later predelay increases. A single B11 rerun on 2026-09-19 measured B6-class p99 of 0.3188 ms
-for one renderer and 1.1185 ms for eight (both gates pass). Worst-case p99 was 0.6657 ms
-and 4.6298 ms respectively, still report only; these copy timings exclude normal rendering.

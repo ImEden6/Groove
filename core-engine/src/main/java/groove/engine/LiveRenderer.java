@@ -117,6 +117,8 @@ public final class LiveRenderer {
         final ReplayBudget.Lease lease;
         /** Reset with history to replay, but the replay has not started yet. */
         boolean unrecovered;
+        /** Continued its predecessor's effect state at its first frame. */
+        boolean carried;
         /** Sound thread: the ready program this one replaces, whose effect state it may continue. */
         VoiceProgram predecessor;
         /** Built on the control thread before publication: how to continue each candidate graph's effects. */
@@ -221,6 +223,9 @@ public final class LiveRenderer {
     private boolean replayCancelled;
     private volatile long loopFallbacks, loopClamps;
     private volatile long effectTransfers;
+    /** Crossfade frames after a switch that carried effect state. The normal 240 until a shorter
+     *  fade is validated against clicks; package-private so the fade trial can compare lengths. */
+    static int carriedFadeFrames = 240;
     /** What the sound thread last had playing, so publish can plan transfers from it. */
     private volatile Playback renderedObserved, renderedPrevious;
     private double fade;
@@ -389,7 +394,7 @@ public final class LiveRenderer {
             lastFrameNanos = now;
             if (ready(currentTimeline, now)) {
                 observedWasReady = true;
-                programBlend = Math.min(1, programBlend + 1.0 / 240);
+                programBlend = Math.min(1, programBlend + 1.0 / (audibleCarried(currentTimeline, now) ? carriedFadeFrames : 240));
             }
             if (programBlend == 1 && previous != null) { releaseReplay(previous); previous = null; renderedPrevious = null; }
         }
@@ -498,7 +503,8 @@ public final class LiveRenderer {
             sample(timeline.current, now, out);
             return;
         }
-        double timeBlend = Math.min(1, (now - timeline.pending.state.effectiveNanos()) / 5_000_000.0);
+        double fadeNanos = timeline.pending.carried ? carriedFadeFrames * 1e9 / SAMPLE_RATE : 5_000_000.0;
+        double timeBlend = Math.min(1, (now - timeline.pending.state.effectiveNanos()) / fadeNanos);
         // A scheduled change takes over from the program it replaces within this timeline.
         if (timeline.pending.lastNow == Long.MIN_VALUE && timeline.current.lastNow != Long.MIN_VALUE)
             timeline.pending.predecessor = timeline.current;
@@ -747,8 +753,14 @@ public final class LiveRenderer {
         double apartSeconds = Math.abs(program.state.cycleAt(boundary) - from.state.cycleAt(boundary)) * 240 / program.state.bpm();
         if (apartSeconds > 2 / (double) SAMPLE_RATE) return false;
         program.signals.continueFrom(from.signals, plan);
+        program.carried = true;
         effectTransfers++;
         return true;
+    }
+
+    private static boolean audibleCarried(Playback playback, long now) {
+        VoiceProgram active = playback.pending != null && now >= playback.pending.state.effectiveNanos() ? playback.pending : playback.current;
+        return active.carried;
     }
 
     /** The program of a playback that rendered most recently. */
