@@ -218,6 +218,23 @@ history when it starts. Restarting it from zero would make a small transient tha
 crossfade hides but a carried delay records and plays back one delay length later. A changed note
 starts fresh, as before. An unchanged republish is therefore bit-exact with uninterrupted
 playback.
+
+Settings that change on a carried switch ramp over 10 ms (`SignalRuntime.rampFrames`, 480 frames)
+instead of stepping. A step reaches the output after the 240-frame crossfade has hidden the switch,
+and a delay records it and repeats it. Each ramp starts from the value the outgoing runtime used on
+its last frame, so a re-edit in the middle of a ramp carries on from where that ramp had got to.
+
+| Setting | Ramp |
+| --- | --- |
+| `mix_bus` gain | linear; any bus whose id and type survive, whatever its inputs, since a bus holds no state |
+| `filter` cutoff, Q | cutoff on a log scale, Q linear, coefficients recomputed every frame |
+| `reverb` decay, damping, bandwidth | decay linear, damping and bandwidth on a log scale, recomputed every frame; predelay still switches at once |
+| `delay` made longer | keeps reading the old length until the new read position reaches carried history, then fades across over the ramp |
+| `delay` made shorter | jumps: the old read position is no longer in the line |
+
+Modulated settings follow their control input as before. 10 ms is the shortest of 5, 10 and 20 ms
+for which `CarrySwitchTrial` scores every carried scenario at or below the uncarried one. At 5 ms a
+large cutoff jump scores above the uncarried path.
 `EffectCarryTests` checks tails far older than the replay window across knob edits, same-graph
 republishes, scheduled commits, 20 rapid edits and three speakers on one replay budget, and that
 every fallback path still resets; `perfBench` B11 measures the copy and the switch round, and

@@ -93,3 +93,10 @@ A listener who keeps playing through an edit carries its effect state into the n
 most one second through the new graph only. The two start from different states, which is exactly
 the case above: the difference is a finite leftover that the loop limit makes die away, and a
 reverb outside any loop forgets it within its T60.
+
+A carried switch ramps changed settings over 10 ms instead of stepping them. Every frame of a ramp
+stays within the limit: a mix gain moves linearly between two gains that both pass, a filter's $Q$
+moves linearly and its peak depends on $Q$ alone, and a reverb's peak is fixed. As with a modulated
+cutoff, a filter changing every frame is not a fixed linear system, so this holds per frame and is
+not a proof for the ramp as a whole. The ramp lasts 10 ms, far shorter than the time a loop takes to
+converge.

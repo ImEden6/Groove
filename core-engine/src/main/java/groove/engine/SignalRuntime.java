@@ -19,6 +19,13 @@ public final class SignalRuntime {
     private final LookaheadScheduler.Window[] triggerWindowByNode;
     private static final LookaheadScheduler.Window[] NO_TRIGGERS = new LookaheadScheduler.Window[0];
     private long controlBlock = Long.MIN_VALUE;
+    /** Frames a carried switch takes to move changed settings to their new values. */
+    static int rampFrames = 480;
+    /** Per node: settings used on the last frame, where a following carry ramps from. */
+    private final double[][] applied, rampFrom;
+    /** Per node: ramp frames still to go, and a lengthened delay's old read tap ahead of the cursor. */
+    private final int[] rampLeft, tapOffset;
+    private int rampTotal = 1, ramping;
 
     private static final int MIX_GAIN = 0;
     private static final int FILTER_CUTOFF = 0, FILTER_Q = 1;
@@ -39,6 +46,8 @@ public final class SignalRuntime {
         reverbs = new Reverb[size];
         triggerWindowByNode = new LookaheadScheduler.Window[size];
         nodeParams = new double[size][];
+        applied = new double[size][]; rampFrom = new double[size][];
+        rampLeft = new int[size]; tapOffset = new int[size];
         for (int i=0;i<size;i++) {
             Graph.Node n = graph.nodes[i];
             if (n.type() == NodeType.REVERB) {
@@ -65,6 +74,12 @@ public final class SignalRuntime {
             }
             switch (n.type()) {
                 case MIX_BUS -> nodeParams[i] = new double[]{p(n, NodeParam.GAIN, 1)};
+                case REVERB -> nodeParams[i] = new double[]{
+                        p(n, NodeParam.DECAY_SECONDS, 1.8),
+                        p(n, NodeParam.DAMPING_HZ, 6000.0),
+                        p(n, NodeParam.BANDWIDTH_HZ, 12000.0),
+                        p(n, NodeParam.PRE_DELAY_MS, 0.0)
+                };
                 case FILTER -> {
                     filtersLeft[i] = new Biquad(); filtersRight[i] = new Biquad();
                     filterModes[i] = Biquad.Mode.values()[(int)p(n,NodeParam.MODE,0)];
@@ -108,6 +123,8 @@ public final class SignalRuntime {
                 }
                 default -> nodeParams[i] = new double[0];
             }
+            int settings = n.type() == NodeType.MIX_BUS ? 1 : n.type() == NodeType.FILTER ? 2 : n.type() == NodeType.REVERB ? 3 : 0;
+            if (settings > 0) { applied[i] = Arrays.copyOf(nodeParams[i], settings); rampFrom[i] = new double[settings]; }
         }
     }
 
@@ -119,9 +136,11 @@ public final class SignalRuntime {
         final SignalGraph from;
         /** Per node of the incoming graph: the outgoing node index it continues, or -1. */
         final int[] source;
+        /** Per node: the outgoing node whose settings it ramps from, or -1. Carried effects plus same-id mix buses. */
+        final int[] ramp;
         final int carried;
-        private TransferPlan(SignalGraph from, int[] source) {
-            this.from = from; this.source = source;
+        private TransferPlan(SignalGraph from, int[] source, int[] ramp) {
+            this.from = from; this.source = source; this.ramp = ramp;
             int n = 0;
             for (int s : source) if (s >= 0) n++;
             carried = n;
@@ -167,7 +186,13 @@ public final class SignalRuntime {
             }
             if (!intact) for (int i : members) source[i] = -1;
         }
-        return new TransferPlan(from, source);
+        // A bus holds no state, so it ramps whenever its id and type survive, whatever its inputs.
+        int[] ramp = source.clone();
+        for (int i = 0; i < ramp.length; i++) if (to.nodes[i].type() == NodeType.MIX_BUS) {
+            Integer j = fromIds.get(to.nodes[i].id());
+            ramp[i] = j != null && from.nodes[j].type() == NodeType.MIX_BUS ? j : -1;
+        }
+        return new TransferPlan(from, source, ramp);
     }
 
     private static boolean stateful(Graph.Node n) {
@@ -245,7 +270,39 @@ public final class SignalRuntime {
                 default -> { }
             }
         }
+        rampTotal = Math.max(1, rampFrames);
+        for (int i = 0; i < plan.ramp.length; i++) {
+            int j = plan.ramp[i];
+            if (j < 0) continue;
+            if (delayLeft[i] != null) {
+                // Only a longer line still holds the old tap; a shorter one jumps.
+                int longer = delayLeft[i].length - previous.delayLeft[j].length;
+                if (longer > 0) {
+                    // The new tap reads empty slots for the first `longer` frames, so fade only after them
+                    tapOffset[i] = longer;
+                    startRamp(i);
+                    rampLeft[i] += longer;
+                }
+            } else if (applied[i] != null && differs(previous.applied[j], nodeParams[i])) {
+                System.arraycopy(previous.applied[j], 0, rampFrom[i], 0, rampFrom[i].length);
+                startRamp(i);
+            }
+        }
     }
+
+    /** Compares only the ramped settings; a reverb's predelay switches at once. */
+    private static boolean differs(double[] was, double[] target) {
+        for (int k = 0; k < was.length; k++) if (was[k] != target[k]) return true;
+        return false;
+    }
+
+    private void startRamp(int node) { if (rampLeft[node] == 0) ramping++; rampLeft[node] = rampTotal; }
+
+    /** This frame's weight of the new setting: 0 while a ramp waits, 1 on its last frame. */
+    private double rampWeight(int node) { return Math.max(0, rampTotal - rampLeft[node] + 1) / (double) rampTotal; }
+
+    private static double lerp(double a, double b, double w) { return a + (b - a) * w; }
+    private static double logLerp(double a, double b, double w) { return a * Math.pow(b / a, w); }
 
     /** A delay line holds its last L inputs, oldest at the cursor. Returns the new cursor. */
     private static int carryHistory(double[] from, int cursor, double[] to) {
@@ -271,7 +328,15 @@ public final class SignalRuntime {
             if (delayLeft[i] != null) { Arrays.fill(delayLeft[i],0); Arrays.fill(delayRight[i],0); }
             if (filtersLeft[i] != null) { filtersLeft[i].reset(); filtersRight[i].reset(); filterCoefficientsSet[i] = false; }
             if (reverbs[i] != null) reverbs[i].reset();
+            if (rampLeft[i] > 0 && reverbs[i] != null) {
+                double[] p = nodeParams[i];
+                reverbs[i].setParams(p[0], p[1], p[2], p[3]);
+            }
+            if (applied[i] != null) System.arraycopy(nodeParams[i], 0, applied[i], 0, applied[i].length);
         }
+        Arrays.fill(rampLeft, 0);
+        Arrays.fill(tapOffset, 0);
+        ramping = 0;
     }
 
     /** In-place stereo frame; call sequentially at 48 kHz. No graph queries or allocation. */
@@ -308,6 +373,12 @@ public final class SignalRuntime {
         // Read all old delay cells before evaluating or writing any feedback input.
         for (int i=0;i<graph.nodes.length;i++) if (delayLeft[i] != null) {
             left[i] = delayLeft[i][cursors[i]]; right[i] = delayRight[i][cursors[i]];
+            if (rampLeft[i] > 0) {
+                // Fade from the old length's tap to the new one
+                int old = (cursors[i] + tapOffset[i]) % delayLeft[i].length;
+                double w = rampWeight(i);
+                left[i] = lerp(delayLeft[i][old], left[i], w); right[i] = lerp(delayRight[i][old], right[i], w);
+            }
         }
         for (int i : graph.order) {
             Graph.Node n = graph.nodes[i];
@@ -316,23 +387,37 @@ public final class SignalRuntime {
             switch (n.type()) {
                 case AUDIO_RENDER -> { /* Filled by source-to-node mapping before routing. */ }
                 case MIX_BUS -> {
-                    double gain = mod < 0 ? nodeParams[i][MIX_GAIN] : clamp(controls[mod][frame],0,1);
+                    double gain = mod >= 0 ? clamp(controls[mod][frame],0,1)
+                            : rampLeft[i] > 0 ? lerp(rampFrom[i][MIX_GAIN], nodeParams[i][MIX_GAIN], rampWeight(i)) : nodeParams[i][MIX_GAIN];
+                    applied[i][MIX_GAIN] = gain;
                     double l=0,r=0;
                     for (int source : inputs) { l += left[source]; r += right[source]; }
                     left[i] = bounded(l*gain); right[i] = bounded(r*gain);
                 }
                 case FILTER -> {
-                    if (mod >= 0 || !filterCoefficientsSet[i]) {
+                    if (mod >= 0 || rampLeft[i] > 0 || !filterCoefficientsSet[i]) {
                         double cutoff = mod < 0 ? nodeParams[i][FILTER_CUTOFF] : clamp(controls[mod][frame],20,20000);
                         double q = nodeParams[i][FILTER_Q];
+                        if (rampLeft[i] > 0) {
+                            double w = rampWeight(i);
+                            cutoff = logLerp(rampFrom[i][FILTER_CUTOFF], cutoff, w);
+                            q = lerp(rampFrom[i][FILTER_Q], q, w);
+                        }
                         filtersLeft[i].set(filterModes[i],cutoff,q,LiveRenderer.SAMPLE_RATE);
                         filtersRight[i].set(filterModes[i],cutoff,q,LiveRenderer.SAMPLE_RATE);
                         filterCoefficientsSet[i] = true;
+                        applied[i][FILTER_CUTOFF] = cutoff; applied[i][FILTER_Q] = q;
                     }
                     left[i] = bounded(filtersLeft[i].process(left[inputs[0]]));
                     right[i] = bounded(filtersRight[i].process(right[inputs[0]]));
                 }
                 case REVERB -> {
+                    if (rampLeft[i] > 0) {
+                        double w = rampWeight(i);
+                        double[] p = nodeParams[i], a = applied[i], from = rampFrom[i];
+                        a[0] = lerp(from[0], p[0], w); a[1] = logLerp(from[1], p[1], w); a[2] = logLerp(from[2], p[2], w);
+                        reverbs[i].setParams(a[0], a[1], a[2], p[3]);
+                    }
                     double in = 0.5 * (left[inputs[0]] + right[inputs[0]]);
                     long absoluteFrame = Math.round(serverNanos * (LiveRenderer.SAMPLE_RATE / 1e9));
                     reverbs[i].process(in, absoluteFrame, reverbOut);
@@ -349,6 +434,8 @@ public final class SignalRuntime {
             cursors[i] = (cursor+1) % delayLeft[i].length;
         }
         stereo[0] = left[graph.output]; stereo[1] = right[graph.output];
+        if (ramping > 0) for (int i = 0; i < rampLeft.length; i++)
+            if (rampLeft[i] > 0 && --rampLeft[i] == 0) { tapOffset[i] = 0; ramping--; }
     }
 
     /** Diagnostic/control API; uses the identical cached ramps as audio playback. */
@@ -484,6 +571,9 @@ public final class SignalRuntime {
     private static double clamp(double v,double min,double max) { return Math.max(min,Math.min(max,v)); }
 
     public long reverbGuardHits() { return reverbGuardHits; }
+
+    /** Tests only: nodes still ramping toward their settings. */
+    int ramping() { return ramping; }
 
     /** Feedback through a delay decays toward subnormals, which are far slower to compute. */
     private double snapDelay(double v) {

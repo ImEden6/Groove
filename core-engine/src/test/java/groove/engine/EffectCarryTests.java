@@ -15,6 +15,7 @@ final class EffectCarryTests {
     static void run() {
         transferRules();
         delayHistoryIsExact();
+        settingsRamp();
         unchangedGraphContinuesExactly();
         predelayHistorySurvivesRepublishes();
         lateTempoChanges();
@@ -187,11 +188,17 @@ final class EffectCarryTests {
             for (int i = 0; i < fed; i++) { io[0] = io[1] = ramp(i); before.process(io, frameNanos(i)); }
             after.reset();
             after.continueFrom(before, SignalRuntime.transferPlan(signalsOf(before), signalsOf(after)));
+            int longer = newLength - 1000, n = SignalRuntime.rampFrames;
             for (int k = 0; k < newLength; k++) {
                 io[0] = io[1] = 0;
                 after.process(io, frameNanos(fed + k));
                 // Frame fed + k reads the input from newLength frames earlier, if the old line still held it.
                 double expected = fed + k - newLength >= fed - 1000 ? ramp(fed + k - newLength) : 0;
+                // A longer line keeps the old tap until the new one reaches history, then fades over the ramp.
+                if (longer > 0 && k < longer + n) {
+                    double old = fed + k - 1000 < fed ? ramp(fed + k - 1000) : 0, w = Math.max(0, k - longer + 1) / (double) n;
+                    expected = old + (expected - old) * w;
+                }
                 check(io[0] == expected && io[1] == expected, String.format(Locale.ROOT,
                         "Delay %d -> %d frame %d: %.4f, expected %.4f", 1000, newLength, k, io[0], expected));
             }
@@ -199,6 +206,41 @@ final class EffectCarryTests {
     }
 
     private static double ramp(int frame) { return (frame + 1) * 1e-3; }
+
+    /** A changed bus gain moves linearly over the ramp; a re-edit mid-ramp starts where the last one got to. */
+    private static void settingsRamp() {
+        int n = SignalRuntime.rampFrames;
+        SignalRuntime a = runtime(busOnly(0.2)), b = runtime(busOnly(0.9)), c = runtime(busOnly(0.5));
+        double[] io = new double[2];
+        for (int i = 0; i < 1000; i++) { io[0] = io[1] = 1; a.process(io, frameNanos(i)); }
+        b.reset();
+        b.continueFrom(a, SignalRuntime.transferPlan(signalsOf(a), signalsOf(b)));
+        int half = n / 2;
+        for (int k = 0; k < half; k++) {
+            io[0] = io[1] = 1;
+            b.process(io, frameNanos(1000 + k));
+            check(io[0] == 0.2 + (0.9 - 0.2) * ((k + 1) / (double) n), "Bus gain ramps linearly at frame " + k + ": " + io[0]);
+        }
+        double reached = io[0];
+        c.reset();
+        c.continueFrom(b, SignalRuntime.transferPlan(signalsOf(b), signalsOf(c)));
+        for (int k = 0; k < n + 10; k++) {
+            io[0] = io[1] = 1;
+            c.process(io, frameNanos(1000 + half + k));
+            if (k == 0) check(Math.abs(io[0] - reached) < 1e-2, "A re-edit continues from the interrupted ramp: " + io[0] + " after " + reached);
+        }
+        check(io[0] == 0.5 && c.ramping() == 0, "The ramp ends exactly on the new gain: " + io[0]);
+        SignalRuntime same = runtime(busOnly(0.5));
+        same.reset();
+        same.continueFrom(c, SignalRuntime.transferPlan(signalsOf(c), signalsOf(same)));
+        check(same.ramping() == 0, "An unchanged gain does not ramp");
+    }
+
+    private static Graph busOnly(double gain) {
+        return new Graph(3, List.of(new Graph.Node("tone", NodeType.TONE, Map.of()), new Graph.Node("render", NodeType.AUDIO_RENDER, Map.of()),
+                new Graph.Node("bus", NodeType.MIX_BUS, Map.of(NodeParam.GAIN, gain)), new Graph.Node("out", NodeType.OUTPUT, Map.of())),
+                List.of(Graph.edge("tone", "render"), Graph.edge("render", "bus"), new Graph.Edge("bus", "out", "out", "audio")));
+    }
 
     private static Graph delayOnly(int frames) {
         return new Graph(3, List.of(new Graph.Node("tone", NodeType.TONE, Map.of()), new Graph.Node("render", NodeType.AUDIO_RENDER, Map.of()),
