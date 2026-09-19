@@ -96,7 +96,8 @@ public final class LiveRenderer {
                     snapshot.pending() == null ? null : new Program(snapshot.pending(), GraphCompiler.compile(snapshot.pending().graph())));
         }
     }
-    private record Playback(VoiceProgram current, VoiceProgram pending) {}
+    /** sessionKey is null when effect state must never carry into or out of this playback. */
+    private record Playback(VoiceProgram current, VoiceProgram pending, Object sessionKey) {}
     private static final class VoiceProgram {
         final SessionState state;
         final LoopPlan plan;
@@ -116,6 +117,10 @@ public final class LiveRenderer {
         final ReplayBudget.Lease lease;
         /** Reset with history to replay, but the replay has not started yet. */
         boolean unrecovered;
+        /** Sound thread: the ready program this one replaces, whose effect state it may continue. */
+        VoiceProgram predecessor;
+        /** Built on the control thread before publication: how to continue each candidate graph's effects. */
+        final java.util.Map<SignalGraph, SignalRuntime.TransferPlan> transferPlans;
         final groove.engine.samples.PreparedSamples samples;
         final ActiveVoice[] voices;
         final ActiveVoice[] tails;
@@ -137,6 +142,8 @@ public final class LiveRenderer {
         VoiceProgram(Program program, LiveRenderer owner) {
             state = program.state(); plan = program.plan(); samples = program.preparedSamples; scheduler = program.scheduler;
             signals = plan.signals() == null ? null : plan.signals().runtime(state);
+            // Only a program with a signal graph can carry effects, so only it pays for the map.
+            transferPlans = plan.signals() == null ? java.util.Map.of() : new java.util.IdentityHashMap<>();
             boolean stateful = false;
             if (plan.signals() != null) for (Graph.Node node : plan.signals().nodes)
                 if (node.type() == NodeType.DELAY || node.type() == NodeType.FILTER || node.type() == NodeType.REVERB) stateful = true;
@@ -213,6 +220,9 @@ public final class LiveRenderer {
     long replayGeneration;
     private boolean replayCancelled;
     private volatile long loopFallbacks, loopClamps;
+    private volatile long effectTransfers;
+    /** What the sound thread last had playing, so publish can plan transfers from it. */
+    private volatile Playback renderedObserved, renderedPrevious;
     private double fade;
     private Playback observed, previous;
     private double programBlend = 1;
@@ -233,15 +243,49 @@ public final class LiveRenderer {
     /** Control-thread only: prepare renderer-private filters before the volatile handoff.
      *  Programs remain shareable; only the audio owner mutates the prepared filters.
      *  Superseded playback state is released after its crossfade, without a map lookup. */
-    public void publish(Timeline value) {
+    public void publish(Timeline value) { publish(value, null); }
+
+    /**
+     * Like {@link #publish(Timeline)}. Programs published under the same non-null sessionKey, at the
+     * same playback position, continue the outgoing program's compatible effect state instead of
+     * replaying history; see {@link SignalRuntime#transferPlan}. Pass a key that identifies the
+     * session, never one shared by different patches.
+     */
+    public void publish(Timeline value, Object sessionKey) {
         java.util.Objects.requireNonNull(value);
         auditProgram(value.current());
         if (value.pending() != null) auditProgram(value.pending());
         var next = new Playback(new VoiceProgram(value.current(), this),
-                value.pending() == null ? null : new VoiceProgram(value.pending(), this));
+                value.pending() == null ? null : new VoiceProgram(value.pending(), this), sessionKey);
+        if (sessionKey != null) planTransfers(next);
         // Epoch first: a render that sees the new timeline always sees its epoch
         publishEpoch++;
         timeline = next;
+    }
+
+    /** Control thread: plans from every graph that could still be playing when next takes over. */
+    private void planTransfers(Playback next) {
+        var candidates = new java.util.ArrayList<VoiceProgram>();
+        for (Playback earlier : new Playback[] {timeline, renderedObserved, renderedPrevious})
+            if (earlier != null && next.sessionKey.equals(earlier.sessionKey)) {
+                candidates.add(earlier.current);
+                if (earlier.pending != null) candidates.add(earlier.pending);
+            }
+        plan(next.current, candidates);
+        if (next.pending != null) {
+            candidates.add(next.current);
+            plan(next.pending, candidates);
+        }
+    }
+
+    private static void plan(VoiceProgram incoming, java.util.List<VoiceProgram> candidates) {
+        SignalGraph to = incoming.plan.signals();
+        if (to == null) return;
+        for (VoiceProgram candidate : candidates) {
+            SignalGraph from = candidate.plan.signals();
+            if (from != null && !incoming.transferPlans.containsKey(from))
+                incoming.transferPlans.put(from, SignalRuntime.transferPlan(from, to));
+        }
     }
 
     private void auditProgram(Program p) {
@@ -269,6 +313,8 @@ public final class LiveRenderer {
     public long replayReclaims() { return replayReclaims; }
     public long replayEvictions() { return replayEvictions; }
     public long loopFallbacks() { return loopFallbacks; }
+    /** Programs that continued an outgoing program's effect state instead of replaying. */
+    public long effectTransfers() { return effectTransfers; }
     public long loopClamps() { return loopClamps; }
     public long reverbGuardHits() {
         long total = 0;
@@ -307,6 +353,13 @@ public final class LiveRenderer {
         Playback currentTimeline = timeline;
         renderEpoch = publishEpoch;
         if (currentTimeline != observed) {
+            Playback audible = observedWasReady ? observed : previous;
+            if (audible != null && currentTimeline != null && currentTimeline.sessionKey != null
+                    && currentTimeline.sessionKey.equals(audible.sessionKey)) {
+                VoiceProgram outgoing = lastRendered(audible);
+                currentTimeline.current.predecessor = outgoing;
+                if (currentTimeline.pending != null) currentTimeline.pending.predecessor = outgoing;
+            }
             // Previous is the last timeline that was ready to mix, so a republish during a wait keeps it audible
             if (observedWasReady) {
                 releaseReplay(previous);
@@ -315,6 +368,8 @@ public final class LiveRenderer {
             } else releaseReplay(observed);
             observed = currentTimeline;
             observedWasReady = false;
+            renderedObserved = observed;
+            renderedPrevious = previous;
         }
         capture(currentTimeline); capture(previous);
         if (hasQueued(currentTimeline) || hasQueued(previous)) replayBudget.decide();
@@ -336,7 +391,7 @@ public final class LiveRenderer {
                 observedWasReady = true;
                 programBlend = Math.min(1, programBlend + 1.0 / 240);
             }
-            if (programBlend == 1 && previous != null) { releaseReplay(previous); previous = null; }
+            if (programBlend == 1 && previous != null) { releaseReplay(previous); previous = null; renderedPrevious = null; }
         }
         replayQueueDepth = replayBudget.queueDepth();
     }
@@ -444,6 +499,9 @@ public final class LiveRenderer {
             return;
         }
         double timeBlend = Math.min(1, (now - timeline.pending.state.effectiveNanos()) / 5_000_000.0);
+        // A scheduled change takes over from the program it replaces within this timeline.
+        if (timeline.pending.lastNow == Long.MIN_VALUE && timeline.current.lastNow != Long.MIN_VALUE)
+            timeline.pending.predecessor = timeline.current;
         sample(timeline.pending, now, out);
         // sample() already applies recoveryGain, so the incoming weight is the product
         // of both fades. Use its complement for the outgoing program to preserve level
@@ -467,6 +525,8 @@ public final class LiveRenderer {
     /** mayReplay false: plays a program that is already running, but never starts or waits for a replay. */
     private void sample(VoiceProgram program, long now, double[] out, boolean mayReplay) {
         if (program == null || !program.state.playing() || now < program.state.effectiveNanos()) {
+            // Not rendering, so it cannot carry; don't keep the outgoing program's buffers alive.
+            if (program != null) program.predecessor = null;
             out[0] = 0; out[1] = 0; return;
         }
         // Trigger children carry a scheduler/window but no ActiveVoice pool (capacity 0): the
@@ -486,8 +546,13 @@ public final class LiveRenderer {
                 || now < program.lastNow || now - program.lastNow > 250_000_000L) {
             // A started replay restarts from the back of the queue
             if (program.recovering) replayBudget.release(program.lease);
+            boolean first = program.lastNow == Long.MIN_VALUE && !program.missed;
+            VoiceProgram from = program.predecessor;
+            program.predecessor = null;
             reset(program);
-            if (program.recoverEffects) {
+            if (first && carryEffects(program, from, now)) {
+                if (program.lease != null) replayBudget.release(program.lease);
+            } else if (program.recoverEffects) {
                 if (availableHistory(program, cycles, secondsPerCycle) > 0) {
                     program.unrecovered = true;
                     program.recoveryGain = 0;
@@ -662,6 +727,35 @@ public final class LiveRenderer {
         program.missed = false; program.recovering = false; program.recoveryGain = 1; program.unrecovered = false;
         if (program.sources != null) for (VoiceProgram source : program.sources) reset(source);
         if (program.triggers != null) for (VoiceProgram trigger : program.triggers) reset(trigger);
+    }
+
+    /**
+     * Continues {@code from}'s effect state in a freshly reset program, instead of replaying, when
+     * both belong to one session and position: from rendered the frame before, is fully ready, and
+     * agrees on the cycle position at the latest transport anchor within two frames.
+     */
+    private boolean carryEffects(VoiceProgram program, VoiceProgram from, long now) {
+        if (from == null || program.signals == null || from.signals == null) return false;
+        SignalRuntime.TransferPlan plan = program.transferPlans.get(from.plan.signals());
+        if (plan == null || plan.carried() == 0) return false;
+        double frameNanos = 1e9 / SAMPLE_RATE;
+        if (from.lastNow == Long.MIN_VALUE || now <= from.lastNow || now - from.lastNow > 2 * frameNanos) return false;
+        if (from.missed || from.recovering || from.unrecovered || from.recoveryGain != 1 || from.lastResync != resyncs) return false;
+        // A tempo edit can arrive after its effective time. Compare at the change boundary:
+        // the two rates legitimately diverge after it, even without a seek or render gap.
+        long boundary = Math.max(program.state.effectiveNanos(), from.state.effectiveNanos());
+        double apartSeconds = Math.abs(program.state.cycleAt(boundary) - from.state.cycleAt(boundary)) * 240 / program.state.bpm();
+        if (apartSeconds > 2 / (double) SAMPLE_RATE) return false;
+        program.signals.continueFrom(from.signals, plan);
+        effectTransfers++;
+        return true;
+    }
+
+    /** The program of a playback that rendered most recently. */
+    private static VoiceProgram lastRendered(Playback playback) {
+        if (playback.pending != null && playback.pending.lastNow != Long.MIN_VALUE
+                && playback.pending.lastNow >= playback.current.lastNow) return playback.pending;
+        return playback.current;
     }
 
     private static long availableHistory(VoiceProgram program, double cycles, double secondsPerCycle) {

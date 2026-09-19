@@ -1,6 +1,6 @@
 package groove.engine;
 
-import java.util.Arrays;
+import java.util.*;
 
 /** Renderer-private preallocated stereo DSP and absolute-time 64-frame control ramps. */
 public final class SignalRuntime {
@@ -109,6 +109,159 @@ public final class SignalRuntime {
                 default -> nodeParams[i] = new double[0];
             }
         }
+    }
+
+    /**
+     * Which effects of an earlier program's runtime this program continues, built on the control
+     * thread from the two compiled graphs, never from live state. See docs/PHASE-2-SIGNALS.md.
+     */
+    public static final class TransferPlan {
+        final SignalGraph from;
+        /** Per node of the incoming graph: the outgoing node index it continues, or -1. */
+        final int[] source;
+        final int carried;
+        private TransferPlan(SignalGraph from, int[] source) {
+            this.from = from; this.source = source;
+            int n = 0;
+            for (int s : source) if (s >= 0) n++;
+            carried = n;
+        }
+        public int carried() { return carried; }
+    }
+
+    /**
+     * Matches stateful effects (delay, filter, reverb) by node id and type. An effect outside a
+     * feedback loop carries only if its own audio inputs are unchanged; a filter also needs the same
+     * mode. Effects in a feedback loop carry as a group: every member keeps its id, type and inputs,
+     * the loop keeps its members, and every effect in it passes its own rule, or the whole group resets.
+     */
+    public static TransferPlan transferPlan(SignalGraph from, SignalGraph to) {
+        Map<String, Integer> fromIds = new HashMap<>();
+        for (int j = 0; j < from.nodes.length; j++) fromIds.put(from.nodes[j].id(), j);
+        int[] match = new int[to.nodes.length];
+        for (int i = 0; i < to.nodes.length; i++) {
+            Integer j = fromIds.get(to.nodes[i].id());
+            match[i] = j != null && from.nodes[j].type() == to.nodes[i].type()
+                    && inputIds(to, i).equals(inputIds(from, j)) ? j : -1;
+        }
+        int[] source = new int[to.nodes.length];
+        for (int i = 0; i < source.length; i++) source[i] = stateful(to.nodes[i]) && compatible(from, to, match[i], i) ? match[i] : -1;
+        int[] toLoop = loops(to), fromLoop = loops(from);
+        // An old loop can disappear entirely, leaving no incoming group to validate below.
+        // Its surviving effects must reset even if their individual input edges stayed intact.
+        for (int i = 0; i < source.length; i++)
+            if (source[i] >= 0 && toLoop[i] < 0 && fromLoop[source[i]] >= 0) source[i] = -1;
+        Map<Integer, List<Integer>> groups = new HashMap<>();
+        for (int i = 0; i < toLoop.length; i++) if (toLoop[i] >= 0) groups.computeIfAbsent(toLoop[i], k -> new ArrayList<>()).add(i);
+        for (List<Integer> members : groups.values()) {
+            boolean intact = true;
+            int fromGroup = members.isEmpty() || match[members.getFirst()] < 0 ? -1 : fromLoop[match[members.getFirst()]];
+            for (int i : members) {
+                if (match[i] < 0 || fromGroup < 0 || fromLoop[match[i]] != fromGroup) { intact = false; break; }
+                if (stateful(to.nodes[i]) && !compatible(from, to, match[i], i)) { intact = false; break; }
+            }
+            if (intact) {
+                int size = 0;
+                for (int g : fromLoop) if (g == fromGroup) size++;
+                intact = size == members.size();
+            }
+            if (!intact) for (int i : members) source[i] = -1;
+        }
+        return new TransferPlan(from, source);
+    }
+
+    private static boolean stateful(Graph.Node n) {
+        return n.type() == NodeType.DELAY || n.type() == NodeType.FILTER || n.type() == NodeType.REVERB;
+    }
+
+    /** Same id, type and inputs (match >= 0), plus a filter keeping its mode. */
+    private static boolean compatible(SignalGraph from, SignalGraph to, int j, int i) {
+        if (j < 0) return false;
+        if (to.nodes[i].type() == NodeType.FILTER)
+            return p(to.nodes[i], NodeParam.MODE, 0) == p(from.nodes[j], NodeParam.MODE, 0);
+        return true;
+    }
+
+    private static List<String> inputIds(SignalGraph graph, int node) {
+        List<String> ids = new ArrayList<>();
+        for (int input : graph.audioInputs[node]) ids.add(graph.nodes[input].id());
+        ids.sort(null);
+        return ids;
+    }
+
+    /** Per node, an id for its audio feedback loop, or -1 outside any loop. */
+    private static int[] loops(SignalGraph graph) {
+        int n = graph.nodes.length;
+        List<List<Integer>> out = new ArrayList<>();
+        for (int i = 0; i < n; i++) out.add(new ArrayList<>());
+        for (int v = 0; v < n; v++) for (int u : graph.audioInputs[v]) out.get(u).add(v);
+        int[] index = new int[n], low = new int[n], group = new int[n];
+        Arrays.fill(index, -1);
+        Arrays.fill(group, -1);
+        boolean[] onStack = new boolean[n];
+        Deque<Integer> stack = new ArrayDeque<>();
+        int[] counter = {0, 0};
+        for (int v = 0; v < n; v++) if (index[v] < 0) strongConnect(v, out, index, low, onStack, stack, group, counter);
+        // A lone node is only a loop if it feeds itself.
+        int[] size = new int[counter[1]];
+        for (int g : group) size[g]++;
+        for (int v = 0; v < n; v++) if (size[group[v]] == 1 && !out.get(v).contains(v)) group[v] = -1;
+        return group;
+    }
+
+    private static void strongConnect(int v, List<List<Integer>> out, int[] index, int[] low, boolean[] onStack,
+                                      Deque<Integer> stack, int[] group, int[] counter) {
+        index[v] = low[v] = counter[0]++;
+        stack.push(v); onStack[v] = true;
+        for (int w : out.get(v)) {
+            if (index[w] < 0) { strongConnect(w, out, index, low, onStack, stack, group, counter); low[v] = Math.min(low[v], low[w]); }
+            else if (onStack[w]) low[v] = Math.min(low[v], index[w]);
+        }
+        if (low[v] == index[v]) {
+            int w;
+            do { w = stack.pop(); onStack[w] = false; group[w] = counter[1]; } while (w != v);
+            counter[1]++;
+        }
+    }
+
+    /**
+     * Sound thread: continues {@code previous}'s effect tails in this freshly reset runtime. Delays
+     * keep their input history, remapped when their length changed; filters keep their history
+     * under new coefficients; reverbs keep their tank. No allocation.
+     */
+    void continueFrom(SignalRuntime previous, TransferPlan plan) {
+        if (plan.from != previous.graph || plan.source.length != graph.nodes.length)
+            throw new IllegalArgumentException("Transfer plan does not match these runtimes");
+        for (int i = 0; i < plan.source.length; i++) {
+            int j = plan.source[i];
+            if (j < 0) continue;
+            switch (graph.nodes[i].type()) {
+                case DELAY -> {
+                    carryHistory(previous.delayLeft[j], previous.cursors[j], delayLeft[i]);
+                    cursors[i] = carryHistory(previous.delayRight[j], previous.cursors[j], delayRight[i]);
+                }
+                case FILTER -> { filtersLeft[i].copyStateFrom(previous.filtersLeft[j]); filtersRight[i].copyStateFrom(previous.filtersRight[j]); }
+                case REVERB -> reverbs[i].copyStateFrom(previous.reverbs[j]);
+                default -> { }
+            }
+        }
+    }
+
+    /** A delay line holds its last L inputs, oldest at the cursor. Returns the new cursor. */
+    private static int carryHistory(double[] from, int cursor, double[] to) {
+        int oldLength = from.length, newLength = to.length;
+        if (oldLength == newLength) {
+            System.arraycopy(from, 0, to, 0, newLength);
+            return cursor;
+        }
+        // Keep the most recent inputs, ending just before slot 0 of the new line; older slots stay zero.
+        int keep = Math.min(oldLength, newLength);
+        int start = cursor - keep;
+        if (start < 0) start += oldLength;
+        int first = Math.min(keep, oldLength - start);
+        System.arraycopy(from, start, to, newLength - keep, first);
+        System.arraycopy(from, 0, to, newLength - keep + first, keep - first);
+        return 0;
     }
 
     public void reset() {

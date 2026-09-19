@@ -158,8 +158,9 @@ join or seek with no usable outgoing audio is silent until recovery completes.
 `historyRecoveries()` and `historyFrames()` expose recovery starts and replay work.
 The outgoing program is the last timeline that was ready to mix, so a republish during a
 recovery keeps the older audio instead of silence. Once a scheduled commit is in effect,
-only the pending program replays; the current program it replaces never starts one.
-Plain pattern and stateless signal graphs keep their immediate join behavior.
+only the pending program replays (unless it carries effect state, below); the current program
+it replaces never starts one. Plain pattern and stateless signal graphs keep their immediate
+join behavior.
 
 Renderers can share a `ReplayBudget` ([Stage 4](ENGINE-UPGRADE-STAGES.md#replay-leasing-and-join-time)).
 At most `k` programs on a budget replay at once; others wait silently in FIFO order, and
@@ -172,10 +173,47 @@ expose lease activity.
 
 This is bounded approximation, not exact late-join equivalence: echoes older than
 the available lookback, long delay chains, persistent feedback and previous graph or
-tempo revisions are not reconstructed. A graph edit never replays the previous graph
-through the new one. Exact authoritative snapshots remain a possible future refinement.
-Recovery has a fixed extra-work bound, not a guarantee that every maximum-size graph
-or number of simultaneous speakers meets the audio deadline.
+tempo revisions are not reconstructed for a late joiner. A graph edit never replays the
+previous graph through the new one; a listener who was already playing carries its effect
+state across instead (below). Exact authoritative snapshots remain a possible future
+refinement. Recovery has a fixed extra-work bound, not a guarantee that every maximum-size
+graph or number of simultaneous speakers meets the audio deadline.
+
+### Carrying effect state
+
+A republish or a scheduled commit that continues one session keeps its effect tails instead of
+replaying at most one second. `LiveRenderer.publish(timeline, sessionKey)` takes a key that
+identifies the session: speakers pass the committed patch's epoch and the headphone preview its
+editor session, so relinking to a different editor never inherits the previous patch's sound.
+`publish(timeline)` never carries.
+
+State carries only when the incoming program takes over from a program that rendered the frame
+before, is fully ready (not replaying or fading in), and agrees on the cycle position at the latest
+transport anchor within two frames. Checking the anchor lets a tempo edit arrive late without treating the subsequent
+rate difference as a seek. Seeks, resyncs, underruns, stop and restart, and fresh joins keep the replay path. The copy
+happens on the sound thread immediately before the incoming program renders its first frame, for a
+commit at its effective time, not when it was compiled or published. The control worker prepares a
+`TransferPlan` from the compiled graphs of every program that could still be playing then, and the
+incoming program's buffers already exist, so nothing is allocated. The outgoing program keeps its
+own state through the 240-frame crossfade and is then released.
+
+Effects match by node id and type, never by position in the compiled graph:
+
+| Effect | Carries | Resets |
+| --- | --- | --- |
+| `delay` | always; a new length (time knob or tempo) is refilled from the last inputs, since the line is exactly its input history | never for length alone |
+| `filter` | cutoff and Q changes | a mode change |
+| `reverb` | every setting; the tank has a fixed size | never |
+
+An effect outside a feedback loop carries only if its own audio inputs are unchanged. Effects in a
+feedback loop carry as a group: every member keeps its id, type and inputs, the loop keeps its
+members, and every effect in it passes its own rule, or the whole group resets. This includes
+breaking a loop entirely: its surviving effects reset even when their own inputs are unchanged.
+Reverb transfers preserve the full predelay history so later predelay increases can still read it. Removed or reset
+effects use the existing short crossfade. `effectTransfers()` counts programs that carried.
+`EffectCarryTests` checks tails far older than the replay window across knob edits, same-graph
+republishes, scheduled commits, 20 rapid edits and three speakers on one replay budget, and that
+every fallback path still resets; `perfBench` B11 measures the copy.
 
 ## Editor and compatibility
 

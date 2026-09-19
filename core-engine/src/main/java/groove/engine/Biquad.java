@@ -62,6 +62,9 @@ public final class Biquad {
 
     public void reset() { x1 = 0; x2 = 0; y1 = 0; y2 = 0; }
 
+    /** Continues {@code other}'s history under this filter's own coefficients. */
+    void copyStateFrom(Biquad other) { x1 = other.x1; x2 = other.x2; y1 = other.y1; y2 = other.y2; }
+
     long snappedWrites() { return snappedWrites; }
     /** Tests only: |H(e^{jω})| of the current coefficients, ω in radians per sample. */
     double responseMagnitude(double omega) {

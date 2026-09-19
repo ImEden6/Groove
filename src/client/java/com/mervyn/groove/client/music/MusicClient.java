@@ -251,13 +251,17 @@ public final class MusicClient {
                     if (ticket == link.generation && result != null) {
                         link.program = result.timeline();
                         var emitter = emitters.get(pos);
-                        if (emitter != null) emitter.renderer.publish(link.program);
+                        if (emitter != null) emitter.renderer.publish(link.program, speakerSession(link));
                         SampleLibrary.requestSpeaker(pos, result.needed(), result.status().keySet());
                     }
                     if (link.refreshAgain) { link.refreshAgain = false; compileSpeaker(pos, link); }
                 });
             });
         } catch (RejectedExecutionException busy) { link.compiling = false; }
+    }
+    /** Effect tails only carry between publishes of one committed session. */
+    private static UUID speakerSession(SpeakerLink link) {
+        return link.wire == null ? null : link.wire.timeline().epoch();
     }
     private static void invalidateSpeaker(BlockPos pos, SpeakerLink link) {
         link.generation++; link.wire = null; link.program = null; link.refreshAgain = false;
@@ -285,7 +289,7 @@ public final class MusicClient {
                 Minecraft.getInstance().execute(() -> {
                     if (ticket != previewGeneration) return;
                     previewProgram = prepared.timeline();
-                    previewRenderer.publish(previewProgram);
+                    previewRenderer.publish(previewProgram, packet.session());
                     SampleLibrary.requestPreview(prepared.needed(), prepared.status().keySet());
                 });
             } catch (RuntimeException error) {
@@ -371,7 +375,7 @@ public final class MusicClient {
                             && client.getSoundManager().isActive(emitter.sound)) return;
                     if (emitter != null) stopEmitter(emitter);
                     LiveRenderer sourceRenderer = new LiveRenderer(SPEAKER_REPLAY);
-                    sourceRenderer.publish(speakerLinks.get(pos).program);
+                    sourceRenderer.publish(speakerLinks.get(pos).program, speakerSession(speakerLinks.get(pos)));
                     GrooveAudioStream sourceStream = new GrooveAudioStream(sourceRenderer, clock, true);
                     GrooveSound sourceSound = new GrooveSound(sourceStream, pos, height);
                     emitters.put(pos, new Emitter(sourceSound, sourceStream, height, sourceRenderer));
@@ -441,7 +445,7 @@ public final class MusicClient {
             if (previewStream != null) previewStream.close();
             previewReplay = new ReplayBudget(1);
             previewRenderer = new LiveRenderer(previewReplay);
-            previewRenderer.publish(previewProgram);
+            previewRenderer.publish(previewProgram, previewLink.session());
             previewStream = new GrooveAudioStream(previewRenderer, clock);
             previewStream.setUnderwater(underwater);
             previewSound = new GrooveSound(previewStream);

@@ -318,12 +318,14 @@ Delay ring buffers are sized from the program's BPM when a timeline is published
 against $64 \le \text{frames} \le 192,000$. Buffer traversal in `SignalRuntime.process`
 is allocation-free.
 
-A tempo change publishes a new program whose delay lines start empty. History replay
-only covers time since the new program's anchor cycle (at most one second), so right
-after a switch it replays roughly one block, not the old echo tail. The outgoing
-program's audio fades out over the 240-frame program crossfade, then the synced delay
-stays silent until one full new delay length of input has passed through it (24,000
-frames for a 1/8 note at 60 BPM). `SignalTests.delaySync` asserts this gap.
+A tempo change within one session carries the delay's input history into the new
+program ([carrying effect state](PHASE-2-SIGNALS.md#carrying-effect-state)): a delay line
+holds exactly its last inputs, so the resized line is refilled from them and the echoes
+continue at the new timing. Without a session to carry from (a fresh join, or a renderer
+published without a session key), the new delay lines start empty and replay only covers
+time since the new program's anchor cycle, so the synced delay stays silent until one full
+new delay length of input has passed through it (24,000 frames for a 1/8 note at 60 BPM).
+`SignalTests.delaySync` asserts that uncarried gap.
 
 ### Audio demonstrations
 
@@ -407,10 +409,12 @@ what is not guaranteed are in [feedback stability](FEEDBACK-STABILITY.md).
 
 #### Known limitations
 
-- Late joins, resyncs and every publish (including knob drags and the headphone preview) replay at
-  most 1 s of history, and stopping the transport cuts tails. Two speakers that joined at different
-  times differ until the unreplayed part of the tail has decayed: at most T60 for a reverb outside a
-  loop, plus the loop convergence time for one inside a loop.
+- Late joins, resyncs and seeks replay at most 1 s of history, and stopping the transport cuts
+  tails. Republishes and commits within one session carry effect state instead
+  ([carrying effect state](PHASE-2-SIGNALS.md#carrying-effect-state)), but through the edited graph,
+  while a late joiner replays the new graph only. Two speakers that joined at different times differ
+  until the unreplayed part of the tail has decayed: at most T60 for a reverb outside a loop, plus
+  the loop convergence time for one inside a loop.
 - Effect memory is per program per renderer, not per graph: up to 3.07 MB of delay plus about 1 MB
   for two reverbs per program, times current, pending and previous programs, times the client's
   renderers. A program waiting for a replay lease keeps the previous program alive too.
@@ -471,7 +475,7 @@ program. The server validates ranges only, since it has no asset lengths.
 ### Replay leasing and join time
 
 Graphs with a `filter`, `delay` or `reverb` rebuild up to 1 s of history when a listener joins,
-resyncs or receives a new publish. Replay runs two history frames per output frame, so a full
+resyncs, seeks, or receives a publish it cannot carry effect state into. Replay runs two history frames per output frame, so a full
 second takes about one second of silent catch-up, then a 5 ms fade-in. A publish during a replay
 keeps the previous ready audio playing; a fresh join is silent until its replay completes.
 
@@ -499,7 +503,7 @@ loop-gain rule, feedback convergence, parity, allocation), `LoopTests` (geometry
 late join, tempo, stealing, parity), `ReplayLeaseTests` and `SpeakerLinkTests` (leases, storms,
 lifetime, fade cancel), `DenormalTests`, `ResamplerTests` (including the 15.7x-16x spectral gate),
 `SelectionCacheTests` (cached versus per-frame differential), `DemoTests` and the float64 goldens.
-`./gradlew :core-engine:longTest` runs the 20 s reverb decays. `perfBench` scenarios B1-B10 are
+`./gradlew :core-engine:longTest` runs the 20 s reverb decays. `perfBench` scenarios B1-B11 are
 below.
 
 ## Stage 4 performance on reference machine
@@ -662,3 +666,25 @@ Results from 2026-09-19: analysis median 0.1891 ms, p99 0.3294 ms; full compile 
 p99 0.7752 ms. Before precomputing each loop's inputs and gain bounds once per loop, the analysis
 took about 1.6 ms. A full `perfBench` run before and after the loop-gain limit showed no rendering
 change: B2 to B9 and B8 medians within 4%, and B1 within 2% once rerun alternately with the old build.
+
+### B11 effect carry (`perfBench -PperfOnly=B11`)
+
+Times `SignalRuntime.continueFrom`, the copy that carries effect state across a republish or commit
+on the sound thread, for 1 renderer and for 8 switching in the same block (a commit reaching 8
+linked speakers). Between trials each outgoing runtime renders a block and 64 MB is streamed, so
+copies start cold. Gates, against the 10.67 ms block of 512 frames: one switch p99 ≤ 0.5 ms, and 8
+switches p99 ≤ 1.33 ms, a quarter of the half-block headroom B8 uses.
+
+Results from 2026-09-19, four runs: a B6-class patch (B5 plus 2 reverbs) passes, one switch p99
+0.13–0.26 ms and 8 switches 0.83–1.01 ms. The worst case, report only (the full 192,000-frame delay
+budget and two reverbs at 500 ms predelay, about 4 MB per program), took p99 0.82–0.92 ms for one
+switch and 4.17–4.91 ms for 8. That misses the 8-switch budget, but the same patch already misses B8 on
+rendering alone. Meeting it would need the outgoing program to hand its buffers over instead of
+copying, which means reworking the crossfade so each carried effect is processed only once.
+A full `perfBench` run with carrying in place kept B1 to B10 within run-to-run noise, and B9's
+publish allocation rose by about 540 bytes (one transfer-plan map on its signal program).
+
+After the review fixes, reverb transfers copy the full predelay buffer, preserving history for
+later predelay increases. A single B11 rerun on 2026-09-19 measured B6-class p99 of 0.3188 ms
+for one renderer and 1.1185 ms for eight (both gates pass). Worst-case p99 was 0.6657 ms
+and 4.6298 ms respectively, still report only; these copy timings exclude normal rendering.

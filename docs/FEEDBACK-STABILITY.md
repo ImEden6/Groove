@@ -85,3 +85,11 @@ or editor project is loaded from disk, every delay in such a loop is marked free
 sounds exactly as before; the server log (and the `/groove load` reply) names the delays it marked.
 Patches submitted over the network are not migrated: a new edit must stay within the limit or set
 `freeRun` itself.
+
+## Carried state
+
+A listener who keeps playing through an edit carries its effect state into the new graph
+([carrying effect state](PHASE-2-SIGNALS.md#carrying-effect-state)), while a late joiner replays at
+most one second through the new graph only. The two start from different states, which is exactly
+the case above: the difference is a finite leftover that the loop limit makes die away, and a
+reverb outside any loop forgets it within its T60.

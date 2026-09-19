@@ -11,7 +11,8 @@ import java.util.*;
  * Stage 4 baseline performance benchmark harness.
  * Measures scenarios B1..B9 with warmup convergence, pooled block timings,
  * real-time ratio, publish allocations, and system metadata. B10 times the
- * feedback-loop analysis that compiles and the editor run, report only.
+ * feedback-loop analysis that compiles and the editor run, report only. B11 times
+ * carrying effect state across a switch on the sound thread.
  */
 public final class PerfBench {
     private static final int BLOCKS_PER_TRIAL = 2000;
@@ -97,6 +98,7 @@ public final class PerfBench {
             gates.add(String.format(Locale.ROOT, "B8 grant overhead: %.1f ns per release, grant and requeue with 7 waiters", grantOverheadNanos()));
         }
         if (only.isEmpty() || Arrays.asList(only.split(",")).contains("B10")) b10LoopAnalysis(gates);
+        if (only.isEmpty() || Arrays.asList(only.split(",")).contains("B11")) b11EffectCarry(gates);
         printSummaryTable(results);
         gates.forEach(System.out::println);
     }
@@ -134,6 +136,74 @@ public final class PerfBench {
         gates.add(String.format(Locale.ROOT,
                 "B10 loop analysis (%d nodes, %d edges, 30 delays in one loop, report only): median %.4f ms, p99 %.4f ms; full compile median %.4f ms, p99 %.4f ms",
                 graph.nodes().size(), graph.edges().size(), analysis[0], analysis[1], compile[0], compile[1]));
+    }
+
+    /** One switch may copy at most this much; eight in one block get a quarter of B8's half-block headroom. */
+    private static final double B11_ONE_GATE_MS = 0.5, B11_EIGHT_GATE_MS = BLOCK_BUDGET_MS / 2 / 4;
+
+    /** Worst case: the full 192,000-frame delay budget and two reverbs at 500 ms predelay. */
+    static Graph b11WorstGraph() {
+        List<Graph.Node> nodes = new ArrayList<>(List.of(new Graph.Node("tone", NodeType.TONE, Map.of()),
+                new Graph.Node("render", NodeType.AUDIO_RENDER, Map.of()), new Graph.Node("out", NodeType.OUTPUT, Map.of())));
+        List<Graph.Edge> edges = new ArrayList<>(List.of(Graph.edge("tone", "render")));
+        String last = "render";
+        for (int i = 0; i < 4; i++) {
+            nodes.add(new Graph.Node("d" + i, NodeType.DELAY, Map.of(NodeParam.FRAMES, 48000.0)));
+            edges.add(Graph.edge(last, "d" + i));
+            last = "d" + i;
+        }
+        for (int i = 0; i < 2; i++) {
+            nodes.add(new Graph.Node("rev" + i, NodeType.REVERB, Map.of(NodeParam.PRE_DELAY_MS, 500.0)));
+            edges.add(Graph.edge(last, "rev" + i));
+            last = "rev" + i;
+        }
+        edges.add(new Graph.Edge(last, "out", "out", "audio"));
+        return new Graph(3, nodes, edges);
+    }
+
+    /**
+     * Times SignalRuntime.continueFrom for 1 and 8 renderers switching in the same block. Between
+     * trials each outgoing runtime renders a block and 64 MB is streamed, so copies start cold.
+     */
+    private static void b11EffectCarry(List<String> gates) {
+        double[] scratch = new double[8 * 1024 * 1024];
+        for (var entry : List.of(Map.entry("B6-class", b6Graph()), Map.entry("worst case", b11WorstGraph()))) {
+            Graph graph = entry.getValue();
+            SignalGraph signals = GraphCompiler.compile(graph).signals();
+            SessionState state = new SessionState(1, 0, 0, 120, true, graph);
+            SignalRuntime.TransferPlan plan = SignalRuntime.transferPlan(signals, signals);
+            for (int renderers : new int[] {1, 8}) {
+                SignalRuntime[] from = new SignalRuntime[renderers], to = new SignalRuntime[renderers];
+                for (int r = 0; r < renderers; r++) { from[r] = signals.runtime(state); to[r] = signals.runtime(state); }
+                double[][] sources = new double[signals.sourceCount()][2];
+                double[] out = new double[2];
+                LookaheadScheduler.Window[] triggers = new LookaheadScheduler.Window[signals.triggerCount()];
+                long frame = 0;
+                int trials = 200;
+                double[] ms = new double[trials];
+                for (int t = -20; t < trials; t++) {
+                    for (SignalRuntime runtime : from)
+                        for (int f = 0; f < BLOCK_FRAMES; f++) {
+                            for (double[] source : sources) { source[0] = source[1] = Math.sin(frame * 0.01); }
+                            runtime.process(sources, triggers, out, Math.round(frame++ * 1e9 / LiveRenderer.SAMPLE_RATE));
+                        }
+                    for (SignalRuntime runtime : to) runtime.reset();
+                    double sink = 0;
+                    for (int i = 0; i < scratch.length; i += 8) { scratch[i] += 1; sink += scratch[i]; }
+                    if (sink == -1) System.out.print("");
+                    long start = System.nanoTime();
+                    for (int r = 0; r < renderers; r++) to[r].continueFrom(from[r], plan);
+                    if (t >= 0) ms[t] = (System.nanoTime() - start) / 1e6;
+                }
+                Arrays.sort(ms);
+                double median = ms[trials / 2], p99 = ms[(int) Math.ceil(trials * 0.99) - 1];
+                boolean gated = entry.getKey().equals("B6-class");
+                double gate = renderers == 1 ? B11_ONE_GATE_MS : B11_EIGHT_GATE_MS;
+                gates.add(String.format(Locale.ROOT, "B11 effect carry, %s, %d renderer%s switching together: median %.4f ms, p99 %.4f ms%s",
+                        entry.getKey(), renderers, renderers == 1 ? "" : "s", median, p99,
+                        gated ? String.format(Locale.ROOT, " (gate p99 <= %.2f ms: %s)", gate, p99 <= gate ? "PASS" : "FAIL") : " (report only)"));
+            }
+        }
     }
 
     /** {median, p99} milliseconds per call. */

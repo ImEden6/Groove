@@ -373,6 +373,22 @@ public final class Reverb {
         outLR[1] = kOut * tapR;
     }
 
+    /**
+     * Continues {@code other}'s tail with this reverb's own settings. Tank sizes are fixed, so every
+     * buffer copies as is. Preserve the entire predelay history too: a later republish may increase
+     * the predelay and read samples outside the current span.
+     */
+    void copyStateFrom(Reverb other) {
+        preDelayCursor = other.preDelayCursor;
+        double[][] mine = stateBuffers(), theirs = other.stateBuffers();
+        for (int i = 0; i < mine.length; i++) System.arraycopy(theirs[i], 0, mine[i], 0, mine[i].length);
+        diff1Cursor = other.diff1Cursor; diff2Cursor = other.diff2Cursor; diff3Cursor = other.diff3Cursor; diff4Cursor = other.diff4Cursor;
+        modA1Cursor = other.modA1Cursor; delA1Cursor = other.delA1Cursor; apA2Cursor = other.apA2Cursor; delA2Cursor = other.delA2Cursor;
+        modB1Cursor = other.modB1Cursor; delB1Cursor = other.delB1Cursor; apB2Cursor = other.apB2Cursor; delB2Cursor = other.delB2Cursor;
+        yBandwidth = other.yBandwidth; yDampingA = other.yDampingA; yDampingB = other.yDampingB;
+        outA = other.outA; outB = other.outB;
+    }
+
     /** Zeroes stored feedback values too small to hear, before they decay into slow subnormals. */
     private double snap(double v) {
         if (Math.abs(v) < Biquad.DENORMAL_SNAP && v != 0) { snappedWrites++; return 0.0; }
@@ -381,10 +397,10 @@ public final class Reverb {
 
     long snappedWrites() { return snappedWrites; }
 
-    private double[][] stateBuffers() {
-        return new double[][]{preDelayBuffer, diff1Buffer, diff2Buffer, diff3Buffer, diff4Buffer,
-                modA1Buffer, delA1Buffer, apA2Buffer, delA2Buffer, modB1Buffer, delB1Buffer, apB2Buffer, delB2Buffer};
-    }
+    /** Built once so the sound thread can walk the buffers without allocating; predelay first. */
+    private final double[][] stateBuffers = {preDelayBuffer, diff1Buffer, diff2Buffer, diff3Buffer, diff4Buffer,
+            modA1Buffer, delA1Buffer, apA2Buffer, delA2Buffer, modB1Buffer, delB1Buffer, apB2Buffer, delB2Buffer};
+    private double[][] stateBuffers() { return stateBuffers; }
 
     /** Tests only: fills every buffer and filter state with one value. */
     void seedState(double value) {
