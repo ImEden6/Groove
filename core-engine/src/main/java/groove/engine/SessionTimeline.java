@@ -24,6 +24,15 @@ public final class SessionTimeline {
             snapshot = new Snapshot(snapshot.pending, null);
         return snapshot;
     }
+    /** Replace startup defaults immediately, advancing revision for clients already connected. */
+    public Snapshot restoreStartup(Graph graph, double bpm, long now) {
+        if (snapshot.revision() != 0 || snapshot.current.playing() || snapshot.pending != null)
+            throw new IllegalArgumentException("Startup restoration requires untouched stopped defaults");
+        GraphCompiler.compile(graph);
+        snapshot = new Snapshot(new SessionState(1, now, 0, bpm, false,
+                SignalGraph.assignBirths(graph, null, now)), null);
+        return snapshot;
+    }
     public Snapshot schedule(Graph graph, double bpm, boolean playing, long expectedRevision, long now) {
         Snapshot before = snapshot(now);
         if (expectedRevision != before.revision()) throw new IllegalArgumentException("Stale revision; refresh before editing");

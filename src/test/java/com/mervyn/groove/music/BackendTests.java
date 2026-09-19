@@ -161,6 +161,8 @@ public final class BackendTests {
         SpeakerLinkTests.run();
         catalogUpdateChecks();
         persistenceChecks();
+        backgroundReadChecks();
+        startupRestoreChecks();
         typedCompatibilityChecks();
         signalChecks();
         reverbChecks();
@@ -174,7 +176,7 @@ public final class BackendTests {
         check(searchCache.filter(catalog, "no_such_sample").isEmpty(), "Search changes invalidate sample results");
         var refreshed = groove.engine.samples.SampleCatalog.scan(null);
         check(!searchCache.filter(refreshed, "@factory").isEmpty(), "Catalog replacement refreshes results");
-        var saves = MusicServer.newSaveExecutor();
+        var saves = MusicServer.newPersistenceExecutor();
         var order = new java.util.ArrayList<Integer>();
         String callerThread = Thread.currentThread().getName();
         try {
@@ -559,6 +561,87 @@ public final class BackendTests {
                 check((type.idStem() + "_1").matches("[a-zA-Z0-9_-]{1,32}"), "Every generated node ID remains valid");
         } finally { java.util.Locale.setDefault(locale); }
     }
+    private static void startupRestoreChecks() {
+        var timeline = new SessionTimeline(Graph.demo(), 128, 0);
+        long now = 500_000_000L;
+        var graph = SignalDemo.multipleSources();
+        var restored = timeline.restoreStartup(graph, 155, now);
+        check(restored.pending() == null, "Startup restore leaves no pending downbeat");
+        check(restored.current().bpm() == 155 && !restored.current().playing(), "Startup restores tempo stopped");
+        check(restored.current().graph().equals(SignalGraph.assignBirths(graph, null, now)), "Startup immediately restores saved graph");
+        check(restored.current().effectiveNanos() == now && restored.revision() == 1, "Startup advances revision immediately for connected clients");
+        invalid(() -> timeline.schedule(graph, 155, true, 0, now));
+        var edited = timeline.schedule(graph, 160, true, restored.revision(), now);
+        check(edited.pending() != null && edited.pending().bpm() == 160, "Edit immediately after startup succeeds");
+        invalid(() -> timeline.restoreStartup(graph, 155, now));
+        var playing = new SessionTimeline(graph, 128, true, 0);
+        invalid(() -> playing.restoreStartup(graph, 155, now));
+    }
+
+    private static void backgroundReadChecks() throws Exception {
+        var root = java.nio.file.Files.createTempDirectory("groove-read-test-");
+        var worker = MusicServer.newPersistenceExecutor();
+        var completions = new java.util.concurrent.LinkedBlockingQueue<Runnable>();
+        var result = new java.util.concurrent.atomic.AtomicReference<SessionReads.Result>();
+        var entered = new java.util.concurrent.CountDownLatch(1);
+        var release = new java.util.concurrent.CountDownLatch(1);
+        try {
+            worker.execute(() -> {
+                entered.countDown();
+                try { release.await(); }
+                catch (InterruptedException error) { Thread.currentThread().interrupt(); }
+            });
+            check(entered.await(5, java.util.concurrent.TimeUnit.SECONDS), "Persistence worker started");
+            var saved = new SessionStore.Saved(Graph.demo(), 155);
+            worker.execute(() -> {
+                try { SessionStore.write(root, saved); }
+                catch (Exception error) { throw new RuntimeException(error); }
+            });
+            SessionReads.enqueue(root, false, worker, completions::add, result::set);
+            check(result.get() == null && completions.isEmpty(), "Read returns while worker is blocked");
+            for (int i = 0; i < 14; i++) worker.execute(() -> {});
+            try {
+                SessionReads.enqueue(root, false, worker, completions::add, result::set);
+                throw new AssertionError("Full persistence queue must reject reads");
+            } catch (java.util.concurrent.RejectedExecutionException expected) { }
+            release.countDown();
+            var completion = completions.poll(5, java.util.concurrent.TimeUnit.SECONDS);
+            check(completion != null && result.get() == null, "Read completion waits for owner thread");
+            completion.run();
+            check(result.get().error() == null && saved.equals(result.get().saved()), "Load observes preceding queued save");
+            java.nio.file.Files.writeString(root.resolve(SessionStore.FILE), "{}");
+            SessionReads.enqueue(root, false, worker, completions::add, result::set);
+            completion = completions.poll(5, java.util.concurrent.TimeUnit.SECONDS);
+            check(completion != null, "Malformed read completes");
+            completion.run();
+            check(result.get().error() != null, "Malformed read reports failure to owner");
+            java.nio.file.Files.delete(root.resolve(SessionStore.FILE));
+            SessionReads.enqueue(root, true, worker, completions::add, result::set);
+            completion = completions.poll(5, java.util.concurrent.TimeUnit.SECONDS);
+            check(completion != null, "Empty startup completes");
+            completion.run();
+            check(result.get().error() == null && result.get().saved() == null, "Empty startup keeps defaults");
+            SessionReads.enqueue(root, false, worker, completions::add, result::set);
+            completion = completions.poll(5, java.util.concurrent.TimeUnit.SECONDS);
+            check(completion != null, "Missing explicit load completes");
+            completion.run();
+            check(result.get().error() != null, "Missing explicit load reports failure");
+            worker.shutdown();
+            try {
+                SessionReads.enqueue(root, false, worker, completions::add, result::set);
+                throw new AssertionError("Stopped queue must reject reads");
+            } catch (java.util.concurrent.RejectedExecutionException expected) { }
+        } finally {
+            release.countDown();
+            worker.shutdownNow();
+            worker.awaitTermination(5, java.util.concurrent.TimeUnit.SECONDS);
+            try (var files = java.nio.file.Files.list(root)) {
+                for (var file : files.toList()) java.nio.file.Files.deleteIfExists(file);
+            }
+            java.nio.file.Files.deleteIfExists(root);
+        }
+    }
+
     private static void persistenceChecks() throws Exception {
         var root = java.nio.file.Files.createTempDirectory("groove-save-test-");
         try {

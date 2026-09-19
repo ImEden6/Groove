@@ -30,14 +30,16 @@ public final class MusicServer {
     private final Map<UUID, Long> pings = new java.util.concurrent.ConcurrentHashMap<>();
     private final Map<UUID, Long> submissions = new java.util.concurrent.ConcurrentHashMap<>();
     private final Path saveRoot;
-    private SessionTimeline timeline;
-    private final java.util.concurrent.ThreadPoolExecutor saves = newSaveExecutor();
+    private final SessionTimeline timeline;
+    private boolean starting = true;
+    private long loadGeneration;
+    private final java.util.concurrent.ThreadPoolExecutor persistence = newPersistenceExecutor();
 
-    static java.util.concurrent.ThreadPoolExecutor newSaveExecutor() {
+    static java.util.concurrent.ThreadPoolExecutor newPersistenceExecutor() {
         return new java.util.concurrent.ThreadPoolExecutor(
                 1, 1, 0, java.util.concurrent.TimeUnit.SECONDS, new java.util.concurrent.ArrayBlockingQueue<>(16),
                 task -> {
-                    Thread thread = new Thread(task, "Groove saves");
+                    Thread thread = new Thread(task, "Groove persistence");
                     thread.setDaemon(true);
                     return thread;
                 },
@@ -47,19 +49,58 @@ public final class MusicServer {
     private MusicServer(MinecraftServer server) {
         this.server = server;
         saveRoot = server.getWorldPath(LevelResource.ROOT);
-        Graph graph = Graph.demo();
-        double bpm = 128;
+        timeline = new SessionTimeline(Graph.demo(), 128, System.nanoTime());
+    }
+
+    private int load(CommandSourceStack source) {
+        boolean startup = source == null;
+        long revision = timeline.snapshot(System.nanoTime()).revision();
+        long generation = loadGeneration + 1;
         try {
-            if (Files.exists(saveRoot.resolve(SessionStore.FILE))
-                    || Files.exists(saveRoot.resolve("groove-patch.json"))) {
-                var saved = SessionStore.read(saveRoot);
-                graph = saved.graph();
-                bpm = saved.bpm();
-            }
-        } catch (Exception error) {
-            GrooveMod.LOGGER.warn("Could not load Groove patch; using available defaults", error);
+            SessionReads.enqueue(saveRoot, startup, persistence, server::execute, result -> {
+                if (active != this) return;
+                try {
+                    if (generation != loadGeneration || timeline.snapshot(System.nanoTime()).revision() != revision) {
+                        if (source != null)
+                            source.sendFailure(Component.literal("Groove load discarded: session changed or a newer load was requested."));
+                        return;
+                    }
+                    if (result.error() != null) {
+                        if (startup)
+                            GrooveMod.LOGGER.warn("Could not load Groove patch; using available defaults", result.error());
+                        else
+                            source.sendFailure(Component.literal("Groove load failed: " + result.error().getMessage()));
+                        return;
+                    }
+                    if (result.saved() == null) return;
+                    try {
+                        long now = System.nanoTime();
+                        if (startup) {
+                            timeline.restoreStartup(result.saved().graph(), result.saved().bpm(), now);
+                        } else {
+                            var before = timeline.snapshot(now);
+                            timeline.schedule(result.saved().graph(), result.saved().bpm(),
+                                    before.current().playing(), revision, now);
+                        }
+                        for (ServerPlayer player : server.getPlayerList().getPlayers()) send(player);
+                        if (source != null)
+                            source.sendSuccess(() -> Component.literal("Groove loaded; change queued for the next safe downbeat."), true);
+                    } catch (Exception error) {
+                        if (startup) GrooveMod.LOGGER.warn("Could not apply Groove startup patch", error);
+                        else source.sendFailure(Component.literal("Groove load failed: " + error.getMessage()));
+                    }
+                } finally {
+                    if (startup) starting = false;
+                }
+            });
+            loadGeneration = generation;
+            if (source != null) source.sendSuccess(() -> Component.literal("Groove load queued."), false);
+            return 1;
+        } catch (java.util.concurrent.RejectedExecutionException busy) {
+            if (startup) starting = false;
+            else source.sendFailure(Component.literal("Groove persistence queue is full or stopping; try again later."));
+            return 0;
         }
-        timeline = new SessionTimeline(graph, bpm, System.nanoTime());
     }
 
     public static void register() {
@@ -85,15 +126,18 @@ public final class MusicServer {
                     () -> handler.completeTask(MusicPackets.ProtocolTask.TYPE)
             );
         });
-        ServerLifecycleEvents.SERVER_STARTED.register(server -> active = new MusicServer(server));
+        ServerLifecycleEvents.SERVER_STARTED.register(server -> {
+            active = new MusicServer(server);
+            active.load(null);
+        });
         ServerLifecycleEvents.SERVER_STOPPED.register(server -> {
             MusicServer session = active;
             active = null;
             if (session != null) {
-                session.saves.shutdown();
+                session.persistence.shutdown();
                 try {
-                    if (!session.saves.awaitTermination(30, java.util.concurrent.TimeUnit.SECONDS))
-                        GrooveMod.LOGGER.warn("Groove saves still pending after shutdown timeout");
+                    if (!session.persistence.awaitTermination(30, java.util.concurrent.TimeUnit.SECONDS))
+                        GrooveMod.LOGGER.warn("Groove persistence work still pending after shutdown timeout");
                 } catch (InterruptedException interrupted) {
                     Thread.currentThread().interrupt();
                 }
@@ -118,6 +162,8 @@ public final class MusicServer {
                 String message;
                 try {
                     long now = System.nanoTime();
+                    if (active.starting)
+                        throw new IllegalArgumentException("Groove is still loading the saved session; try again shortly");
                     if (!player.hasPermissions(2))
                         throw new IllegalArgumentException("Editing requires operator level 2");
                     Long last = active.submissions.get(player.getUUID());
@@ -205,19 +251,22 @@ public final class MusicServer {
     private static int change(CommandSourceStack source, String action, double tempo) {
         if (active == null)
             return 0;
+        if (active.starting) {
+            source.sendFailure(Component.literal("Groove is still loading the saved session; try again shortly."));
+            return 0;
+        }
+        if (action.equals("load")) return active.load(source);
         try {
             long now = System.nanoTime();
             var before = active.timeline.snapshot(now);
             var state = before.current();
-            var loaded = action.equals("load") ? SessionStore.read(active.saveRoot) : null;
-            Graph graph = loaded != null ? loaded.graph()
-                    : action.equals("demo") ? Graph.demo()
+            Graph graph = action.equals("demo") ? Graph.demo()
                             : action.equals("signal-demo") ? groove.engine.SignalDemo.reverbSources()
                             : action.equals("sample-demo") ? groove.engine.samples.FactorySamples.reverbDemo()
                                     : state.graph();
             boolean playing = action.equals("play") || (!action.equals("stop") && state.playing());
             active.timeline.schedule(graph,
-                    loaded != null ? loaded.bpm() : action.equals("tempo") ? tempo : state.bpm(), playing,
+                    action.equals("tempo") ? tempo : state.bpm(), playing,
                     before.revision(), now);
             for (ServerPlayer player : active.server.getPlayerList().getPlayers())
                 active.send(player);
@@ -245,10 +294,14 @@ public final class MusicServer {
         if (active == null)
             return 0;
         MusicServer session = active;
+        if (session.starting) {
+            source.sendFailure(Component.literal("Groove is still loading the saved session; try again shortly."));
+            return 0;
+        }
         var snapshot = session.timeline.snapshot(System.nanoTime());
         var state = snapshot.pending() == null ? snapshot.current() : snapshot.pending();
         try {
-            session.saves.execute(() -> {
+            session.persistence.execute(() -> {
                 String result;
                 boolean success;
                 try {

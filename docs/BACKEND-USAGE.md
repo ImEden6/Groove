@@ -3,6 +3,7 @@
 ## Still unimplemented (from this doc)
 
 - V3 supports independent audio-render sources, arbitrary pattern triggers/polyphonic envelopes, and bounded local recovery of recent effect history. Exact older/cross-revision history remains future work.
+
 Target: Minecraft 1.21.1, Fabric Loader, Fabric API, Java 21. Install the built mod
 and Fabric API on both server and clients. The server keeps one shared session
 driven by `/groove` commands. Players hear audio only through speakers linked to an
@@ -35,7 +36,7 @@ another command is rejected until it applies. Edits have at least one second of
 lead time and, while playing, apply at an integer cycle boundary. A cycle is four
 beats. Starting from stopped has one second of lead time. Saving includes a pending
 accepted edit; loading a saved world restores the patch and tempo in stopped state.
-Use the volume slider to mute the monitor immediately.
+Use the Jukebox/Note Blocks volume slider to mute Groove audio immediately.
 
 ## Patch format
 
@@ -108,6 +109,16 @@ non-atomic fallback. This prevents mixed graph/tempo generations, but is not a
 guarantee against every filesystem or power-loss failure.
 
 Startup and `/groove load` prefer this file and restore graph and tempo together.
+File checks, reads, and decoding run on the same bounded background queue as
+saves. Startup temporarily exposes the stopped demo defaults and rejects edits
+and saves until its read finishes; restored state takes effect immediately and
+is broadcast with a new revision, leaving no pending startup transition.
+`/groove load` acknowledges queuing immediately and reports completion
+or failure later on the server thread. A newer accepted load request or session
+edit supersedes an outstanding load; results from a stopped session are ignored.
+A full or stopping queue rejects new requests. Saves still capture state when
+requested: wait for load completion before saving the loaded state.
+
 Startup remains stopped; explicit load preserves the current playback setting and
 uses the normal scheduled transition. A malformed combined save reports an error
 rather than silently loading stale legacy files (startup uses the demo defaults).
