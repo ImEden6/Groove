@@ -11,14 +11,16 @@ import java.util.function.DoubleFunction;
  * levels stay low, so nearly all energy above 6 kHz comes from steps in the signal. The score is
  * the loudest 5 ms window of that energy in the 2 s after each switch, over the loudest steady
  * window well before the first switch and well after the last, in dB. Run with
- * {@code java -cp <core-engine test and main classes> groove.engine.CarrySwitchTrial}.
+ * {@code java -cp <core-engine test and main classes> groove.engine.CarrySwitchTrial [rampFrames]}.
  */
 public final class CarrySwitchTrial {
     private static final int RATE = LiveRenderer.SAMPLE_RATE, BLOCK = 512, WINDOW = RATE / 200;
     private static final long SETTLE = Math.round(3e9), AFTER = Math.round(2e9), TAIL = Math.round(4e9);
 
     public static void main(String[] args) {
-        System.out.println("Scenario | carried dB (carries) | not carried dB");
+        if (args.length > 0) SignalRuntime.rampFrames = Integer.parseInt(args[0]);
+        System.out.println(String.format(Locale.ROOT, "Ramp %d frames (%.1f ms)", SignalRuntime.rampFrames, SignalRuntime.rampFrames * 1e3 / RATE));
+        System.out.println("Scenario | carried dB (carries) at worst window | not carried dB at worst window");
         report("tone gain 0.1 -> 0.3, into a 50 ms feedback delay", v -> loop(v, 0.5, 2400, 120), 0.1, 0.3, 1);
         report("loop mix gain 0.2 -> 0.9", v -> loop(0.2, v, 2400, 120), 0.2, 0.9, 1);
         report("filter cutoff 300 -> 8000 Hz, Q 2", v -> filter(v, 2.0), 300, 8000, 1);
@@ -92,7 +94,8 @@ public final class CarrySwitchTrial {
         boolean tempo = name.startsWith("tempo");
         double[] carried = score(graph, from, to, edits, tempo, "trial");
         double[] plain = score(graph, from, to, edits, tempo, null);
-        System.out.println(String.format(Locale.ROOT, "%s | %+.1f (%d) | %+.1f", name, carried[0], (long) carried[1], plain[0]));
+        System.out.println(String.format(Locale.ROOT, "%s | %+.1f (%d) at %.1f ms | %+.1f at %.1f ms",
+                name, carried[0], (long) carried[1], carried[2], plain[0], plain[2]));
     }
 
     /** {worst switch window over steady, in dB; carries}. Edits alternate between the two values. */
@@ -117,10 +120,14 @@ public final class CarrySwitchTrial {
         }
         double[] highs = highPassEnergy(concat(audio));
         int first = frame(switches.getFirst()), last = frame(switches.getLast());
-        double steady = Math.max(loudest(highs, first - RATE, first), loudest(highs, last + frame(TAIL) - RATE, last + frame(TAIL)));
-        double worst = 0;
-        for (long at : switches) worst = Math.max(worst, loudest(highs, frame(at), frame(at) + frame(AFTER)));
-        return new double[] {10 * Math.log10(Math.max(worst, 1e-30) / Math.max(steady, 1e-30)), renderer.effectTransfers()};
+        // Windows start up to the bound, so the one before the first switch must end before it
+        double steady = Math.max(loudest(highs, first - RATE, first - WINDOW), loudest(highs, last + frame(TAIL) - RATE, last + frame(TAIL)));
+        double worst = 0, worstAt = 0;
+        for (long at : switches) {
+            double[] found = loudestAt(highs, frame(at), frame(at) + frame(AFTER));
+            if (found[0] > worst) { worst = found[0]; worstAt = (found[1] - frame(at)) * 1e3 / RATE; }
+        }
+        return new double[] {10 * Math.log10(Math.max(worst, 1e-30) / Math.max(steady, 1e-30)), renderer.effectTransfers(), worstAt};
     }
 
     /** Per-frame energy above about 6 kHz: two cascaded high-pass biquads (4th-order Butterworth), both channels. */
@@ -140,14 +147,17 @@ public final class CarrySwitchTrial {
     }
 
     /** The largest mean energy of any 5 ms window starting in [from, to). */
-    private static double loudest(double[] energy, int from, int to) {
-        double best = 0;
+    private static double loudest(double[] energy, int from, int to) { return loudestAt(energy, from, to)[0]; }
+
+    /** {largest mean energy, its window's start frame}. */
+    private static double[] loudestAt(double[] energy, int from, int to) {
+        double best = 0, bestAt = from;
         for (int start = Math.max(0, from); start + WINDOW <= Math.min(energy.length, to + WINDOW); start += WINDOW / 4) {
             double sum = 0;
             for (int f = start; f < start + WINDOW; f++) sum += energy[f];
-            best = Math.max(best, sum / WINDOW);
+            if (sum / WINDOW > best) { best = sum / WINDOW; bestAt = start; }
         }
-        return best;
+        return new double[] {best, bestAt};
     }
 
     private static int frame(long nanos) { return (int) Math.round(nanos * RATE / 1e9); }
