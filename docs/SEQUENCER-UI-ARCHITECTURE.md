@@ -2,9 +2,8 @@
 
 ## Still unimplemented (from this doc)
 
-- Rotary knob keyboard focus navigation, arrow-key stepping, and direct numeric text entry.
-- Sample drawer favorites, animated/resizable drawer panel, vanilla sound-event indexing, hierarchical pack-tree navigation.
-- No concurrent-draft merging: no "workstation in use by [Player]" indicator or optimistic merge UI.
+- Animated/resizable drawer panel and vanilla sound-event indexing.
+- No concurrent-draft merging (not planned). The "Also editing" indicator and Reload/Commit conflict prompt have landed.
 - No hazard-stripe overlay rendered on the node card body for missing/mismatched samples (only the theme's fallback texture is substituted).
 
 Originally design-only; the editor screen, all 4 themes, and graph submission

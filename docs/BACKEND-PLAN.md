@@ -64,7 +64,8 @@ Java provides hard real-time or zero-GC execution. Pattern queries allocate.
 Compilation currently materializes results before enforcing the note limit;
 it must not accept arbitrary untrusted graphs until bounded evaluation exists.
 Scores begin at cycle zero and are finite. Tempo changes, seeking, graph input,
-samples, filters, audio device playback, and network integration are not implemented.
+samples, filters, audio device playback, and network integration were outside this
+milestone and landed later.
 Notes can ring beyond the score horizon if the caller keeps rendering; the demo
 exports exactly the requested horizon. Voice stealing uses a 120-frame (2.5 ms)
 raised-cosine crossfade to eliminate clicks. Tanh saturation adds harmonics and is not an

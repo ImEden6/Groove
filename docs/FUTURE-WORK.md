@@ -9,8 +9,8 @@ codebase. The companion docs ([BACKEND-PLAN.md](BACKEND-PLAN.md),
 [ENGINE-EVOLUTION.md](ENGINE-EVOLUTION.md),
 [PHASE-2-SCHEDULER.md](PHASE-2-SCHEDULER.md))
 describe what currently exists and how to use it; this document tracks remaining features,
-known limitations, and deferred items. [EDITOR-BLOCK-DESIGN.md](EDITOR-BLOCK-DESIGN.md) is
-a proposed (not yet implemented) design for the two items below marked with it.
+known limitations, and deferred items. The placed editor block design in
+[EDITOR-BLOCK-DESIGN.md](EDITOR-BLOCK-DESIGN.md) is implemented.
 
 ## Priority Ranking (Open Items)
 
@@ -106,6 +106,7 @@ The following items from earlier roadmaps are fully implemented and verified in 
 ## Accessibility & Safety (Remaining)
 
 - **Master limiter test suite has landed; still no lookahead brickwall limiter.** Output is bounded by non-bypassable `tanh` soft saturation ([SPECS.md §5](SPECS.md)). `LimiterTests` (core-engine) now sweeps `Biquad` at representative Q/cutoff values including the legal endpoints under a full-scale step train, and renders a legally-compiled high-load graph (eight independent max-resonance sources, each four simultaneous full-gain tones, summed into a unity-gain delay feedback loop) for two seconds, asserting every sample stays finite and within tanh's own bound. The suite also injects non-finite filter inputs to verify recovery, and checks known stereo sums against the tanh curve through pattern/signal playback and publication crossfades. These are regression fixtures, not an exhaustive proof for every graph; soft saturation intentionally adds distortion. There is still no separate lookahead brickwall limiter stage beyond `tanh` itself.
+
 ## Superseded Documentation Claims
 
 - [SEQUENCER-UI-ARCHITECTURE.md](SEQUENCER-UI-ARCHITECTURE.md) previously sketched hypothetical `PatchSubmission` and `SampleRegistry` interfaces; these were superseded by the real network packets `MusicPackets.Submit` / `MusicPackets.SubmitResult` and `SampleCatalog`.
@@ -164,12 +165,8 @@ time stretching remain future work.
 One of Strudel’s most famous live-coding tricks is breakbeat slicing (jungle/drum & bass chops on the Amen break):
 
 * *Strudel Concept:* `s("amen").slice(8, "0 3 2 5 6 1 4 7")` chops an audio sample into 8 equal slices and rearranges their trigger order.
-* *Current Limitation:* Your `generator/sample` node only plays samples from offset $0$ to the end of the file.
-* *Missing Node:* A **`Slice` / `Chop` Node**:
-* Parameters: `slices` (integer, e.g., 8 or 16), `index` (which slice to play, or modulated by an LFO/Euclid).
-* DSP Implementation: Offsets the source PCM playback pointer to:
-
-$$\text{startFrame} = \left(\frac{\text{index}}{\text{slices}}\right) \times \text{totalFrames}$$
+* *Current state:* `sample_slice` takes fixed `slices` and `index` knobs. Rearranging a break means one slice node per index, fed into `polymeter` in playback order.
+* *Still missing:* driving `index` from a pattern, LFO or Euclid so one node can play a changing slice sequence.
 
 
 
@@ -210,7 +207,7 @@ You have clipboard Base64 JSON and world transactional files, but no physical su
 | Feature Area | Current Architecture | What Strudel Does | Missing Inception Component |
 | --- | --- | --- | --- |
 | **Rhythm** | Euclid, Fast/Slow, Alternate, Probability, Polymeter | Euclidean, alternation, degradation, polymeter | Implemented; dedicated input reordering UI deferred |
-| **Pitch** | Raw Frequency (Hz) / Pitch Ratio | Notes (`c3`, `eb4`), Scales, Chords, Microtuning | `ScaleQuantizer` & `ChordGen` nodes |
+| **Pitch** | Note names, `scale_sequence`, `transpose`, `chord` | Notes (`c3`, `eb4`), Scales, Chords, Microtuning | Continuous `ScaleQuantizer` node |
 | **Sampling** | One-shots, source regions, equal slicing, reverse, sustained loops, offline pattern rendering | Live slice modulation, time stretching, sustained looping | Live slice modulation and time stretching |
 | **Environment** | Static in-game blocks | N/A (Browser-based) | `SunClock`, `WeatherMod`, and `Proximity` sensory nodes |
 | **Progression** | Operator commands (`/groove`) | Text files / URL sharing | Physical craftable Discs / Cartridges for survival trading |

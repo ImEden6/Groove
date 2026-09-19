@@ -26,7 +26,8 @@ previous prototype links in `groove-headphones.json` need rebinding once.
 Worn headphones play the linked draft on the server transport clock, including
 custom samples available on the server. Invalid/unavailable drafts are silent.
 The server clears worn links beyond 16 blocks, across dimensions, or when the
-loaded editor is missing/replaced. Stored/unworn link cleanup remains pending.
+loaded editor is missing/replaced. Unworn pairs in the player's own inventory are
+cleaned up too; a pair in a chest, on the ground, or in an item frame keeps its link.
 Headphones no longer use the global monitor fallback.
 
 Use Speakers (next to Access) to list placed speakers within 64 blocks of the
@@ -43,8 +44,8 @@ The following Apply workflow still describes `/groove-editor` and `/groove`.
 
 ## Still unimplemented (from this doc)
 
-- Sample drawer favorites, animated/resizable drawers, vanilla-sound indexing, pack-tree navigation.
-- No automatic merge of concurrent drafts.
+- Animated/resizable drawers and vanilla-sound indexing.
+- No automatic merge of concurrent drafts (not planned; the status line names other editors and offers Reload or Commit on conflict).
 
 Open `/groove-editor` (or specify tactical, clockwork, crt, vanilla). The default is now the visible vanilla theme. The editor waits for a server snapshot rather than opening a disconnected demo.
 

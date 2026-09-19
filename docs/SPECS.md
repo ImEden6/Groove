@@ -2,11 +2,10 @@
 
 ## Still unimplemented (from this doc)
 
-The Strudel-comparison gap analysis at the bottom of this file (§"Inception Gap Analysis") is entirely unimplemented in the current codebase:
+Parts of the Strudel-comparison gap analysis ([FUTURE-WORK.md](FUTURE-WORK.md#inception-gap-analysis)) have landed: `alternate`, `probability` and `polymeter`; note names, `scale_sequence`, `transpose` and `chord`; `sample_slice`, reversed playback and sustained loops. Still missing:
 
-- Rhythm combinators: `Alternate`/`CycleStep` (slow-cat `< >`), `Probability`/`Degrade` node, first-class `Polymeter` node.
-- Pitch: `ScaleQuantizer` and `ChordGen` nodes (pitch model is currently raw Hz / pitch ratio only).
-- Sampling: `Slice`/`Chop` node and start-offset DSP parameter (samples currently always play start-to-end).
+- Pitch: a continuous `ScaleQuantizer` node.
+- Sampling: live slice-index modulation and time stretching.
 - Environmental modulator nodes: Day/Night cycle, Weather/Rain intensity, Proximity, Biome/Altitude.
 - Physical pattern-archiving item (Vinyl/Punch Card disc) for burning/loading patches in survival.
 

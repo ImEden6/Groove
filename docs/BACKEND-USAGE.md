@@ -3,12 +3,11 @@
 ## Still unimplemented (from this doc)
 
 - V3 supports independent audio-render sources, arbitrary pattern triggers/polyphonic envelopes, and bounded local recovery of recent effect history. Exact older/cross-revision history remains future work.
-- Headphone items remain future work — monitor audio mutes for in-world speaker streams instead.
-
 Target: Minecraft 1.21.1, Fabric Loader, Fabric API, Java 21. Install the built mod
-and Fabric API on both server and clients. This version has one shared session
-for the whole server, played as a stereo monitor through the Jukebox/Note Blocks
-volume category. No blocks or node editor are required.
+and Fabric API on both server and clients. The server keeps one shared session
+driven by `/groove` commands. Players hear audio only through speakers linked to an
+editor block or headphones bound to one, in the Jukebox/Note Blocks volume category;
+the old non-positional monitor stream is retired ([EDITOR-BLOCK-DESIGN.md](EDITOR-BLOCK-DESIGN.md)).
 
 > [!WARNING]
 > **Compatibility note:** Groove saves are forward-only. Downgrading a world or patch from Phase 4
@@ -146,8 +145,8 @@ within five seconds. Disconnect closes the stream. Single-player pause follows
 Minecraft's sound pause; on resume the session rejoins the monotonic transport.
 Speaker towers (`GrooveBlocks.SPEAKER`) provide physical positional audio in the world,
 stacking up to 32 blocks tall with height-scaled volume and distance culling for up to 8
-nearest towers within 64 blocks. When speakers are in range, monitor audio mutes in favor
-of in-world mono streams. Headphone items remain future work.
+nearest towers within 64 blocks. Worn headphones bound to an editor play its draft
+privately and silence nearby speakers.
 
 ## Verification
 
