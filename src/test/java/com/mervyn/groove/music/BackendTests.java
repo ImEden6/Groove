@@ -157,6 +157,7 @@ public final class BackendTests {
         EditorPrefsTests.run();
         SampleWarningTests.run();
         HitTestTests.run();
+        FeedbackRuleTests.run();
         SampleSliceEntryTests.run();
         sampleTreeChecks();
         HeadphoneLinkTests.run();
@@ -766,7 +767,7 @@ public final class BackendTests {
                 comp -> disconnected.set(comp.getString()),
                 taskAdded::set);
         check(taskAdded.get() == null, "Legacy client without protocol channel gets no task");
-        check("This server requires Groove protocol 4. Update Groove.".equals(disconnected.get()),
+        check("This server requires Groove protocol 5. Update Groove.".equals(disconnected.get()),
                 "Missing channel disconnects with exact required message");
 
         // 3. Packet response: equal version completes configuration
@@ -785,7 +786,7 @@ public final class BackendTests {
                 comp -> disconnected.set(comp.getString()),
                 () -> completed.set(true));
         check(!completed.get(), "Mismatched protocol version does not complete configuration");
-        check("Groove version mismatch: server 4, client 3".equals(disconnected.get()),
+        check("Groove version mismatch: server 5, client 3".equals(disconnected.get()),
                 "Mismatched version disconnects with exact mismatch message");
 
         // Wire codec roundtrip test for MusicPackets.Protocol
@@ -966,11 +967,14 @@ public final class BackendTests {
         invalid(() -> GraphJson.decodeDraft(GraphJson.encode(three)));
 
         var editor = new com.mervyn.groove.client.ui.EditorState(graph);
+        // Gain 1 through the reverb's 0.95 bound sits exactly at the limit, so it is allowed.
         editor.setKnobValue("bus", NodeParam.GAIN, 1.0);
-        check(editor.node("bus").params().get(NodeParam.GAIN) == 0.5, "Editor keeps loop gain within the reverb bound");
+        check(editor.node("bus").params().get(NodeParam.GAIN) == 1.0, "Editor allows a reverb loop at the limit");
+        check(editor.takeFeedbackRefusal() == null, "No refusal at the limit");
         GraphCompiler.compile(editor.toGraph());
         editor.connect("delay", "out", "bus", "in");
         check(!editor.edges().contains(Graph.edge("delay", "bus")), "Editor rejects dry plus wet reverb feedback");
+        editor.setKnobValue("bus", NodeParam.GAIN, 0.5);
         var dryWet = new java.util.ArrayList<>(graph.edges()); dryWet.add(Graph.edge("delay", "bus"));
         invalid(() -> GraphCompiler.compile(new Graph(3, graph.nodes(), dryWet)));
         editor.setKnobValue("bus", NodeParam.GAIN, 0.3);

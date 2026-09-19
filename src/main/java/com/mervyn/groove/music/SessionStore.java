@@ -14,18 +14,22 @@ final class SessionStore {
     static final String FILE = "groove-session.json";
     private static final int MAX_BYTES = 262144;
     private static final Gson GSON = new Gson();
-    record Saved(Graph graph, double bpm) {
+    /** freeRunDelays lists delays marked free-running while loading an older save. */
+    record Saved(Graph graph, double bpm, java.util.List<String> freeRunDelays) {
         Saved {
             if (!Double.isFinite(bpm) || bpm < 30 || bpm > 300) throw new IllegalArgumentException("Invalid saved BPM");
+            freeRunDelays = java.util.List.copyOf(freeRunDelays);
         }
+        Saved(Graph graph, double bpm) { this(graph, bpm, java.util.List.of()); }
     }
     private record Envelope(int version, double bpm, String graphJson) {}
     static Saved read(Path root) throws IOException {
         Path file = root.resolve(FILE);
         if (!Files.exists(file)) {
-            Graph graph = GraphJson.decode(readBounded(root.resolve("groove-patch.json"), GraphJson.MAX_LENGTH * 4));
+            var graph = GraphJson.decodeSaved(readBounded(root.resolve("groove-patch.json"), GraphJson.MAX_LENGTH * 4));
             Path tempo = root.resolve("groove-tempo.txt");
-            return new Saved(graph, Files.exists(tempo) ? Double.parseDouble(readBounded(tempo, 64).trim()) : 128);
+            return new Saved(graph.graph(), Files.exists(tempo) ? Double.parseDouble(readBounded(tempo, 64).trim()) : 128,
+                    graph.freeRunDelays());
         }
         try (JsonReader reader = new JsonReader(new StringReader(readBounded(file, MAX_BYTES)))) {
             Integer version = null; Double bpm = null; String graph = null;
@@ -45,7 +49,8 @@ final class SessionStore {
             if (reader.peek() != com.google.gson.stream.JsonToken.END_DOCUMENT
                     || version == null || version != 1 || bpm == null || graph == null)
                 throw new IOException("Invalid session save");
-            return new Saved(GraphJson.decode(graph), bpm);
+            var migrated = GraphJson.decodeSaved(graph);
+            return new Saved(migrated.graph(), bpm, migrated.freeRunDelays());
         }
     }
     private static String readBounded(Path file, int limit) throws IOException {

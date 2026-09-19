@@ -325,6 +325,8 @@ public final class GrooveEditorScreen extends Screen {
             graphics.drawString(font, font.plainSubstrByWidth(node.id(), 136), 8, 8, renderer.textColor(), false);
             graphics.drawString(font, font.plainSubstrByWidth(node.type().idStem(), 136), 8, 30, renderer.textColor(), false);
             String nodeLoopMsg = loopStatus(node);
+            if (node.type() == NodeType.DELAY && node.params().getOrDefault(NodeParam.FREE_RUN, 0.0) == 1.0)
+                graphics.drawString(font, "free-run", 8, 52, 0xffcc66, false);
             if (nodeLoopMsg != null) {
                 graphics.drawString(font, font.plainSubstrByWidth(nodeLoopMsg, 136), 8, 52, 0xffcc66, false);
             }
@@ -439,7 +441,10 @@ public final class GrooveEditorScreen extends Screen {
             graphics.drawString(font, "Drag / Ctrl: fine", textX, inspectorBottom - 12, textColor, false);
         }
         renderer.drawPanel(graphics, PanelKind.TRANSPORT, 0, height - 20, width, 20);
+        String refusal = state.takeFeedbackRefusal();
+        if (refusal != null) message = refusal;
         String status = draftConflict != null ? message + "  " + draftConflict : message;
+        if (state.hasFreeRunningLoop()) status = status + "  [Free-running feedback: players who join late may hear a different tail]";
         int statusColor = draftConflict != null ? 0xffaa4444 : textColor;
         if (blockSession != null && !blockSession.viewers().isEmpty())
             status = status + "  [Also editing: " + String.join(", ", blockSession.viewers()) + "]";

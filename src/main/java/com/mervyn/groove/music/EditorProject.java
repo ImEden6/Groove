@@ -29,6 +29,7 @@ public final class EditorProject {
     private String publishedError;
 
     private final Set<AssetRef> preservedAssets = new HashSet<>();
+    private final Set<String> freeRunDelays = new java.util.LinkedHashSet<>();
 
     public UUID sessionId() { return sessionId; }
     public EditorSession session() { return session; }
@@ -47,6 +48,8 @@ public final class EditorProject {
     public String rawPublished() { return rawPublished; }
     public boolean preservesAsset(AssetRef ref) { return preservedAssets.contains(ref); }
     public Set<AssetRef> preservedAssets() { return Set.copyOf(preservedAssets); }
+    /** Delays the last load marked free-running to keep an older patch's feedback. */
+    public Set<String> freeRunDelays() { return Set.copyOf(freeRunDelays); }
 
     /** Only the owner manages the allowlist; other allowlisted editors cannot. */
     public void allowEditor(UUID actor, UUID player, boolean allowed) {
@@ -97,6 +100,7 @@ public final class EditorProject {
         for (int i = 0; i < allowlist.size(); i++) editors.add(UUID.fromString(allowlist.getString(i)));
 
         preservedAssets.clear();
+        freeRunDelays.clear();
         draftUnreadable = false;
         draftError = null;
         publishedUnreadable = false;
@@ -114,7 +118,9 @@ public final class EditorProject {
             draftPlaying = tag.getBoolean("DraftPlaying");
             draftRevision = tag.getLong("DraftRevision");
             try {
-                draftGraph = GraphJson.decodeDraft(rawDraft);
+                var migrated = GraphJson.decodeSavedDraft(rawDraft);
+                draftGraph = migrated.graph();
+                freeRunDelays.addAll(migrated.freeRunDelays());
             } catch (RuntimeException error) {
                 draftUnreadable = true;
                 draftError = error.getMessage();
@@ -128,7 +134,9 @@ public final class EditorProject {
             if (publishedBpm < 30 || publishedBpm > 300 || !Double.isFinite(publishedBpm)) publishedBpm = 128.0;
             publishedPlaying = tag.getBoolean("PublishedPlaying");
             try {
-                publishedGraph = GraphJson.decode(rawPublished);
+                var migrated = GraphJson.decodeSaved(rawPublished);
+                publishedGraph = migrated.graph();
+                freeRunDelays.addAll(migrated.freeRunDelays());
             } catch (RuntimeException error) {
                 publishedUnreadable = true;
                 publishedError = error.getMessage();

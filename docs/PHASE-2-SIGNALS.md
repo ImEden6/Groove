@@ -125,12 +125,13 @@ so a 1/2-note synced delay can use all 192000 frames on its own. See
 Mix/filter output and feedback writes are bounded to ±8 to prevent runaway state;
 this is intentional overload saturation, not a transparent limiter.
 
-A loop that contains a `reverb` must provably stay below unity gain. After cutting delay inputs,
-the compiler bounds the amplitude each delay feeds back to every delay (mix gain, filter resonance
-peak, 0.95 per reverb) and rejects the graph if any delay's incoming bounds sum above 0.89 (−1 dB):
-`"Feedback loop through reverb can exceed unity gain (bound <x>)"`. This keeps late joiners
-converging on the same tail. Loops without a reverb are not checked and can still saturate at ±8.
-See [Stage 4](ENGINE-UPGRADE-STAGES.md#loop-gain-rule).
+Every feedback loop must provably stay below unity gain. After cutting delay inputs, the compiler
+bounds the amplitude each delay feeds back to every delay (mix gain, filter resonance peak, 0.95 per
+reverb) and rejects the graph if any delay's incoming bounds sum above 0.95 (−0.45 dB):
+`"Feedback loop can exceed unity gain (bound <x>); ..."`. This keeps late joiners converging on the
+same tail. A delay with `freeRun = 1` exempts its loop, for deliberate self-oscillation; that tail
+may differ between players. Older saves with over-limit loops are migrated to free-running on load.
+See [Stage 4](ENGINE-UPGRADE-STAGES.md#loop-gain-rule) and [feedback stability](FEEDBACK-STABILITY.md).
 
 Effect memory is owned per program per renderer: each renderer keeps delay and reverb buffers for
 its current, pending and previous programs. Two reverbs add about 1 MB per program on top of up to

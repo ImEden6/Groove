@@ -46,6 +46,8 @@ public final class NodeParam {
     public static final String SUBDIVISION = "subdivision";
     public static final String AMOUNT = "amount";
     public static final String DIVISION = "division";
+    /** DELAY: 1 exempts every feedback loop through this delay from the loop-gain limit. */
+    public static final String FREE_RUN = "freeRun";
     public static final String DECAY_SECONDS = "decaySeconds";
     public static final String DAMPING_HZ = "dampingHz";
     public static final String BANDWIDTH_HZ = "bandwidthHz";

@@ -189,7 +189,7 @@ public final class SignalGraph {
             case ENVELOPE -> Set.of(NodeParam.ATTACK, NodeParam.DECAY, NodeParam.SUSTAIN, NodeParam.RELEASE, NodeParam.MODE);
             case ATTENUVERTER -> Set.of(NodeParam.SCALE, NodeParam.OFFSET);
             case FILTER -> Set.of(NodeParam.CUTOFF_HZ, NodeParam.RESONANCE_Q, NodeParam.MODE);
-            case DELAY -> Set.of(NodeParam.FRAMES, NodeParam.SYNC, NodeParam.DIVISION);
+            case DELAY -> Set.of(NodeParam.FRAMES, NodeParam.SYNC, NodeParam.DIVISION, NodeParam.FREE_RUN);
             case MIX_BUS -> Set.of(NodeParam.GAIN);
             case REVERB -> Set.of(NodeParam.DECAY_SECONDS, NodeParam.DAMPING_HZ, NodeParam.BANDWIDTH_HZ, NodeParam.PRE_DELAY_MS);
             case AUDIO_RENDER, TRIGGER_RENDER -> Set.of();
@@ -212,6 +212,7 @@ public final class SignalGraph {
                 range(n, NodeParam.FRAMES, 64, CONTROL_FRAMES, MAX_DELAY_FRAMES, true);
                 range(n, NodeParam.SYNC, 0, 0, 1, true);
                 range(n, NodeParam.DIVISION, 2, 0, 7, true);
+                range(n, NodeParam.FREE_RUN, 0, 0, 1, true);
             }
             case MIX_BUS -> range(n,NodeParam.GAIN,1,0,1,false);
             case REVERB -> {
@@ -224,31 +225,47 @@ public final class SignalGraph {
         }
     }
 
+    /** Largest total gain a delay may get back from its own loop. At or below it, two listeners
+     *  who joined at different times converge; see docs/FEEDBACK-STABILITY.md. */
+    public static final double LOOP_GAIN_LIMIT = 0.95;
+
+    /** One feedback loop: its delays, the largest gain bound arriving back at any of them, and
+     *  whether a free-running delay exempts it from the limit. */
+    public record FeedbackLoop(List<String> delays, double bound, boolean freeRunning) {
+        public boolean overLimit() { return !freeRunning && bound > LOOP_GAIN_LIMIT; }
+    }
+
     public static boolean isLoopGainValid(Collection<Graph.Node> nodes, Collection<Graph.Edge> edges) {
+        return loopGainProblem(nodes, edges) == null;
+    }
+
+    /** Why this graph's feedback is rejected, or null when it is accepted. */
+    public static String loopGainProblem(Collection<Graph.Node> nodes, Collection<Graph.Edge> edges) {
         try {
             checkLoopGain(nodes, edges);
-            return true;
+            return null;
         } catch (IllegalArgumentException e) {
-            return false;
+            return e.getMessage();
         }
     }
 
     public static void checkLoopGain(Collection<Graph.Node> nodes, Collection<Graph.Edge> edges) {
+        for (FeedbackLoop loop : feedbackLoops(nodes, edges))
+            if (loop.overLimit()) throw new IllegalArgumentException(String.format(Locale.ROOT,
+                    "Feedback loop can exceed unity gain (bound %.2f); lower a gain or filter resonance in it, or set one of its delays to free-run",
+                    loop.bound()));
+    }
+
+    /** Every audio feedback loop, with delay-to-delay gain bounds from mix gains, filter
+     *  resonance peaks and the reverb's loudness contract. */
+    public static List<FeedbackLoop> feedbackLoops(Collection<Graph.Node> nodes, Collection<Graph.Edge> edges) {
+        List<FeedbackLoop> loops = new ArrayList<>();
         Map<String, Graph.Node> signalNodes = new LinkedHashMap<>();
         for (Graph.Node n : nodes) {
             if (n.type() != null && n.type().isSignalNode()) {
                 signalNodes.put(n.id(), n);
             }
         }
-        boolean anyReverb = false;
-        for (Graph.Node n : signalNodes.values()) {
-            if (n.type() == NodeType.REVERB) {
-                anyReverb = true;
-                break;
-            }
-        }
-        if (!anyReverb) return;
-
         Map<String, List<String>> audioAdj = new HashMap<>();
         for (String id : signalNodes.keySet()) audioAdj.put(id, new ArrayList<>());
         for (Graph.Edge e : edges) {
@@ -277,9 +294,6 @@ public final class SignalGraph {
         for (List<String> scc : sccs) {
             boolean isCycle = scc.size() > 1 || (scc.size() == 1 && audioAdj.get(scc.getFirst()).contains(scc.getFirst()));
             if (!isCycle) continue;
-            boolean hasReverb = scc.stream().anyMatch(id -> signalNodes.get(id).type() == NodeType.REVERB);
-            if (!hasReverb) continue;
-
             List<String> delays = scc.stream().filter(id -> signalNodes.get(id).type() == NodeType.DELAY).toList();
             if (delays.isEmpty()) {
                 throw new IllegalArgumentException("Zero-delay graph cycle");
@@ -319,6 +333,20 @@ public final class SignalGraph {
             }
             require(topo.size() == scc.size(), "Zero-delay graph cycle");
 
+            // Each node's audio inputs in edge order, and its gain bound, built once per loop.
+            Map<String, List<String>> audioIn = new HashMap<>();
+            Map<String, Double> factor = new HashMap<>();
+            for (String v : scc) audioIn.put(v, new ArrayList<>());
+            Set<String> modulatedMix = new HashSet<>();
+            for (Graph.Edge e : edges) {
+                Graph.Node to = signalNodes.get(e.toNode());
+                if (to == null || !sccSet.contains(e.toNode())) continue;
+                if (to.type() == NodeType.MIX_BUS && e.toPort().equals("gain")) modulatedMix.add(to.id());
+                Port p = to.type().inputPort(e.toPort());
+                if (p != null && p.type() == PortType.AUDIO) audioIn.get(to.id()).add(e.fromNode());
+            }
+            for (String v : scc) factor.put(v, gainBound(signalNodes.get(v), modulatedMix.contains(v)));
+
             int k = delays.size();
             double[][] M = new double[k][k];
             for (int j = 0; j < k; j++) {
@@ -328,78 +356,52 @@ public final class SignalGraph {
                     Graph.Node nodeV = signalNodes.get(v);
                     if (nodeV.type() == NodeType.DELAY) {
                         A.put(v, v.equals(delayJ) ? 1.0 : 0.0);
-                    } else {
-                        List<Double> inVals = new ArrayList<>();
-                        for (Graph.Edge e : edges) {
-                            if (e.toNode().equals(v)) {
-                                Port p = nodeV.type().inputPort(e.toPort());
-                                if (p != null && p.type() == PortType.AUDIO) {
-                                    inVals.add(sccSet.contains(e.fromNode()) ? A.getOrDefault(e.fromNode(), 0.0) : 0.0);
-                                }
-                            }
-                        }
-                        double aVal;
-                        switch (nodeV.type()) {
-                            case MIX_BUS -> {
-                                boolean modulated = edges.stream().anyMatch(e -> e.toNode().equals(v) && e.toPort().equals("gain"));
-                                double gainBound = modulated ? 1.0 : param(nodeV, NodeParam.GAIN, 1.0);
-                                double sum = 0.0;
-                                for (double val : inVals) sum += val;
-                                aVal = gainBound * sum;
-                            }
-                            case FILTER -> {
-                                int mode = (int) param(nodeV, NodeParam.MODE, 0);
-                                double Q = param(nodeV, NodeParam.RESONANCE_Q, Biquad.DEFAULT_Q);
-                                double peak;
-                                if (mode == 2 || mode == 3) {
-                                    peak = 1.0;
-                                } else {
-                                    double qPeak = (Q > 1.0 / Math.sqrt(2.0)) ? (Q / Math.sqrt(1.0 - 1.0 / (4.0 * Q * Q))) : 1.0;
-                                    peak = qPeak * 1.05;
-                                }
-                                double inVal = inVals.isEmpty() ? 0.0 : inVals.getFirst();
-                                aVal = peak * inVal;
-                            }
-                            case REVERB -> {
-                                double inVal = inVals.isEmpty() ? 0.0 : inVals.getFirst();
-                                aVal = 0.95 * inVal;
-                            }
-                            default -> {
-                                double inVal = inVals.isEmpty() ? 0.0 : inVals.getFirst();
-                                aVal = inVal;
-                            }
-                        }
-                        A.put(v, aVal);
+                        continue;
                     }
+                    List<String> inputs = audioIn.get(v);
+                    double in = 0.0;
+                    if (nodeV.type() == NodeType.MIX_BUS) {
+                        for (String from : inputs) in += sccSet.contains(from) ? A.getOrDefault(from, 0.0) : 0.0;
+                    } else if (!inputs.isEmpty()) {
+                        String from = inputs.getFirst();
+                        in = sccSet.contains(from) ? A.getOrDefault(from, 0.0) : 0.0;
+                    }
+                    A.put(v, factor.get(v) * in);
                 }
-
                 for (int i = 0; i < k; i++) {
-                    String delayI = delays.get(i);
-                    double arriving = 0.0;
-                    for (Graph.Edge e : edges) {
-                        if (e.toNode().equals(delayI)) {
-                            Port p = signalNodes.get(delayI).type().inputPort(e.toPort());
-                            if (p != null && p.type() == PortType.AUDIO) {
-                                if (sccSet.contains(e.fromNode())) {
-                                    arriving = A.getOrDefault(e.fromNode(), 0.0);
-                                }
-                                break;
-                            }
-                        }
-                    }
-                    M[i][j] = arriving;
+                    List<String> inputs = audioIn.get(delays.get(i));
+                    String from = inputs.isEmpty() ? null : inputs.getFirst();
+                    M[i][j] = from != null && sccSet.contains(from) ? A.getOrDefault(from, 0.0) : 0.0;
                 }
             }
 
+            double bound = 0.0;
             for (int i = 0; i < k; i++) {
                 double rowSum = 0.0;
                 for (int j = 0; j < k; j++) rowSum += M[i][j];
-                if (rowSum > 0.89) {
-                    throw new IllegalArgumentException(String.format(Locale.ROOT,
-                            "Feedback loop through reverb can exceed unity gain (bound %.2f)", rowSum));
-                }
+                bound = Math.max(bound, rowSum);
             }
+            boolean freeRunning = delays.stream().anyMatch(id -> param(signalNodes.get(id), NodeParam.FREE_RUN, 0) == 1);
+            loops.add(new FeedbackLoop(delays, bound, freeRunning));
         }
+        return loops;
+    }
+
+    /** Energy-gain bound of one node on the loop path: mix gain (1 when modulated), filter
+     *  resonance peak with a 1.05 margin (band-pass and notch peak at 1), 0.95 for a reverb. */
+    private static double gainBound(Graph.Node node, boolean modulated) {
+        return switch (node.type()) {
+            case MIX_BUS -> modulated ? 1.0 : param(node, NodeParam.GAIN, 1.0);
+            case FILTER -> {
+                int mode = (int) param(node, NodeParam.MODE, 0);
+                if (mode == 2 || mode == 3) yield 1.0;
+                double q = param(node, NodeParam.RESONANCE_Q, Biquad.DEFAULT_Q);
+                double peak = q > 1.0 / Math.sqrt(2.0) ? q / Math.sqrt(1.0 - 1.0 / (4.0 * q * q)) : 1.0;
+                yield peak * 1.05;
+            }
+            case REVERB -> 0.95;
+            default -> 1.0;
+        };
     }
 
     private static void tarjan(String u, Map<String, List<String>> adj,

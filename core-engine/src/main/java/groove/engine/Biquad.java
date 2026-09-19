@@ -63,6 +63,13 @@ public final class Biquad {
     public void reset() { x1 = 0; x2 = 0; y1 = 0; y2 = 0; }
 
     long snappedWrites() { return snappedWrites; }
+    /** Tests only: |H(e^{jω})| of the current coefficients, ω in radians per sample. */
+    double responseMagnitude(double omega) {
+        double c1 = Math.cos(omega), s1 = Math.sin(omega), c2 = Math.cos(2 * omega), s2 = Math.sin(2 * omega);
+        double nr = b0 + b1 * c1 + b2 * c2, ni = -(b1 * s1 + b2 * s2);
+        double dr = 1 + a1 * c1 + a2 * c2, di = -(a1 * s1 + a2 * s2);
+        return Math.sqrt((nr * nr + ni * ni) / (dr * dr + di * di));
+    }
     /** Tests only: fills the filter state with one value. */
     void seedState(double value) { x1 = x2 = y1 = y2 = value; }
     /** Tests only: every state value is finite and none is subnormal. */

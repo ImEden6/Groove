@@ -83,8 +83,13 @@ public final class MusicServer {
                                     before.current().playing(), revision, now);
                         }
                         for (ServerPlayer player : server.getPlayerList().getPlayers()) send(player);
+                        var freeRun = result.saved().freeRunDelays();
+                        String migrated = freeRun.isEmpty() ? "" : " Set " + String.join(", ", freeRun)
+                                + " to free-run to keep this older patch's feedback; players who join late may hear a different tail.";
+                        if (startup && !freeRun.isEmpty())
+                            GrooveMod.LOGGER.warn("Groove startup patch: set delays {} to free-run to keep their feedback", freeRun);
                         if (source != null)
-                            source.sendSuccess(() -> Component.literal("Groove loaded; change queued for the next safe downbeat."), true);
+                            source.sendSuccess(() -> Component.literal("Groove loaded; change queued for the next safe downbeat." + migrated), true);
                     } catch (Exception error) {
                         if (startup) GrooveMod.LOGGER.warn("Could not apply Groove startup patch", error);
                         else source.sendFailure(Component.literal("Groove load failed: " + error.getMessage()));

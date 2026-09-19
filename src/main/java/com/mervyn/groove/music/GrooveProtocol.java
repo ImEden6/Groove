@@ -6,7 +6,7 @@ import net.minecraft.network.chat.Component;
 import java.util.function.Consumer;
 
 public final class GrooveProtocol {
-    public static final int VERSION = 4;
+    public static final int VERSION = 5;
 
     private GrooveProtocol() {}
 

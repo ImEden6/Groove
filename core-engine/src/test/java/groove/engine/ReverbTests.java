@@ -110,7 +110,7 @@ final class ReverbTests {
             GraphCompiler.compile(rejectedDryWet);
             throw new AssertionError("Expected dry+wet reverb feedback loop to be rejected");
         } catch (IllegalArgumentException e) {
-            check(e.getMessage().startsWith("Feedback loop through reverb can exceed unity gain"),
+            check(e.getMessage().startsWith("Feedback loop can exceed unity gain"),
                     "Expected loop gain error but got: " + e.getMessage());
             check(e.getMessage().contains("bound 1.95"), "Expected bound 1.95 in message: " + e.getMessage());
         }
@@ -137,7 +137,7 @@ final class ReverbTests {
             GraphCompiler.compile(rejectedResonant);
             throw new AssertionError("Expected resonant filter + reverb feedback loop to be rejected");
         } catch (IllegalArgumentException e) {
-            check(e.getMessage().startsWith("Feedback loop through reverb can exceed unity gain"),
+            check(e.getMessage().startsWith("Feedback loop can exceed unity gain"),
                     "Expected loop gain error but got: " + e.getMessage());
         }
 
@@ -159,7 +159,7 @@ final class ReverbTests {
         ));
         checkCompiles(acceptedAttenuated);
 
-        // 4. Existing unity-gain delay feedback without reverb still compiles
+        // 4. Unity-gain delay feedback without a reverb is rejected too, unless the delay free-runs
         Graph unityDelayLoop = new Graph(3, List.of(
                 new Graph.Node("tone", NodeType.TONE, Map.of()),
                 new Graph.Node("render", NodeType.AUDIO_RENDER, Map.of()),
@@ -173,7 +173,15 @@ final class ReverbTests {
                 Graph.edge("bus", "delay"),
                 new Graph.Edge("bus", "out", "out", "audio")
         ));
-        checkCompiles(unityDelayLoop);
+        try {
+            GraphCompiler.compile(unityDelayLoop);
+            throw new AssertionError("Expected unity-gain delay loop without reverb to be rejected");
+        } catch (IllegalArgumentException e) {
+            check(e.getMessage().contains("bound 1.00"), "Expected bound 1.00 in message: " + e.getMessage());
+        }
+        var freeRunning = new java.util.ArrayList<>(unityDelayLoop.nodes());
+        freeRunning.set(2, new Graph.Node("delay", NodeType.DELAY, Map.of(NodeParam.FRAMES, 1000.0, NodeParam.FREE_RUN, 1.0)));
+        checkCompiles(new Graph(3, freeRunning, unityDelayLoop.edges()));
     }
 
     private static void resetMidTail() {

@@ -10,7 +10,8 @@ import java.util.*;
 /**
  * Stage 4 baseline performance benchmark harness.
  * Measures scenarios B1..B9 with warmup convergence, pooled block timings,
- * real-time ratio, publish allocations, and system metadata.
+ * real-time ratio, publish allocations, and system metadata. B10 times the
+ * feedback-loop analysis that compiles and the editor run, report only.
  */
 public final class PerfBench {
     private static final int BLOCKS_PER_TRIAL = 2000;
@@ -95,8 +96,56 @@ public final class PerfBench {
                     B8_P99_GATE_MS, gated.p99BlockMs() <= B8_P99_GATE_MS ? "PASS" : "FAIL", gated.p99BlockMs()));
             gates.add(String.format(Locale.ROOT, "B8 grant overhead: %.1f ns per release, grant and requeue with 7 waiters", grantOverheadNanos()));
         }
+        if (only.isEmpty() || Arrays.asList(only.split(",")).contains("B10")) b10LoopAnalysis(gates);
         printSummaryTable(results);
         gates.forEach(System.out::println);
+    }
+
+    /** Worst-case loop analysis: 30 delays and 30 buses in one cross-linked loop, near the
+     *  64-node and 128-edge caps. The editor runs this on every wire drop and knob step. */
+    static Graph b10Graph() {
+        List<Graph.Node> nodes = new ArrayList<>();
+        List<Graph.Edge> edges = new ArrayList<>();
+        nodes.add(new Graph.Node("tone", NodeType.TONE, Map.of()));
+        nodes.add(new Graph.Node("render", NodeType.AUDIO_RENDER, Map.of()));
+        nodes.add(new Graph.Node("out", NodeType.OUTPUT, Map.of()));
+        int loops = 30;
+        for (int i = 0; i < loops; i++) {
+            nodes.add(new Graph.Node("b" + i, NodeType.MIX_BUS, Map.of(NodeParam.GAIN, 0.01)));
+            nodes.add(new Graph.Node("d" + i, NodeType.DELAY, Map.of(NodeParam.FRAMES, 64.0)));
+        }
+        edges.add(Graph.edge("tone", "render"));
+        edges.add(Graph.edge("render", "b0"));
+        for (int i = 0; i < loops; i++) {
+            edges.add(Graph.edge("b" + i, "d" + i));
+            for (int hop : new int[] {1, 7, 13}) edges.add(Graph.edge("d" + i, "b" + ((i + hop) % loops)));
+        }
+        edges.add(new Graph.Edge("b0", "out", "out", "audio"));
+        return new Graph(3, nodes, edges);
+    }
+
+    /** Report only: sub-millisecond compile-time numbers are too noisy to gate on shared machines. */
+    private static void b10LoopAnalysis(List<String> gates) {
+        Graph graph = b10Graph();
+        for (int i = 0; i < 2000; i++) SignalGraph.feedbackLoops(graph.nodes(), graph.edges());
+        for (int i = 0; i < 200; i++) GraphCompiler.compile(graph);
+        double[] analysis = timeCalls(2000, () -> SignalGraph.feedbackLoops(graph.nodes(), graph.edges()));
+        double[] compile = timeCalls(200, () -> GraphCompiler.compile(graph));
+        gates.add(String.format(Locale.ROOT,
+                "B10 loop analysis (%d nodes, %d edges, 30 delays in one loop, report only): median %.4f ms, p99 %.4f ms; full compile median %.4f ms, p99 %.4f ms",
+                graph.nodes().size(), graph.edges().size(), analysis[0], analysis[1], compile[0], compile[1]));
+    }
+
+    /** {median, p99} milliseconds per call. */
+    private static double[] timeCalls(int calls, Runnable call) {
+        double[] ms = new double[calls];
+        for (int i = 0; i < calls; i++) {
+            long start = System.nanoTime();
+            call.run();
+            ms[i] = (System.nanoTime() - start) / 1e6;
+        }
+        Arrays.sort(ms);
+        return new double[] {ms[calls / 2], ms[(int) Math.ceil(calls * 0.99) - 1]};
     }
 
     /** Recorded 2026-09-17 on the reference machine when B9 was added; B9 did not exist at step 5b. */

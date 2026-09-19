@@ -37,6 +37,7 @@ The following items from earlier roadmaps are fully implemented and verified in 
   - `reverb` node (Dattorro plate, −1 dB peak loudness contract, at most 2 per graph) with a compile-time loop-gain rule for feedback through reverb.
   - Sustained sample loops (`loop`, `loopStart`, `loopEnd`, `loopFadeMs`) with correlation-aware seam crossfades and editor warnings.
   - Shared replay leasing for speakers, a Groove protocol check on join, unreadable-project preservation and session `.bak` backups.
+  - The loop-gain limit now covers every feedback loop at 0.95, with opt-in free-running delays and migration of older saves ([feedback stability](FEEDBACK-STABILITY.md)).
   - Measured performance: `perfBench` B1-B9, denormal snaps, the resampler level change near powers of two, and cached voice selection (B1 median 0.74 to 0.22 ms).
 - **Engine Upgrade Stages 1, 2, and 3 ([ENGINE-UPGRADE-STAGES.md](ENGINE-UPGRADE-STAGES.md))**:
   - **Stage 1**: Note names (`C4`), scale-degree sequences (`scale_sequence`), transposition (`transpose`), chord voicings (`chord`), and multi-mode biquad filtering (HP, BP, notch).
@@ -72,7 +73,6 @@ The following items from earlier roadmaps are fully implemented and verified in 
   - Carry effect state across unchanged republishes, so knob drags and relinks do not rebuild tails from 1 s of history.
   - Compute looped-voice age from onset nanoseconds, so a sustain crossing a tempo change does not jump position.
   - Pool runtime delay and reverb buffers if GC pauses show up in B8.
-  - Extend the loop-gain check to feedback loops without a reverb, which can still saturate at ±8 and make late joiners diverge.
   - Decide the B8 gate: 8 renderers of the B8 graph miss the 5.33 ms p99 gate even without replay (26.4 ms), so it needs a lighter graph or a different criterion.
 
 - **Exact effect-history reconstruction.** The three Phase 2 extensions have landed, including up to one second of local delay/filter replay for late joins and resyncs; see [signals](PHASE-2-SIGNALS.md). Recovering older feedback or state across graph/tempo revisions would require a richer history or authoritative snapshots. The current bounded approximation does not provide exact historical equivalence.

@@ -117,7 +117,8 @@ final class LimiterTests {
             edges.add(Graph.edge(renderId, filterId));
             edges.add(Graph.edge(filterId, "mix"));
         }
-        nodes.add(n("delay", NodeType.DELAY, Map.of(NodeParam.FRAMES, 64.0)));
+        // Free-running, since this stress loop is far over the loop-gain limit on purpose.
+        nodes.add(n("delay", NodeType.DELAY, Map.of(NodeParam.FRAMES, 64.0, NodeParam.FREE_RUN, 1.0)));
         edges.add(Graph.edge("mix", "post"));
         edges.add(Graph.edge("post", "delay"));
         edges.add(Graph.edge("delay", "mix")); // unity-gain feedback, bounded by the signal runtime

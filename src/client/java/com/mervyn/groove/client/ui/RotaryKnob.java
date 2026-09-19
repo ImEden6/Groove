@@ -55,6 +55,8 @@ public record RotaryKnob(String param, int x, int y, int width) {
                 ? LFO_WAVE_NAMES[Math.max(0, Math.min(3, (int)value))]
                 : node.type() == groove.engine.NodeType.DELAY && param.equals(NodeParam.SYNC)
                 ? (value < .5 ? "Free" : "Sync")
+                : node.type() == groove.engine.NodeType.DELAY && param.equals(NodeParam.FREE_RUN)
+                ? (value < .5 ? "Limited" : "Free-run")
                 : node.type() == groove.engine.NodeType.DELAY && param.equals(NodeParam.DIVISION)
                 ? DELAY_DIVISION_NAMES[Math.max(0, Math.min(7, (int)value))]
                 : value == Math.rint(value) ? Long.toString((long) value)

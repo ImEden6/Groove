@@ -233,6 +233,11 @@ public final class EditorState {
         return canConnect(fromId, "out", toId, "in");
     }
     public boolean canConnect(String fromId, String fromPort, String toId, String toPort) {
+        return canConnectIgnoringFeedback(fromId, fromPort, toId, toPort)
+                && feedbackAllowed(nodes.values(), withEdge(fromId, fromPort, toId, toPort));
+    }
+    /** Every wiring rule except the loop-gain limit, so a refusal can name its real reason. */
+    private boolean canConnectIgnoringFeedback(String fromId, String fromPort, String toId, String toPort) {
         if (!nodes.containsKey(fromId) || !nodes.containsKey(toId)) return false;
         Graph.Node to = nodes.get(toId);
         var target = to.type().inputPort(toPort);
@@ -243,13 +248,58 @@ public final class EditorState {
         boolean roomForMore = currentInputs < target.maxConnections()
                 && target.accepts(nodes.get(fromId).type().outputPort(fromPort));
         if (!roomForMore || edges.contains(new Graph.Edge(fromId, fromPort, toId, toPort))) return false;
-        if (to.type() != NodeType.DELAY && reaches(toId, fromId)) return false;
-        if (nodes.values().stream().anyMatch(n -> n.type() == NodeType.REVERB)) {
-            Set<Graph.Edge> candidate = new LinkedHashSet<>(edges);
-            candidate.add(new Graph.Edge(fromId, fromPort, toId, toPort));
-            if (!groove.engine.SignalGraph.isLoopGainValid(nodes.values(), candidate)) return false;
+        return to.type() == NodeType.DELAY || !reaches(toId, fromId);
+    }
+    private Set<Graph.Edge> withEdge(String fromId, String fromPort, String toId, String toPort) {
+        Set<Graph.Edge> candidate = new LinkedHashSet<>(edges);
+        candidate.add(new Graph.Edge(fromId, fromPort, toId, toPort));
+        return candidate;
+    }
+
+    /** Loop-gain gate shared by wiring and knobs. A graph already over the limit stays
+     *  editable: a change is refused only if it makes the worst loop stronger. */
+    private boolean feedbackAllowed(Collection<Graph.Node> candidateNodes, Collection<Graph.Edge> candidateEdges) {
+        String problem = groove.engine.SignalGraph.loopGainProblem(candidateNodes, candidateEdges);
+        if (problem == null) return true;
+        return worstOverLimit(candidateNodes, candidateEdges) <= worstOverLimit(nodes.values(), edges);
+    }
+
+    private static double worstOverLimit(Collection<Graph.Node> nodes, Collection<Graph.Edge> edges) {
+        try {
+            double worst = 0;
+            for (var loop : groove.engine.SignalGraph.feedbackLoops(nodes, edges))
+                if (loop.overLimit()) worst = Math.max(worst, loop.bound());
+            return worst;
+        } catch (IllegalArgumentException unreadable) {
+            return Double.MAX_VALUE;
         }
-        return true;
+    }
+
+    /** True when some feedback loop is exempt from the limit by a free-running delay. */
+    public boolean hasFreeRunningLoop() {
+        // The screen asks every frame; only re-analyse after the graph changes.
+        int key = 31 * nodes.hashCode() + edges.hashCode();
+        if (freeRunningKey != null && freeRunningKey == key) return freeRunningCached;
+        boolean result;
+        try {
+            result = groove.engine.SignalGraph.feedbackLoops(nodes.values(), edges).stream()
+                    .anyMatch(loop -> loop.freeRunning() && loop.bound() > groove.engine.SignalGraph.LOOP_GAIN_LIMIT);
+        } catch (IllegalArgumentException unreadable) {
+            result = false;
+        }
+        freeRunningKey = key;
+        freeRunningCached = result;
+        return result;
+    }
+    private Integer freeRunningKey;
+    private boolean freeRunningCached;
+
+    private String feedbackRefusal;
+    /** Why the last wire or knob change was refused for loop gain, once; null if none since. */
+    public String takeFeedbackRefusal() { String reason = feedbackRefusal; feedbackRefusal = null; return reason; }
+    private void refuseForFeedback(Collection<Graph.Node> candidateNodes, Collection<Graph.Edge> candidateEdges) {
+        String problem = groove.engine.SignalGraph.loopGainProblem(candidateNodes, candidateEdges);
+        if (problem != null) feedbackRefusal = problem;
     }
     private boolean reaches(String fromId, String targetId) {
         Deque<String> stack = new ArrayDeque<>(List.of(fromId));
@@ -315,6 +365,9 @@ public final class EditorState {
     public boolean completeWireDrag(String toNodeId, String port) {
         if (wireDrag == null) return false;
         boolean connected = connect(wireDrag.fromNode(), wireDrag.fromPort(), toNodeId, port);
+        // Only blame feedback when every other wiring rule passed.
+        if (!connected && canConnectIgnoringFeedback(wireDrag.fromNode(), wireDrag.fromPort(), toNodeId, port))
+            refuseForFeedback(nodes.values(), withEdge(wireDrag.fromNode(), wireDrag.fromPort(), toNodeId, port));
         wireDrag = null;
         return connected;
     }
@@ -382,17 +435,18 @@ public final class EditorState {
                 else params.put(NodeParam.LOOP_START, Math.max(0.0, le - 0.001));
             }
         }
+        // Off is stored as no key, so graphs that never used free-run keep their exact encoding.
+        if (node.type() == NodeType.DELAY && param.equals(NodeParam.FREE_RUN) && params.get(NodeParam.FREE_RUN) == 0)
+            params.remove(NodeParam.FREE_RUN);
         if (node.type() == NodeType.EUCLID && param.equals(NodeParam.STEPS)) {
             params.put(NodeParam.PULSES, Math.min(params.get(NodeParam.STEPS),
                     params.getOrDefault(NodeParam.PULSES, defaultParams(NodeType.EUCLID).get(NodeParam.PULSES))));
         }
         Graph.Node updated = new Graph.Node(node.id(), node.type(), params, node.sample(), node.birthNanos());
-        if (nodes.values().stream().anyMatch(n -> n.type() == NodeType.REVERB)) {
-            Map<String, Graph.Node> candidate = new LinkedHashMap<>(nodes);
-            candidate.put(node.id(), updated);
-            // Server rejects loops through a reverb above -1 dB, so keep the last valid value
-            if (!groove.engine.SignalGraph.isLoopGainValid(candidate.values(), edges)) return;
-        }
+        Map<String, Graph.Node> candidate = new LinkedHashMap<>(nodes);
+        candidate.put(node.id(), updated);
+        // The server rejects loops over the loop-gain limit, so keep the last valid value.
+        if (!feedbackAllowed(candidate.values(), edges)) { refuseForFeedback(candidate.values(), edges); return; }
         nodes.put(node.id(), updated);
         markDirty();
     }
@@ -441,7 +495,7 @@ public final class EditorState {
 
     private static boolean integerParam(String param) {
         return switch (param) {
-            case NodeParam.SYNC, NodeParam.MODE, NodeParam.WAVE, NodeParam.STEPS,
+            case NodeParam.SYNC, NodeParam.FREE_RUN, NodeParam.MODE, NodeParam.WAVE, NodeParam.STEPS,
                     NodeParam.FRAMES, NodeParam.SEED, NodeParam.STEPS_PER_CYCLE,
                     NodeParam.PULSES, NodeParam.ROTATION, NodeParam.ROOT, NodeParam.CHORD, NodeParam.INVERSION,
                     NodeParam.START_FRAME, NodeParam.END_FRAME, NodeParam.SLICES, NodeParam.INDEX, NodeParam.REVERSE, NodeParam.SUBDIVISION, NodeParam.DIVISION,
@@ -470,7 +524,7 @@ public final class EditorState {
             case NodeParam.SUBDIVISION -> 0.3;
             case NodeParam.AMOUNT -> 0.01;
             case NodeParam.RATE -> .05;
-            case NodeParam.SYNC, NodeParam.MODE, NodeParam.DIVISION -> .05;
+            case NodeParam.SYNC, NodeParam.FREE_RUN, NodeParam.MODE, NodeParam.DIVISION -> .05;
             case NodeParam.ATTACK, NodeParam.DECAY, NodeParam.RELEASE, NodeParam.SUSTAIN, NodeParam.GATE -> .005;
             case "value0", "value1", "value2", "value3", "value4", "value5", "value6", "value7" -> .01;
             case NodeParam.OFFSET -> 40;
@@ -496,7 +550,7 @@ public final class EditorState {
         }
         if (type.isSignalNode()) return switch (param) {
             case NodeParam.RATE -> Math.max(type == NodeType.STEP_SEQUENCE ? .125 : .001, Math.min(type == NodeType.STEP_SEQUENCE ? 16 : 40, value));
-            case NodeParam.SYNC -> Math.max(0, Math.min(1, Math.rint(value)));
+            case NodeParam.SYNC, NodeParam.FREE_RUN -> Math.max(0, Math.min(1, Math.rint(value)));
             case NodeParam.DIVISION -> Math.max(0, Math.min(7, Math.rint(value)));
             case NodeParam.MODE -> Math.max(0, Math.min(type == NodeType.FILTER ? 3 : 1, Math.rint(value)));
             case NodeParam.WAVE -> Math.max(0, Math.min(3, Math.rint(value)));
@@ -634,6 +688,7 @@ public final class EditorState {
                 merged.remove(NodeParam.LOOP_FADE_MS);
             }
         }
+        if (node.type() == NodeType.DELAY) merged.putIfAbsent(NodeParam.FREE_RUN, 0.0);
         return merged;
     }
 

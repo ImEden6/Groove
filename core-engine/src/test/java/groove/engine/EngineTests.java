@@ -24,6 +24,7 @@ public final class EngineTests {
         PatternTests.run();
         GoldenTests.run();
         ReverbTests.run();
+        FeedbackLoopTests.run();
         DenormalTests.run();
         SelectionCacheTests.run();
         DemoTests.run();

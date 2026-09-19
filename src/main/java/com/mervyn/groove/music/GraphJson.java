@@ -67,6 +67,17 @@ public final class GraphJson {
     public static Graph decodeCurrent(String json) { return decode(json).toV3(); }
     public static Graph decode(String json) { return decode(json, true); }
     public static Graph decodeDraft(String json) { return decode(json, false); }
+    /** For patches read back from disk: loops saved before the loop-gain limit are marked
+     *  free-running so they still load and sound the same, then the result is compiled. */
+    public static groove.engine.FeedbackMigration.Result decodeSaved(String json) {
+        var migrated = groove.engine.FeedbackMigration.markFreeRunning(decode(json, false));
+        GraphCompiler.compile(migrated.graph());
+        return migrated;
+    }
+    /** A saved draft may be incomplete, so it is migrated but not compiled. */
+    public static groove.engine.FeedbackMigration.Result decodeSavedDraft(String json) {
+        return groove.engine.FeedbackMigration.markFreeRunning(decode(json, false));
+    }
     private static Graph decode(String json, boolean compile) {
         if (json.length() > MAX_LENGTH) throw new IllegalArgumentException("Patch exceeds 32 KiB characters");
         int depth = 0;

@@ -76,13 +76,13 @@ for sockets, parameter units, server phase rules and the eight-source limit.
 
 ## Compatibility and version checks
 
-Server and client must run the same Groove protocol, currently 4. The check runs while a player
-connects, before any graph is sent:
+Server and client must run the same Groove protocol, currently 5 (the feedback loop-gain limit and
+free-running delays). The check runs while a player connects, before any graph is sent:
 
-- A client without Groove, or with a Groove older than Phase 4, is disconnected with
-  `This server requires Groove protocol 4. Update Groove.`
+- A client without Groove, or with a Groove from before Phase 4, is disconnected with
+  `This server requires Groove protocol 5. Update Groove.`
 - A client with a different protocol number is disconnected with
-  `Groove version mismatch: server 4, client <n>`.
+  `Groove version mismatch: server 5, client <n>`.
 - The server logs a warning with the player name and both versions. A newer client joining a
   server without Groove's protocol channel is not disconnected.
 

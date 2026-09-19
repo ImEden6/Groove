@@ -285,6 +285,9 @@ legacy free-time delay:
 
 - `sync`: 0 for free millisecond/frame mode (default), 1 for tempo-synced mode.
 - `frames`: Free-mode buffer length in frames (64..48,000, default 64). Used when `sync = 0`.
+- `freeRun`: 0 (default, not stored) or 1. At 1, any feedback loop through this delay is exempt from
+  the [loop-gain limit](#loop-gain-rule), so it can self-oscillate; players who join late may then
+  hear a different tail. The audio is identical either way.
 - `division`: Synced-mode beat subdivision index (0..7, default 2 for 1/8 note):
   - `0`: 1/16 (0.25 beat)
   - `1`: 1/8T (1/3 beat, triplet)
@@ -387,17 +390,20 @@ and a modulated tank that avoids metallic ringing.
 
 #### Loop-gain rule
 
-A feedback loop that contains a reverb must provably stay below unity gain, or the graph is
-rejected with `"Feedback loop through reverb can exceed unity gain (bound <x>)"`. The compiler
-cuts edges into each `delay`, then bounds the amplitude arriving back at every delay from every
-other: `mix_bus` multiplies the summed inputs by its gain (1 when modulated), a low- or high-pass
-`filter` by its resonance peak `Q / sqrt(1 − 1/(4Q²))` for `Q > 0.707` (times 1.05), and a reverb
-by 0.95. Any delay whose incoming bounds sum above 0.89 (−1 dB) rejects the graph. For example,
-`delay → reverb → mix_bus(gain 0.5) → delay` is accepted, while `mix_bus(delay, reverb(delay)) →
-delay` at gain 1 is not. Loops without a reverb keep their Phase 3 behaviour and are not checked.
+Every audio feedback loop, with or without a reverb, must provably lose energy on each trip, or the
+graph is rejected with `"Feedback loop can exceed unity gain (bound <x>); ..."`. The compiler cuts
+edges into each `delay`, then bounds the amplitude arriving back at every delay from every other:
+`mix_bus` multiplies the summed inputs by its gain (1 when modulated), a low- or high-pass `filter`
+by its resonance peak `Q / sqrt(1 − 1/(4Q²))` for `Q > 0.707` (times 1.05), and a reverb by 0.95.
+Any delay whose incoming bounds sum above **0.95** (−0.45 dB) rejects the graph, unless a delay in
+that loop has `freeRun = 1`. For example, `delay → mix_bus(gain 0.9) → delay` is accepted and gain
+1 is not; `delay → reverb → mix_bus(gain 1) → delay` sits exactly at the limit and is accepted,
+while `mix_bus(delay, reverb(delay)) → delay` at gain 1 (bound 1.95) is not.
 
-Below that bound, two listeners who joined at different times converge: any difference shrinks by
-at least 11% per trip around the loop, on top of the reverb's own T60.
+Below that bound, two listeners who joined at different times converge; at the limit the difference
+shrinks by about 5% per trip. Patches saved before the limit keep loading and sounding the same:
+delays in over-limit loops are marked free-running on load. The derivation, convergence times and
+what is not guaranteed are in [feedback stability](FEEDBACK-STABILITY.md).
 
 #### Known limitations
 
@@ -408,8 +414,8 @@ at least 11% per trip around the loop, on top of the reverb's own T60.
 - Effect memory is per program per renderer, not per graph: up to 3.07 MB of delay plus about 1 MB
   for two reverbs per program, times current, pending and previous programs, times the client's
   renderers. A program waiting for a replay lease keeps the previous program alive too.
-- Delay feedback loops without a reverb can still saturate at ±8, which makes late joiners diverge.
-  This predates Stage 4.
+- Free-running loops (`freeRun = 1`, including loops migrated from older saves) can saturate at ±8
+  and keep late joiners on a different tail. That is the price of opting out of the limit.
 
 ### Sustained sample loops
 
@@ -493,7 +499,7 @@ loop-gain rule, feedback convergence, parity, allocation), `LoopTests` (geometry
 late join, tempo, stealing, parity), `ReplayLeaseTests` and `SpeakerLinkTests` (leases, storms,
 lifetime, fade cancel), `DenormalTests`, `ResamplerTests` (including the 15.7x-16x spectral gate),
 `SelectionCacheTests` (cached versus per-frame differential), `DemoTests` and the float64 goldens.
-`./gradlew :core-engine:longTest` runs the 20 s reverb decays. `perfBench` scenarios B1-B9 are
+`./gradlew :core-engine:longTest` runs the 20 s reverb decays. `perfBench` scenarios B1-B10 are
 below.
 
 ## Stage 4 performance on reference machine
@@ -645,4 +651,14 @@ not because of replay: this graph costs about 2.3 ms per steady block, so 8 rend
 With `REPLAY_PER_FRAME = 4` (the first run) one replaying renderer took p99 15.75 ms, and rounds
 reached 5,120 frames of replay work against the original bound of `k · 4 · 512 = 4,096`.
 
+### B10 loop analysis (`perfBench -PperfOnly=B10`)
 
+Times the feedback-loop analysis (`SignalGraph.feedbackLoops`) that every compile runs and the
+editor runs on each wire drop and knob step, plus a full `GraphCompiler.compile`, on the worst case:
+63 nodes and 123 edges, with 30 delays and 30 buses cross-linked into one loop. Report only, with no
+gate, since sub-millisecond compile-time numbers are too noisy to gate on shared machines.
+
+Results from 2026-09-19: analysis median 0.1891 ms, p99 0.3294 ms; full compile median 0.5447 ms,
+p99 0.7752 ms. Before precomputing each loop's inputs and gain bounds once per loop, the analysis
+took about 1.6 ms. A full `perfBench` run before and after the loop-gain limit showed no rendering
+change: B2 to B9 and B8 medians within 4%, and B1 within 2% once rerun alternately with the old build.
