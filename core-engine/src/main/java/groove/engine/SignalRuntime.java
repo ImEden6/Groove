@@ -30,6 +30,8 @@ public final class SignalRuntime {
     /** Per delay: how many of its most recent slots hold real input, not zeros left by lengthening. */
     private final int[] filled;
     private int rampTotal = 1, ramping;
+    /** Delay and reverb buffers may hold something other than zeros; a new runtime's arrays start zeroed. */
+    private boolean touched;
 
     private static final int MIX_GAIN = 0;
     private static final int FILTER_CUTOFF = 0, FILTER_Q = 1;
@@ -326,6 +328,7 @@ public final class SignalRuntime {
      * made shorter has to jump, which a seamless switch cannot hide.
      */
     boolean continueFrom(SignalRuntime previous, TransferPlan plan) {
+        touched = true;
         boolean continuous = true;
         if (plan.from != previous.graph || plan.source.length != graph.nodes.length)
             throw new IllegalArgumentException("Transfer plan does not match these runtimes");
@@ -424,12 +427,18 @@ public final class SignalRuntime {
     }
 
     public void reset() {
+        // Every switch resets a new runtime; its buffers are already zero, so skip the fill
+        boolean clear = touched;
+        touched = false;
         controlBlock = Long.MIN_VALUE;
         Arrays.fill(cursors,0);
         for (int i=0;i<graph.nodes.length;i++) {
-            if (delayLeft[i] != null) { Arrays.fill(delayLeft[i],0); Arrays.fill(delayRight[i],0); filled[i] = delayLeft[i].length; }
+            if (delayLeft[i] != null) {
+                if (clear) { Arrays.fill(delayLeft[i],0); Arrays.fill(delayRight[i],0); }
+                filled[i] = delayLeft[i].length;
+            }
             if (filtersLeft[i] != null) { filtersLeft[i].reset(); filtersRight[i].reset(); filterCoefficientsSet[i] = false; }
-            if (reverbs[i] != null) reverbs[i].reset();
+            if (reverbs[i] != null && clear) reverbs[i].reset();
             if (rampLeft[i] > 0 && reverbs[i] != null) {
                 double[] p = nodeParams[i];
                 reverbs[i].setParams(p[REVERB_DECAY], p[REVERB_DAMPING], p[REVERB_BANDWIDTH], p[REVERB_PREDELAY]);
@@ -470,6 +479,7 @@ public final class SignalRuntime {
     }
 
     private void processRouting(double[] stereo, long serverNanos) {
+        touched = true;
         int frame = prepareControls(serverNanos);
         // Read all old delay cells before evaluating or writing any feedback input.
         for (int i=0;i<graph.nodes.length;i++) if (delayLeft[i] != null) {
@@ -701,6 +711,7 @@ public final class SignalRuntime {
 
     /** Tests only: fills delay, filter and reverb state with one value. */
     void seedState(double value) {
+        touched = true;
         for (int i = 0; i < graph.nodes.length; i++) {
             if (delayLeft[i] != null) { Arrays.fill(delayLeft[i], value); Arrays.fill(delayRight[i], value); }
             if (filtersLeft[i] != null) { filtersLeft[i].seedState(value); filtersRight[i].seedState(value); }

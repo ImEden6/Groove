@@ -16,6 +16,7 @@ final class EffectCarryTests {
         transferRules();
         seamlessRules();
         seamlessSwitches();
+        resetClearsOnlyWhatWasWritten();
         delayHistoryIsExact();
         settingsRamp();
         delayFadeHandsOver();
@@ -344,6 +345,30 @@ final class EffectCarryTests {
         float[] all = java.util.Arrays.copyOf(a, a.length + b.length);
         System.arraycopy(b, 0, all, a.length, b.length);
         return all;
+    }
+
+    /** reset() skips clearing buffers nothing has written, but any runtime that played or carried comes back silent. */
+    private static void resetClearsOnlyWhatWasWritten() {
+        for (boolean reverb : new boolean[] {true, false}) {
+            String kind = reverb ? "reverb" : "delay";
+            SignalRuntime fresh = runtime(tail(reverb, 0.3)), played = runtime(tail(reverb, 0.3)), seeded = runtime(tail(reverb, 0.3));
+            SignalRuntime carried = runtime(tail(reverb, 0.3));
+            double[] io = new double[2];
+            for (int i = 0; i < 4800; i++) { io[0] = io[1] = Math.sin(0.03 * i); played.process(io, frameNanos(i)); }
+            seeded.seedState(0.5);
+            carried.reset();
+            carried.continueFrom(played, SignalRuntime.transferPlan(signalsOf(played), signalsOf(carried)));
+            for (SignalRuntime r : new SignalRuntime[] {fresh, played, seeded, carried}) {
+                // Twice: the second reset finds nothing written since the first
+                r.reset();
+                r.reset();
+                for (int i = 0; i < 96000; i++) {
+                    io[0] = io[1] = 0;
+                    r.process(io, frameNanos(10_000 + i));
+                    if (io[0] != 0 || io[1] != 0) throw new AssertionError("A reset " + kind + " stays silent, frame " + i + ": " + io[0]);
+                }
+            }
+        }
     }
 
     /** A delay line holds its last L inputs, so a length change keeps exactly the most recent ones. */

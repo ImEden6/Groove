@@ -717,6 +717,16 @@ the same as a steady one (1.60–1.65 ms against 1.59–1.65), and the switch ro
 while the steady round's own p99 reached 6.3 ms in the same runs. Frame 0 (+1.2 ms: reset, copy and
 first voice selection) is now the main extra cost.
 
+Resetting the incoming runtime was about half of frame 0: it zero-filled delay and reverb buffers
+that a new runtime already has zeroed, since Java zeroes new arrays (SuperCollider's `DelayN` avoids
+the same fill by reading unwritten slots as zero until the line has filled once). `SignalRuntime`
+now skips the fill unless something has written the buffers since the last reset: processing, a
+carry, or test seeding. Resetting 8 fresh B6-class runtimes went from 0.57 ms to 0.01 ms. The copy
+then reads cold memory itself and rose from about 0.76 to 0.85–0.89 ms, so frame 0 fell to
+0.89–0.98 ms. Over 3 runs the switch round median is 4.46–4.57 ms and the p99 7.3–8.3 ms, within the
+deadline in all 3. The copy is now most of what remains. Handing buffers over instead of copying
+becomes possible for seamless switches, because their outgoing graph never renders again.
+
 A shorter crossfade for carried switches was trialled (`CarryFadeTrial`, report only) and not
 adopted: at 64 frames a tone-gain or loop-gain jump scores about 6 times the click measure of the
 normal 240-frame fade. The trial also showed that a carried reverb whose decay changes steps in
