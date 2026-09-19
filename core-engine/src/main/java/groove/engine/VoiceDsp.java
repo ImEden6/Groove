@@ -42,6 +42,11 @@ final class VoiceDsp {
         }
     }
 
+    /** Continues {@code other}'s filter history; call right after start. */
+    void continueFrom(VoiceDsp other) {
+        leftFilter.copyStateFrom(other.leftFilter); rightFilter.copyStateFrom(other.rightFilter);
+    }
+
     /** phase is supplied by the scheduler: accumulated offline, absolute-time for live seeks.
      *  duration bounds the tone envelope; samples carry their own half-open lifetime. */
     void add(double age, double duration, double phase, double fade, double[] out) {

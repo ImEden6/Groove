@@ -22,7 +22,10 @@ final class EffectCarryTests {
             knobEdit(reverb);
             scheduledCommit(reverb);
         }
-        sameGraphRepublish();
+        for (boolean reverb : new boolean[] {true, false}) {
+            sameGraphRepublish(reverb);
+            sameGraphCommit(reverb);
+        }
         rapidEdits();
         independentRenderers();
         fallbackPaths();
@@ -307,9 +310,10 @@ final class EffectCarryTests {
         check(keyed[1] > 0.1 * keyed[0], String.format(Locale.ROOT, "%s tail survives a knob edit: %.4f of %.4f", kind, keyed[1], keyed[0]));
         check(unkeyed[1] < 1e-3 * unkeyed[0], String.format(Locale.ROOT, "Without a session key the %s tail is cut, as before: %.6f", kind, unkeyed[1]));
         check(keyed[2] == 1 && keyed[3] == 0, kind + " edit carried once and replayed nothing: " + keyed[2] + " / " + keyed[3]);
+        check(keyed[4] == 0, kind + " edit changed the note, so its voice starts fresh");
     }
 
-    /** {steady RMS before, tail RMS 1.5..2.5 s after, transfers, replays started after the switch}. */
+    /** {steady RMS before, tail RMS 1.5..2.5 s after, transfers, replays started after the switch, voices carried}. */
     private static double[] tailAfterSwitch(SessionState before, SessionState after, Object keyBefore, Object keyAfter) {
         LiveRenderer renderer = new LiveRenderer();
         var first = timeline(before);
@@ -321,7 +325,27 @@ final class EffectCarryTests {
         renderer.publish(second, keyAfter);
         float[] tail = render(renderer, second, SWITCH, SWITCH + seconds(3));
         return new double[] {rms(lead, 0, 2, 3, 0), rms(tail, 0, 4.5, 5.5, SWITCH),
-                renderer.effectTransfers(), renderer.historyRecoveries() - replays};
+                renderer.effectTransfers(), renderer.historyRecoveries() - replays, renderer.voiceCarries};
+    }
+
+    /** An unchanged scheduled commit continues the held note's voice too, matching no commit at all. */
+    private static void sameGraphCommit(boolean reverb) {
+        SessionState current = start(tail(reverb, 0.3));
+        SessionState pending = new SessionState(2, SWITCH, current.cycleAt(SWITCH), BPM, true, current.graph());
+        LiveRenderer reference = new LiveRenderer(), committed = new LiveRenderer();
+        var once = timeline(current);
+        reference.publish(once, SESSION);
+        var both = new LiveRenderer.Timeline(new LiveRenderer.Program(current, GraphCompiler.compile(current.graph())),
+                new LiveRenderer.Program(pending, GraphCompiler.compile(pending.graph())));
+        committed.publish(both, SESSION);
+        float[] ref = render(reference, once, 0, SWITCH + seconds(3)), got = render(committed, both, 0, SWITCH + seconds(3));
+        String kind = reverb ? "Reverb" : "Delay";
+        // The commit's own anchor rounds cycle positions slightly differently, so allow one float step per sample.
+        int off = -1;
+        for (int i = 0; i < ref.length && off < 0; i++)
+            if (Math.abs(ref[i] - got[i]) > Math.ulp(Math.max(Math.abs(ref[i]), Math.abs(got[i])))) off = i / 2;
+        check(off < 0, kind + " same-graph commit matches no commit, first off at frame " + off);
+        check(committed.effectTransfers() == 1 && committed.voiceCarries == 1, kind + " same-graph commit carried its effects and voice");
     }
 
     /** The commit takes effect at the switch; its effects continue the outgoing program's. */
@@ -342,8 +366,8 @@ final class EffectCarryTests {
     }
 
     /** Republishing the same graph and position matches a renderer that never republished. */
-    private static void sameGraphRepublish() {
-        SessionState state = start(tail(true, 0.3));
+    private static void sameGraphRepublish(boolean reverb) {
+        SessionState state = start(tail(reverb, 0.3));
         LiveRenderer reference = new LiveRenderer(), republished = new LiveRenderer();
         var once = timeline(state);
         reference.publish(once, SESSION);
@@ -356,8 +380,6 @@ final class EffectCarryTests {
         float[] ref = render(reference, once, SWITCH, SWITCH + seconds(3)), got = render(republished, again, SWITCH, SWITCH + seconds(3));
         double worst = 0;
         for (int i = 0; i < ref.length; i++) worst = Math.max(worst, Math.abs(ref[i] - got[i]));
-        double late = 0;
-        for (int i = RATE * 2; i < ref.length; i++) late = Math.max(late, Math.abs(ref[i] - got[i]));
         // The same republish without a session key: effects reset and replay only 1 s.
         LiveRenderer control = new LiveRenderer();
         var c1 = timeline(state);
@@ -369,11 +391,12 @@ final class EffectCarryTests {
         float[] old = render(control, c2, SWITCH, SWITCH + seconds(3));
         double oldWorst = 0;
         for (int i = 0; i < ref.length; i++) oldWorst = Math.max(oldWorst, Math.abs(ref[i] - old[i]));
+        String kind = reverb ? "Reverb" : "Delay";
         check(java.util.Arrays.equals(refLead, lead), "Both renderers agree before the republish");
-        // Carried state itself is exact (unchangedGraphContinuesExactly); the rest comes from the switch.
-        check(worst < 1e-4 && worst * 100 < oldWorst && late < 1e-6, String.format(Locale.ROOT,
-                "Same-graph republish tracks the uninterrupted reference: worst %.2e, after 1 s %.2e, old path %.2e", worst, late, oldWorst));
-        check(republished.effectTransfers() == 1, "Same-graph republish carried");
+        // Effects and the held note's voice filter both continue, so nothing restarts mid-note.
+        check(java.util.Arrays.equals(ref, got) && oldWorst > 1e-3, String.format(Locale.ROOT,
+                "%s same-graph republish matches the uninterrupted reference: worst %.2e, old path %.2e", kind, worst, oldWorst));
+        check(republished.effectTransfers() == 1 && republished.voiceCarries == 1, kind + " same-graph republish carried its effects and voice");
     }
 
     /** Twenty edits 20 ms apart, some published twice between renders, then silence: the tail survives. */

@@ -211,6 +211,13 @@ members, and every effect in it passes its own rule, or the whole group resets. 
 breaking a loop entirely: its surviving effects reset even when their own inputs are unchanged.
 Reverb transfers preserve the full predelay history so later predelay increases can still read it. Removed or reset
 effects use the existing short crossfade. `effectTransfers()` counts programs that carried.
+
+A carrying program's voices also continue. Its sources match the outgoing program's by node id,
+and a voice whose note (onset, tone or sample) is unchanged copies the outgoing voice's filter
+history when it starts. Restarting it from zero would make a small transient that the output
+crossfade hides but a carried delay records and plays back one delay length later. A changed note
+starts fresh, as before. An unchanged republish is therefore bit-exact with uninterrupted
+playback.
 `EffectCarryTests` checks tails far older than the replay window across knob edits, same-graph
 republishes, scheduled commits, 20 rapid edits and three speakers on one replay budget, and that
 every fallback path still resets; `perfBench` B11 measures the copy and the switch round, and

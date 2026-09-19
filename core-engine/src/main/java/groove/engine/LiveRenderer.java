@@ -121,6 +121,8 @@ public final class LiveRenderer {
         boolean carried;
         /** Sound thread: the ready program this one replaces, whose effect state it may continue. */
         VoiceProgram predecessor;
+        /** Sound thread: a carried switch's outgoing source, whose matching voices keep their filter history. */
+        VoiceProgram voiceDonor;
         /** Built on the control thread before publication: how to continue each candidate graph's effects. */
         final java.util.Map<SignalGraph, SignalRuntime.TransferPlan> transferPlans;
         final groove.engine.samples.PreparedSamples samples;
@@ -215,8 +217,8 @@ public final class LiveRenderer {
     private final ReplayBudget replayBudget;
     /** False keeps the original per-frame selection, for differential tests. */
     private final boolean cachedSelection;
-    /** Tests only: voices started and stolen, to compare selection strategies. */
-    long voiceStarts, voiceSteals, selections;
+    /** Tests only: voices started, stolen and carried across a switch. */
+    long voiceStarts, voiceSteals, selections, voiceCarries;
     /** Budget slot and its generation at registration; written by the budget on the sound thread. */
     int replaySlot = -1;
     long replayGeneration;
@@ -530,6 +532,9 @@ public final class LiveRenderer {
 
     /** mayReplay false: plays a program that is already running, but never starts or waits for a replay. */
     private void sample(VoiceProgram program, long now, double[] out, boolean mayReplay) {
+        // Only the first frame after a carry may continue voices
+        VoiceProgram donor = program == null ? null : program.voiceDonor;
+        if (donor != null) program.voiceDonor = null;
         if (program == null || !program.state.playing() || now < program.state.effectiveNanos()) {
             // Not rendering, so it cannot carry; don't keep the outgoing program's buffers alive.
             if (program != null) program.predecessor = null;
@@ -625,7 +630,7 @@ public final class LiveRenderer {
         }
         if (!cachedSelection || !program.selectionValid || program.selectedWindow != program.window
                 || !(cycles >= program.selectionFrom && cycles < program.selectionUntil))
-            select(program, cycles, secondsPerCycle);
+            select(program, cycles, secondsPerCycle, donor);
         out[0] = 0; out[1] = 0;
         for (ActiveVoice v : program.voices) if (v.event >= 0) addVoice(program, v, cycles, secondsPerCycle, 1, out);
         for (ActiveVoice v : program.tails) if (v.event >= 0) {
@@ -637,9 +642,9 @@ public final class LiveRenderer {
     /**
      * Chooses which events sound and starts or steals voices to match. The result only changes when some
      * event's "has started" or "is still sounding" test flips, so a cached selection is reused until the
-     * earliest cycle where one could.
+     * earliest cycle where one could. A voice that donor is still playing continues its filter history.
      */
-    private void select(VoiceProgram program, double cycles, double secondsPerCycle) {
+    private void select(VoiceProgram program, double cycles, double secondsPerCycle, VoiceProgram donor) {
         double until = Double.POSITIVE_INFINITY;
         selections++;
         program.count = 0;
@@ -705,6 +710,8 @@ public final class LiveRenderer {
             for (ActiveVoice v : program.voices) if (v.event < 0) {
                 v.start(event, program.events[i], program.hashes[i], program.onsets[i], duration,
                         event.sample() == null ? null : program.samples.get(event.sample()));
+                if (donor != null) for (ActiveVoice d : donor.voices)
+                    if (continues(d, program, i)) { v.dsp.continueFrom(d.dsp); voiceCarries++; break; }
                 voiceStarts++;
                 break;
             }
@@ -753,6 +760,10 @@ public final class LiveRenderer {
         double apartSeconds = Math.abs(program.state.cycleAt(boundary) - from.state.cycleAt(boundary)) * 240 / program.state.bpm();
         if (apartSeconds > 2 / (double) SAMPLE_RATE) return false;
         program.signals.continueFrom(from.signals, plan);
+        SignalGraph to = program.plan.signals(), was = from.plan.signals();
+        for (int i = 0; i < program.sources.length; i++)
+            for (int j = 0; j < from.sources.length; j++)
+                if (to.sourceNodeId(i).equals(was.sourceNodeId(j))) { program.sources[i].voiceDonor = from.sources[j]; break; }
         program.carried = true;
         effectTransfers++;
         return true;
@@ -814,6 +825,14 @@ public final class LiveRenderer {
     private static double eventDuration(VoiceProgram program, Event event, double secondsPerCycle) {
         if (event.sample() == null) return (event.whole().end() - event.whole().start()) * secondsPerCycle;
         return program.samples.lifetimeSeconds(event.sample(), event.whole().end() - event.whole().start(), secondsPerCycle);
+    }
+
+    /** Like matches, across programs: event indexes may differ, so only the event itself counts. */
+    private static boolean continues(ActiveVoice voice, VoiceProgram program, int index) {
+        if (voice.event < 0 || voice.onset != program.onsets[index] || voice.hash != program.hashes[index]) return false;
+        Event a = voice.data, b = program.data[index];
+        return a == b || a.whole().equals(b.whole()) && java.util.Objects.equals(a.tone(), b.tone())
+                && java.util.Objects.equals(a.sample(), b.sample());
     }
 
     private static boolean matches(ActiveVoice voice, VoiceProgram program, int index) {
