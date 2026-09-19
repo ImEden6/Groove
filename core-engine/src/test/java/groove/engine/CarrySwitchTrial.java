@@ -21,18 +21,24 @@ public final class CarrySwitchTrial {
         if (args.length > 0) SignalRuntime.rampFrames = Integer.parseInt(args[0]);
         System.out.println(String.format(Locale.ROOT, "Ramp %d frames (%.1f ms)", SignalRuntime.rampFrames, SignalRuntime.rampFrames * 1e3 / RATE));
         System.out.println("Scenario | carried dB (carries) at worst window | not carried dB at worst window");
-        report("tone gain 0.1 -> 0.3, into a 50 ms feedback delay", v -> loop(v, 0.5, 2400, 120), 0.1, 0.3, 1);
-        report("loop mix gain 0.2 -> 0.9", v -> loop(0.2, v, 2400, 120), 0.2, 0.9, 1);
+        report("tone gain 0.1 -> 0.3, into a 50 ms feedback delay", v -> loop(v, 0.5, 2400), 0.1, 0.3, 1);
+        report("loop mix gain 0.2 -> 0.9", v -> loop(0.2, v, 2400), 0.2, 0.9, 1);
         report("filter cutoff 300 -> 8000 Hz, Q 2", v -> filter(v, 2.0), 300, 8000, 1);
         report("filter Q 0.7 -> 8 at 600 Hz", v -> filter(600, v), 0.7, 8, 1);
         report("reverb decay 2 -> 8 s", v -> reverb(v, 6000, 12000, 20), 2, 8, 1);
         report("reverb damping 12000 -> 1000 Hz", v -> reverb(2, v, 12000, 20), 12000, 1000, 1);
         report("reverb bandwidth 12000 -> 1000 Hz", v -> reverb(2, 6000, v, 20), 12000, 1000, 1);
         report("reverb predelay 20 -> 120 ms", v -> reverb(2, 6000, 12000, v), 20, 120, 1);
-        report("delay time 2400 -> 3600 frames, in a loop", v -> loop(0.2, 0.5, (int) v, 120), 2400, 3600, 1);
-        report("tempo 120 -> 140 BPM, synced delay in a loop", v -> synced(), 120, 140, 1);
-        report("sustained sine, republished unchanged", v -> loop(0.2, 0.5, 2400, 120), 0, 0, 1);
-        report("20 rapid edits 20 ms apart, loop mix 0.5 <-> 0.7", v -> loop(0.2, v, 2400, 120), 0.5, 0.7, 20);
+        report("delay time 2400 -> 3600 frames, in a loop", v -> loop(0.2, 0.5, (int) v), 2400, 3600, 1);
+        report("tempo 120 -> 140 BPM, synced delay in a loop", v -> loop(0.2, 0.5, Map.of(NodeParam.SYNC, 1.0, NodeParam.DIVISION, 0.0)), 120, 140, 1);
+        report("sustained sine, republished unchanged", v -> loop(0.2, 0.5, 2400), 0, 0, 1);
+        report("20 rapid edits 20 ms apart, loop mix 0.5 <-> 0.7", v -> loop(0.2, v, 2400), 0.5, 0.7, 20);
+        report("delay time 3600 -> 2400 frames, in a loop", v -> loop(0.2, 0.5, (int) v), 3600, 2400, 1);
+        report("delay 2400 -> 3600, republished unchanged 10 ms later", v -> loop(0.2, 0.5, (int) v),
+                new double[] {2400, 3600, 3600}, Math.round(0.01e9));
+        double[] drag = new double[11];
+        for (int k = 0; k < drag.length; k++) drag[k] = 2400 + 120 * k;
+        report("delay time dragged 2400 -> 3600 in 10 steps 10 ms apart", v -> loop(0.2, 0.5, (int) v), drag, Math.round(0.01e9));
     }
 
     // === scenarios: each value v builds the graph; tempo scenarios vary the session BPM instead ===
@@ -52,19 +58,14 @@ public final class CarrySwitchTrial {
         return new Graph(3, nodes, edges);
     }
 
-    private static Graph loop(double toneGain, double mix, int frames, double unused) {
-        return new Graph(3, List.of(sine(toneGain), new Graph.Node("render", NodeType.AUDIO_RENDER, Map.of()),
-                new Graph.Node("bus", NodeType.MIX_BUS, Map.of(NodeParam.GAIN, mix)),
-                new Graph.Node("echo", NodeType.DELAY, Map.of(NodeParam.FRAMES, (double) frames)),
-                new Graph.Node("out", NodeType.OUTPUT, Map.of())),
-                List.of(Graph.edge("tone", "render"), Graph.edge("render", "bus"), Graph.edge("bus", "echo"),
-                        Graph.edge("echo", "bus"), new Graph.Edge("bus", "out", "out", "audio")));
+    private static Graph loop(double toneGain, double mix, int frames) {
+        return loop(toneGain, mix, Map.of(NodeParam.FRAMES, (double) frames));
     }
 
-    private static Graph synced() {
-        return new Graph(3, List.of(sine(0.2), new Graph.Node("render", NodeType.AUDIO_RENDER, Map.of()),
-                new Graph.Node("bus", NodeType.MIX_BUS, Map.of(NodeParam.GAIN, 0.5)),
-                new Graph.Node("echo", NodeType.DELAY, Map.of(NodeParam.SYNC, 1.0, NodeParam.DIVISION, 0.0)),
+    private static Graph loop(double toneGain, double mix, Map<String, Double> delay) {
+        return new Graph(3, List.of(sine(toneGain), new Graph.Node("render", NodeType.AUDIO_RENDER, Map.of()),
+                new Graph.Node("bus", NodeType.MIX_BUS, Map.of(NodeParam.GAIN, mix)),
+                new Graph.Node("echo", NodeType.DELAY, delay),
                 new Graph.Node("out", NodeType.OUTPUT, Map.of())),
                 List.of(Graph.edge("tone", "render"), Graph.edge("render", "bus"), Graph.edge("bus", "echo"),
                         Graph.edge("echo", "bus"), new Graph.Edge("bus", "out", "out", "audio")));
@@ -89,19 +90,28 @@ public final class CarrySwitchTrial {
 
     // === measurement ===
 
+    /** Edits alternate between the two values, 20 ms apart. */
     private static void report(String name, DoubleFunction<Graph> raw, double from, double to, int edits) {
+        double[] values = new double[edits + 1];
+        for (int e = 0; e <= edits; e++) values[e] = e % 2 == 0 ? from : to;
+        report(name, raw, values, Math.round(0.02e9));
+    }
+
+    /** values[0] plays first; each later value is one edit, spacing apart. */
+    private static void report(String name, DoubleFunction<Graph> raw, double[] values, long spacing) {
         DoubleFunction<Graph> graph = v -> held(raw.apply(v));
         boolean tempo = name.startsWith("tempo");
-        double[] carried = score(graph, from, to, edits, tempo, "trial");
-        double[] plain = score(graph, from, to, edits, tempo, null);
+        double[] carried = score(graph, values, spacing, tempo, "trial");
+        double[] plain = score(graph, values, spacing, tempo, null);
         System.out.println(String.format(Locale.ROOT, "%s | %+.1f (%d) at %.1f ms | %+.1f at %.1f ms",
                 name, carried[0], (long) carried[1], carried[2], plain[0], plain[2]));
     }
 
-    /** {worst switch window over steady, in dB; carries}. Edits alternate between the two values. */
-    private static double[] score(DoubleFunction<Graph> graph, double from, double to, int edits, boolean tempo, Object session) {
-        double bpm = tempo ? from : 120;
-        SessionState state = new SessionState(1, 0, 0, bpm, true, graph.apply(from));
+    /** {worst switch window over steady, in dB; carries; worst window's start in ms after its switch}. */
+    private static double[] score(DoubleFunction<Graph> graph, double[] values, long spacing, boolean tempo, Object session) {
+        int edits = values.length - 1;
+        double bpm = tempo ? values[0] : 120;
+        SessionState state = new SessionState(1, 0, 0, bpm, true, graph.apply(values[0]));
         LiveRenderer renderer = new LiveRenderer();
         var timeline = timeline(state);
         renderer.publish(timeline, session);
@@ -109,13 +119,13 @@ public final class CarrySwitchTrial {
         long now = render(renderer, timeline, 0, SETTLE, audio);
         List<Long> switches = new ArrayList<>();
         for (int e = 0; e < edits; e++) {
-            double value = e % 2 == 0 ? to : from;
+            double value = values[e + 1];
             state = new SessionState(state.revision() + 1, now, state.cycleAt(now), tempo ? value : bpm, true, graph.apply(value));
             timeline = timeline(state);
             timeline.prepare(now);
             renderer.publish(timeline, session);
             switches.add(now);
-            long until = e == edits - 1 ? now + TAIL : now + Math.round(0.02e9);
+            long until = e == edits - 1 ? now + TAIL : now + spacing;
             now = render(renderer, timeline, now, until, audio);
         }
         double[] highs = highPassEnergy(concat(audio));

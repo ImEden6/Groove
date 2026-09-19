@@ -229,10 +229,13 @@ its last frame, so a re-edit in the middle of a ramp carries on from where that 
 | `mix_bus` gain | linear; any bus whose id and type survive, whatever its inputs, since a bus holds no state |
 | `filter` cutoff, Q | cutoff on a log scale, Q linear, coefficients recomputed every frame |
 | `reverb` decay, damping, bandwidth | decay linear, damping and bandwidth on a log scale, recomputed every frame; predelay still switches at once |
-| `delay` made longer | keeps reading the old length until the new read position reaches carried history, then fades across over the ramp |
+| `delay` made longer | keeps reading the old length until the new read position reaches carried history, then fades across over the ramp; a switch during that fade continues it exactly, then fades on to the new length |
 | `delay` made shorter | jumps: the old read position is no longer in the line |
 
-Modulated settings follow their control input as before. 10 ms is the shortest of 5, 10 and 20 ms
+Known limitation: shortening a carried delay steps from the old length to the new one. Keeping the
+old read position would need a line longer than its own length.
+
+A modulated mix gain or filter cutoff follows its control input as before; a filter's Q still ramps. 10 ms is the shortest of 5, 10 and 20 ms
 for which `CarrySwitchTrial` scores every carried scenario at or below the uncarried one. At 5 ms a
 large cutoff jump scores above the uncarried path.
 `EffectCarryTests` checks tails far older than the replay window across knob edits, same-graph

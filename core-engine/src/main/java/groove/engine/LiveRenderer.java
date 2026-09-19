@@ -760,10 +760,8 @@ public final class LiveRenderer {
         double apartSeconds = Math.abs(program.state.cycleAt(boundary) - from.state.cycleAt(boundary)) * 240 / program.state.bpm();
         if (apartSeconds > 2 / (double) SAMPLE_RATE) return false;
         program.signals.continueFrom(from.signals, plan);
-        SignalGraph to = program.plan.signals(), was = from.plan.signals();
         for (int i = 0; i < program.sources.length; i++)
-            for (int j = 0; j < from.sources.length; j++)
-                if (to.sourceNodeId(i).equals(was.sourceNodeId(j))) { program.sources[i].voiceDonor = from.sources[j]; break; }
+            if (plan.sources[i] >= 0) program.sources[i].voiceDonor = from.sources[plan.sources[i]];
         program.carried = true;
         effectTransfers++;
         return true;
@@ -827,20 +825,19 @@ public final class LiveRenderer {
         return program.samples.lifetimeSeconds(event.sample(), event.whole().end() - event.whole().start(), secondsPerCycle);
     }
 
-    /** Like matches, across programs: event indexes may differ, so only the event itself counts. */
+    /** Like matches, across programs: event indexes may differ, so only the note itself counts. */
     private static boolean continues(ActiveVoice voice, VoiceProgram program, int index) {
-        if (voice.event < 0 || voice.onset != program.onsets[index] || voice.hash != program.hashes[index]) return false;
-        Event a = voice.data, b = program.data[index];
-        return a == b || a.whole().equals(b.whole()) && java.util.Objects.equals(a.tone(), b.tone())
-                && java.util.Objects.equals(a.sample(), b.sample());
+        return voice.event >= 0 && sameNote(voice, program, index);
     }
 
     private static boolean matches(ActiveVoice voice, VoiceProgram program, int index) {
-        if (voice.event < 0 || voice.event != program.events[index] || voice.onset != program.onsets[index]
-                || voice.hash != program.hashes[index]) return false;
+        return voice.event >= 0 && voice.event == program.events[index] && sameNote(voice, program, index);
+    }
+
+    private static boolean sameNote(ActiveVoice voice, VoiceProgram program, int index) {
+        if (voice.onset != program.onsets[index] || voice.hash != program.hashes[index]) return false;
         Event a = voice.data, b = program.data[index];
-        if (a == b) return true;
-        return a.whole().equals(b.whole()) && java.util.Objects.equals(a.tone(), b.tone())
+        return a == b || a.whole().equals(b.whole()) && java.util.Objects.equals(a.tone(), b.tone())
                 && java.util.Objects.equals(a.sample(), b.sample());
     }
 

@@ -713,7 +713,17 @@ A shorter crossfade for carried switches was trialled (`CarryFadeTrial`, report 
 adopted: at 64 frames a tone-gain or loop-gain jump scores about 6 times the click measure of the
 normal 240-frame fade. The trial also showed that a carried reverb whose decay changes steps in
 level about 9 ms after the switch, after any crossfade has ended, because its input gain changes at
-once; fade length cannot fix that. Smoothing changed parameters inside the incoming program would. In game the sound thread renders 2048-frame chunks with about 171 ms of
+once; fade length cannot fix that.
+
+`CarrySwitchTrial` (report only, superseding `CarryFadeTrial` for clicks) measures energy above
+6 kHz after a switch, carried and not, across 15 scenarios. Two changes made on 2026-09-19 bring
+every carried scenario to or below the uncarried path. Unchanged notes keep their voice filter
+history, so an unchanged republish scores 0 dB against +40 uncarried. Changed settings ramp over 10 ms (see
+[carrying effect state](PHASE-2-SIGNALS.md#carrying-effect-state)); for example a reverb decay
+change went from +30.4 to −0.3 dB against +1.2 uncarried. Shortening a delay still jumps (+37.7
+against +40.0 uncarried). B11 rerun afterwards stays in the ranges above: switch round median
+5.96–6.45 ms, p99 9.2–13.2 ms over 4 runs, one over the deadline; the incoming program alone costs
+the same as a steady block, so the ramps add nothing measurable. In game the sound thread renders 2048-frame chunks with about 171 ms of
 buffering, so a single long block at a commit is unlikely to be audible, but it breaks this
 benchmark's convention.
 

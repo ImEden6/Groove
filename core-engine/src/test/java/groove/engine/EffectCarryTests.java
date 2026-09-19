@@ -16,6 +16,8 @@ final class EffectCarryTests {
         transferRules();
         delayHistoryIsExact();
         settingsRamp();
+        delayFadeHandsOver();
+        modulatedFilterRamp();
         unchangedGraphContinuesExactly();
         predelayHistorySurvivesRepublishes();
         lateTempoChanges();
@@ -234,6 +236,57 @@ final class EffectCarryTests {
         same.reset();
         same.continueFrom(c, SignalRuntime.transferPlan(signalsOf(c), signalsOf(same)));
         check(same.ramping() == 0, "An unchanged gain does not ramp");
+    }
+
+    /** A switch during a lengthened delay's fade continues that fade, then fades on to its own length. */
+    private static void delayFadeHandsOver() {
+        int n = SignalRuntime.rampFrames;
+        for (int third : new int[] {1500, 1700}) {
+            SignalRuntime a = runtime(delayOnly(1000)), b = runtime(delayOnly(1500)), c = runtime(delayOnly(third));
+            double[] x = new double[2], y = new double[2];
+            int frame = 0;
+            for (; frame < 3000; frame++) { x[0] = x[1] = ramp(frame); a.process(x, frameNanos(frame)); }
+            b.reset();
+            b.continueFrom(a, SignalRuntime.transferPlan(signalsOf(a), signalsOf(b)));
+            // Switch again while b still reads the old tap
+            for (int k = 0; k < 100; k++, frame++) { x[0] = x[1] = ramp(frame); b.process(x, frameNanos(frame)); }
+            c.reset();
+            c.continueFrom(b, SignalRuntime.transferPlan(signalsOf(b), signalsOf(c)));
+            // b's own fade has 400 frames of wait and n of fade left, which c carries on exactly
+            int shared = 400 + n;
+            for (int k = 0; k < 3000; k++, frame++) {
+                x[0] = x[1] = y[0] = y[1] = ramp(frame % 5000);
+                b.process(x, frameNanos(frame));
+                c.process(y, frameNanos(frame));
+                if (k < shared || third == 1500)
+                    check(x[0] == y[0], "Delay 1500 -> " + third + " continues the handed-over fade at frame " + k);
+                check(y[0] > 0, "Delay 1500 -> " + third + " never drops to silence at frame " + k);
+            }
+            check(c.ramping() == 0, "Delay 1500 -> " + third + " finishes on its own length");
+        }
+    }
+
+    /** A modulated cutoff follows its control across a switch; only a changed Q ramps. */
+    private static void modulatedFilterRamp() {
+        SignalRuntime a = runtime(modulatedFilter(2)), same = runtime(modulatedFilter(2)), q = runtime(modulatedFilter(6));
+        double[] io = new double[2];
+        for (int i = 0; i < 1000; i++) { io[0] = io[1] = Math.sin(0.03 * i); a.process(io, frameNanos(i)); }
+        same.reset();
+        same.continueFrom(a, SignalRuntime.transferPlan(signalsOf(a), signalsOf(same)));
+        check(same.ramping() == 0, "An unchanged modulated filter does not ramp");
+        q.reset();
+        q.continueFrom(a, SignalRuntime.transferPlan(signalsOf(a), signalsOf(q)));
+        check(q.ramping() == 1, "A modulated filter's changed Q still ramps");
+    }
+
+    private static Graph modulatedFilter(double q) {
+        return new Graph(3, List.of(new Graph.Node("tone", NodeType.TONE, Map.of()), new Graph.Node("render", NodeType.AUDIO_RENDER, Map.of()),
+                new Graph.Node("lp", NodeType.FILTER, Map.of(NodeParam.CUTOFF_HZ, 1000.0, NodeParam.RESONANCE_Q, q)),
+                new Graph.Node("lfo", NodeType.LFO, Map.of(NodeParam.RATE, 40.0)),
+                new Graph.Node("range", NodeType.ATTENUVERTER, Map.of(NodeParam.SCALE, 1500.0, NodeParam.OFFSET, 1800.0)),
+                new Graph.Node("out", NodeType.OUTPUT, Map.of())),
+                List.of(Graph.edge("tone", "render"), Graph.edge("render", "lp"), Graph.edge("lfo", "range"),
+                        new Graph.Edge("range", "out", "lp", "cutoff"), new Graph.Edge("lp", "out", "out", "audio")));
     }
 
     private static Graph busOnly(double gain) {
