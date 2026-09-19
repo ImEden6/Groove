@@ -154,6 +154,7 @@ public final class BackendTests {
         EditorSessionTests.run();
         knobEntryChecks();
         PitchEntryTests.run();
+        EditorPrefsTests.run();
         SampleSliceEntryTests.run();
         sampleTreeChecks();
         HeadphoneLinkTests.run();

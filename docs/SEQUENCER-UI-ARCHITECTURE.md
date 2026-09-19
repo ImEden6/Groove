@@ -66,7 +66,7 @@ com.mervyn.groove.client.ui/
   EditorState.java             — selection, pan/zoom, drawer open/closed, dragged-wire-in-progress
   EditorLayout.java            — Map<String nodeId, Vec2> positions; load/save alongside the patch
   NodeView.java                — Graph.Node + resolved layout position + per-frame visual state
-  CableView.java                — resolved (fromPort screen pos, toPort screen pos, live-pulse phase)
+  CableView.java                — resolved (fromPort screen pos, toPort screen pos)
   InputController.java         — keyboard/mouse -> EditorState mutations (theme-agnostic, see §3)
   PatchSubmission.java          — the seam described above
   SampleRegistry.java           — the seam described above
@@ -96,7 +96,8 @@ public interface ThemeRenderer {
     void drawBackground(GuiGraphics g, int width, int height);
     void drawPanel(GuiGraphics g, PanelKind kind, int x, int y, int w, int h);
     void drawNodeCard(GuiGraphics g, NodeView node, boolean selected);
-    void drawCable(GuiGraphics g, CableView cable, float tempoPhase);
+    void drawCable(GuiGraphics g, CableView cable);
+    default void drawCablePulse(GuiGraphics g, CableView cable, float tempoPhase) {} // skipped when the player turns pulses off
     void drawPort(GuiGraphics g, int x, int y, PortState state); // free / compatible / incompatible / magnet
     void drawEuclidRing(GuiGraphics g, int x, int y, boolean[] steps);
     void tickDecorative(float partialTick); // scanline scroll, escapement advance, bloom timing — no-op for Vanilla

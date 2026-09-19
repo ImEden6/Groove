@@ -40,22 +40,28 @@ public final class TacticalRenderer implements ThemeRenderer {
     }
 
     @Override
-    public void drawCable(GuiGraphics graphics, CableView cable, float tempoPhase) {
+    public void drawCable(GuiGraphics graphics, CableView cable) {
+        double lastX = cable.fromScreen().x(), lastY = cable.fromScreen().y();
+        int steps = 24;
+        for (int i = 1; i <= steps; i++) {
+            double[] p = point(cable, (double) i / steps);
+            ThemeDraw.line(graphics, lastX, lastY, p[0], p[1], 5, CABLE_GLOW);
+            ThemeDraw.line(graphics, lastX, lastY, p[0], p[1], 1.5, CABLE_CORE);
+            lastX = p[0]; lastY = p[1];
+        }
+    }
+
+    @Override
+    public void drawCablePulse(GuiGraphics graphics, CableView cable, float tempoPhase) {
+        double[] p = point(cable, tempoPhase);
+        graphics.fill((int) p[0] - 2, (int) p[1] - 2, (int) p[0] + 2, (int) p[1] + 2, PULSE);
+    }
+
+    private static double[] point(CableView cable, double t) {
         double x0 = cable.fromScreen().x(), y0 = cable.fromScreen().y();
         double x3 = cable.toScreen().x(), y3 = cable.toScreen().y();
         double sag = Math.min(140, Math.max(24, Math.abs(x3 - x0) * 0.4));
-        double x1 = x0 + sag, y1 = y0, x2 = x3 - sag, y2 = y3;
-        double lastX = x0, lastY = y0;
-        int steps = 24;
-        for (int i = 1; i <= steps; i++) {
-            double t = (double) i / steps;
-            double x = ThemeDraw.cubic(x0, x1, x2, x3, t), y = ThemeDraw.cubic(y0, y1, y2, y3, t);
-            ThemeDraw.line(graphics, lastX, lastY, x, y, 5, CABLE_GLOW);
-            ThemeDraw.line(graphics, lastX, lastY, x, y, 1.5, CABLE_CORE);
-            lastX = x; lastY = y;
-        }
-        double px = ThemeDraw.cubic(x0, x1, x2, x3, tempoPhase), py = ThemeDraw.cubic(y0, y1, y2, y3, tempoPhase);
-        graphics.fill((int) px - 2, (int) py - 2, (int) px + 2, (int) py + 2, PULSE);
+        return new double[] {ThemeDraw.cubic(x0, x0 + sag, x3 - sag, x3, t), ThemeDraw.cubic(y0, y0, y3, y3, t)};
     }
 
     @Override

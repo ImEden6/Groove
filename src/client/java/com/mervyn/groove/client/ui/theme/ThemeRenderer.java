@@ -14,7 +14,9 @@ public interface ThemeRenderer {
     void drawBackground(GuiGraphics graphics, int width, int height);
     void drawPanel(GuiGraphics graphics, PanelKind kind, int x, int y, int width, int height);
     void drawNodeCard(GuiGraphics graphics, NodeView node, boolean selected);
-    void drawCable(GuiGraphics graphics, CableView cable, float tempoPhase);
+    void drawCable(GuiGraphics graphics, CableView cable);
+    /** The marker riding a connected cable on the beat. Skipped when the player turns pulses off. */
+    default void drawCablePulse(GuiGraphics graphics, CableView cable, float tempoPhase) {}
     void drawPort(GuiGraphics graphics, int x, int y, PortState state);
     void drawEuclidRing(GuiGraphics graphics, int x, int y, boolean[] steps);
     /** Advances scanline scroll, escapement ticks, bloom timing, or whatever else a theme

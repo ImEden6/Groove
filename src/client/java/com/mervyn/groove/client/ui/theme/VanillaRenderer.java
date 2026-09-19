@@ -37,14 +37,20 @@ public final class VanillaRenderer implements ThemeRenderer {
     }
 
     @Override
-    public void drawCable(GuiGraphics graphics, CableView cable, float tempoPhase) {
+    public void drawCable(GuiGraphics graphics, CableView cable) {
         int x0 = (int) cable.fromScreen().x(), y0 = (int) cable.fromScreen().y();
         int x1 = (int) cable.toScreen().x(), y1 = (int) cable.toScreen().y();
         int midX = x0 + (x1 - x0) / 2;
         ThemeDraw.line(graphics, x0, y0, midX, y0, 2, CABLE);
         ThemeDraw.line(graphics, midX, y0, midX, y1, 2, CABLE);
         ThemeDraw.line(graphics, midX, y1, x1, y1, 2, CABLE);
+    }
 
+    @Override
+    public void drawCablePulse(GuiGraphics graphics, CableView cable, float tempoPhase) {
+        int x0 = (int) cable.fromScreen().x(), y0 = (int) cable.fromScreen().y();
+        int x1 = (int) cable.toScreen().x(), y1 = (int) cable.toScreen().y();
+        int midX = x0 + (x1 - x0) / 2;
         int step = Math.min(PULSE_STEPS - 1, (int) (tempoPhase * PULSE_STEPS));
         double t = (double) step / (PULSE_STEPS - 1);
         int px, py;

@@ -41,10 +41,14 @@ public final class CrtRenderer implements ThemeRenderer {
     }
 
     @Override
-    public void drawCable(GuiGraphics graphics, CableView cable, float tempoPhase) {
+    public void drawCable(GuiGraphics graphics, CableView cable) {
+        ThemeDraw.line(graphics, cable.fromScreen().x(), cable.fromScreen().y(), cable.toScreen().x(), cable.toScreen().y(), 1, BORDER_SOFT);
+    }
+
+    @Override
+    public void drawCablePulse(GuiGraphics graphics, CableView cable, float tempoPhase) {
         double x0 = cable.fromScreen().x(), y0 = cable.fromScreen().y();
         double x1 = cable.toScreen().x(), y1 = cable.toScreen().y();
-        ThemeDraw.line(graphics, x0, y0, x1, y1, 1, BORDER_SOFT);
         double px = x0 + (x1 - x0) * tempoPhase, py = y0 + (y1 - y0) * tempoPhase;
         double segment = Math.max(6, Math.hypot(x1 - x0, y1 - y0) * 0.08);
         double dx = (x1 - x0), dy = (y1 - y0);

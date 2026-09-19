@@ -42,7 +42,7 @@ public final class NoOpThemeRenderer implements ThemeRenderer {
     }
 
     @Override
-    public void drawCable(GuiGraphics graphics, CableView cable, float tempoPhase) {
+    public void drawCable(GuiGraphics graphics, CableView cable) {
         int fromX = (int) cable.fromScreen().x(), fromY = (int) cable.fromScreen().y();
         int toX = (int) cable.toScreen().x();
         graphics.fill(Math.min(fromX, toX), fromY - 1, Math.max(fromX, toX), fromY + 1, CABLE);

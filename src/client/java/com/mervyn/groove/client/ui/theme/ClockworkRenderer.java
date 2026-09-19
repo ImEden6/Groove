@@ -57,7 +57,7 @@ public final class ClockworkRenderer implements ThemeRenderer {
     }
 
     @Override
-    public void drawCable(GuiGraphics graphics, CableView cable, float tempoPhase) {
+    public void drawCable(GuiGraphics graphics, CableView cable) {
         double x0 = cable.fromScreen().x(), y0 = cable.fromScreen().y();
         double x3 = cable.toScreen().x(), y3 = cable.toScreen().y();
         double sag = Math.min(160, Math.max(40, Math.abs(x3 - x0) * 0.7));

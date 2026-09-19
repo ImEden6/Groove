@@ -233,7 +233,9 @@ public final class GrooveEditorScreen extends Screen {
                 b -> { speakersOpen = !speakersOpen; accessOpen = false; layoutAllowlist();
                     if (speakersOpen) { state.clearSelection(); hideKnobEntry(); fetchSpeakers(); } });
         speakers.visible = blockSession != null; addRenderableWidget(speakers);
-        int x = Math.max(DRAWER_WIDTH + 10, width - 150) + 4;
+        addRenderableWidget(new ThemedButton(Math.max(367, width - 74), 2, 70, 20, pulseLabel(), font, theme, textColor,
+                b -> { EditorPrefs.setCablePulses(!EditorPrefs.cablePulses()); b.setMessage(pulseLabel()); }));
+        int x =Math.max(DRAWER_WIDTH + 10, width - 150) + 4;
         int bottom = Math.min(height - 20, 220);
         accessPanel.init(font, theme, textColor, x, width, bottom, this::addRenderableWidget, this::addRenderableWidget, this::sendAllowlist);
         layoutAllowlist();
@@ -244,6 +246,7 @@ public final class GrooveEditorScreen extends Screen {
         knobEntry.setMaxLength(32); knobEntry.setValue(entryText); knobEntry.visible = entryVisible; addRenderableWidget(knobEntry);
         if (entryVisible) { setFocused(knobEntry); knobEntry.setFocused(true); }
     }
+    private static Component pulseLabel() { return Component.literal(EditorPrefs.cablePulses() ? "Pulse: On" : "Pulse: Off"); }
     private void layoutAllowlist() {
         boolean visible = accessOpen && blockSession != null;
         accessPanel.updateVisibility(visible, isOwner);
@@ -287,7 +290,9 @@ public final class GrooveEditorScreen extends Screen {
             if (from == null || to == null) continue;
             Vec2 fromScreen = state.toScreen(NodeGeometry.port(from, state.node(edge.fromNode()).type(), edge.fromPort(), true));
             Vec2 toScreen = state.toScreen(NodeGeometry.port(to, state.node(edge.toNode()).type(), edge.toPort(), false));
-            renderer.drawCable(graphics, new CableView(fromScreen, toScreen, tempoPhase), tempoPhase);
+            CableView cable = new CableView(fromScreen, toScreen);
+            renderer.drawCable(graphics, cable);
+            if (EditorPrefs.cablePulses()) renderer.drawCablePulse(graphics, cable, tempoPhase);
         }
         if (state.isWireDragging()) {
             EditorState.WireDrag drag = state.wireDrag();
@@ -295,7 +300,7 @@ public final class GrooveEditorScreen extends Screen {
             if (from != null) {
                 Vec2 fromScreen = state.toScreen(NodeGeometry.port(from, state.node(drag.fromNode()).type(), drag.fromPort(), true));
                 Vec2 toScreen = state.toScreen(drag.pointer());
-                renderer.drawCable(graphics, new CableView(fromScreen, toScreen, tempoPhase), tempoPhase);
+                renderer.drawCable(graphics, new CableView(fromScreen, toScreen));
             }
         }
         for (Graph.Node node : state.nodes()) {
