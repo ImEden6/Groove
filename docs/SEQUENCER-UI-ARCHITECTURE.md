@@ -4,8 +4,6 @@
 
 - Animated/resizable drawer panel and vanilla sound-event indexing.
 - No concurrent-draft merging (not planned). The "Also editing" indicator and Reload/Commit conflict prompt have landed.
-- No hazard-stripe overlay rendered on the node card body for missing/mismatched samples (only the theme's fallback texture is substituted).
-
 Originally design-only; the editor screen, all 4 themes, and graph submission
 described here are now implemented (see the update note in §1 and the build
 order in §6). What's still missing is tracked in [FUTURE-WORK.md](FUTURE-WORK.md),
@@ -51,8 +49,8 @@ both now resolved:
   Vault's `[►]` audition/preview path decodes and plays for real.
 - **Missing-asset detection** (§4 of the UI spec) — `SampleCatalog.Status` plus
   the inspector's status line cover this; no separate `SampleRegistry` interface
-  was needed. See [FUTURE-WORK.md](FUTURE-WORK.md) for the remaining gap (no
-  hazard-stripe marker on the node card itself).
+  was needed. A node whose sample is missing or mismatched also gets a row of
+  hazard stripes on its card, drawn by the screen on every theme (`SampleWarnings`).
 
 ## 2. Package layout (proposed)
 

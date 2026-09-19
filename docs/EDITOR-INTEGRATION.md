@@ -56,6 +56,7 @@ Open `/groove-editor` (or specify tactical, clockwork, crt, vanilla). The defaul
 - **Pulse: On/Off** (top right) shows or hides the marker that rides each cable on the beat. It is a per-player setting saved to `groove/editor-prefs.properties` and applies to every theme.
 - The sample drawer reads the hot-reloaded client catalog. Search supports text, `@factory`, and `@custom`. Click to audition; arrows browse/preview, Enter toggles preview, and Space previews while browsing. Ctrl+B toggles the overlay without changing canvas coordinates.
 - Drag a sample onto the canvas to create a version-2 sample generator; connect its output before Apply. Drop onto a sample generator to preserve parameters and outgoing wires. Tone generators can also be converted. Undo restores the previous reference and cables.
+- A sample node whose asset is missing, still downloading, or doesn't match the server's copy shows a row of yellow and black stripes on its card; hover the card for the reason.
 - The Inspector shows sample availability, an asynchronously decoded waveform, and themed rotary parameter controls. Drag a knob or its label/value vertically; hold Ctrl when starting for fine adjustment. Each gesture is one undo step. Scroll over the Inspector to reach clipped controls. Indicators reflect the current draft, including undo/redo; Apply is still required for playback changes. Delete removes selected nodes.
 - Preview audio is local and separate from the session. Escape stops it first; closing the screen stops it as well.
 

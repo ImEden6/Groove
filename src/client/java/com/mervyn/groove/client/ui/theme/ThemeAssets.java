@@ -47,6 +47,9 @@ public final class ThemeAssets {
         return present ? id : HAZARD;
     }
 
+    /** The shared yellow and black stripe sprite, also used as the missing-texture fallback. */
+    public static ResourceLocation hazard() { return HAZARD; }
+
     private static ResourceLocation spriteId(String path) {
         return GrooveMod.id(path);
     }

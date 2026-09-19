@@ -3,6 +3,7 @@ package com.mervyn.groove.client.ui;
 import com.mervyn.groove.client.ui.theme.NoOpThemeRenderer;
 import com.mervyn.groove.client.ui.theme.PanelKind;
 import com.mervyn.groove.client.ui.theme.PortState;
+import com.mervyn.groove.client.ui.theme.ThemeAssets;
 import com.mervyn.groove.client.ui.theme.ThemeRenderer;
 import groove.engine.Graph;
 import groove.engine.NodeType;
@@ -303,9 +304,13 @@ public final class GrooveEditorScreen extends Screen {
                 renderer.drawCable(graphics, new CableView(fromScreen, toScreen));
             }
         }
+        Vec2 mouseWorld = state.toWorld(mouseX, mouseY);
+        Graph.Node topNode = null; // later cards draw over earlier ones
+        boolean portHovered = false;
         for (Graph.Node node : state.nodes()) {
             Vec2 origin = state.layout().get(node.id());
             if (origin == null) continue;
+            if (NodeGeometry.containsBody(origin, mouseWorld)) topNode = node;
             Vec2 screenOrigin = state.toScreen(origin);
             graphics.pose().pushPose();
             graphics.pose().translate(screenOrigin.x(), screenOrigin.y(), 0);
@@ -320,20 +325,33 @@ public final class GrooveEditorScreen extends Screen {
             if (nodeLoopMsg != null) {
                 graphics.drawString(font, font.plainSubstrByWidth(nodeLoopMsg, 136), 8, 52, 0xffcc66, false);
             }
+            String sampleWarning = SampleWarnings.of(node, SampleLibrary.catalog());
+            if (sampleWarning != null) {
+                // One 8px row of stripe tiles inside the body's 6px border, below the type line.
+                for (int tileX = 6; tileX + 8 <= NodeGeometry.WIDTH - 6; tileX += 8)
+                    graphics.blitSprite(ThemeAssets.hazard(), tileX, 46, 8, 8);
+            }
             graphics.pose().popPose();
             for (var socket : node.type().outputPorts()) {
                 Vec2 port = state.toScreen(NodeGeometry.port(origin, node.type(), socket.name(), true));
                 renderer.drawPort(graphics, (int) port.x(), (int) port.y(), PortState.FREE);
-                if (port.distanceTo(new Vec2(mouseX,mouseY)) < 9)
+                if (port.distanceTo(new Vec2(mouseX,mouseY)) < 9) {
+                    portHovered = true;
                     graphics.renderTooltip(font, Component.literal(socket.name()+" · "+socket.type().name()),mouseX,mouseY);
+                }
             }
             for (var socket : node.type().inputPorts()) {
                 Vec2 port = state.toScreen(NodeGeometry.port(origin, node.type(), socket.name(), false));
                 renderer.drawPort(graphics, (int) port.x(), (int) port.y(), PortState.FREE);
-                if (port.distanceTo(new Vec2(mouseX,mouseY)) < 9)
+                if (port.distanceTo(new Vec2(mouseX,mouseY)) < 9) {
+                    portHovered = true;
                     graphics.renderTooltip(font, Component.literal(socket.name()+" · "+socket.type().name()),mouseX,mouseY);
+                }
             }
         }
+        String hoverWarning = topNode == null || portHovered || !canvasVisible(mouseX, mouseY)
+                ? null : SampleWarnings.of(topNode, SampleLibrary.catalog());
+        if (hoverWarning != null) graphics.renderTooltip(font, Component.literal(hoverWarning), mouseX, mouseY);
         if (request != null && System.nanoTime() - submittedAt > 10_000_000_000L) {
             request = null; message = "No acknowledgement. Reload before retrying; your draft is still here.";
         }
