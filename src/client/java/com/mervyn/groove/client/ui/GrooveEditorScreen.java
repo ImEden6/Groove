@@ -247,6 +247,13 @@ public final class GrooveEditorScreen extends Screen {
         knobEntry.setMaxLength(32); knobEntry.setValue(entryText); knobEntry.visible = entryVisible; addRenderableWidget(knobEntry);
         if (entryVisible) { setFocused(knobEntry); knobEntry.setFocused(true); }
     }
+    /** Port name and type over a port, or the sample warning over a striped card. */
+    private String hoverTooltip(EditorState.Hit hit) {
+        Graph.Node node = state.node(hit.nodeId());
+        if (!hit.isPort()) return SampleWarnings.of(node, SampleLibrary.catalog());
+        var socket = hit.output() ? node.type().outputPort(hit.port()) : node.type().inputPort(hit.port());
+        return socket.name() + " · " + socket.type().name();
+    }
     private static Component pulseLabel() { return Component.literal(EditorPrefs.cablePulses() ? "Pulse: On" : "Pulse: Off"); }
     private void layoutAllowlist() {
         boolean visible = accessOpen && blockSession != null;
@@ -304,13 +311,9 @@ public final class GrooveEditorScreen extends Screen {
                 renderer.drawCable(graphics, new CableView(fromScreen, toScreen));
             }
         }
-        Vec2 mouseWorld = state.toWorld(mouseX, mouseY);
-        Graph.Node topNode = null; // later cards draw over earlier ones
-        boolean portHovered = false;
         for (Graph.Node node : state.nodes()) {
             Vec2 origin = state.layout().get(node.id());
             if (origin == null) continue;
-            if (NodeGeometry.containsBody(origin, mouseWorld)) topNode = node;
             Vec2 screenOrigin = state.toScreen(origin);
             graphics.pose().pushPose();
             graphics.pose().translate(screenOrigin.x(), screenOrigin.y(), 0);
@@ -335,23 +338,14 @@ public final class GrooveEditorScreen extends Screen {
             for (var socket : node.type().outputPorts()) {
                 Vec2 port = state.toScreen(NodeGeometry.port(origin, node.type(), socket.name(), true));
                 renderer.drawPort(graphics, (int) port.x(), (int) port.y(), PortState.FREE);
-                if (port.distanceTo(new Vec2(mouseX,mouseY)) < 9) {
-                    portHovered = true;
-                    graphics.renderTooltip(font, Component.literal(socket.name()+" · "+socket.type().name()),mouseX,mouseY);
-                }
             }
             for (var socket : node.type().inputPorts()) {
                 Vec2 port = state.toScreen(NodeGeometry.port(origin, node.type(), socket.name(), false));
                 renderer.drawPort(graphics, (int) port.x(), (int) port.y(), PortState.FREE);
-                if (port.distanceTo(new Vec2(mouseX,mouseY)) < 9) {
-                    portHovered = true;
-                    graphics.renderTooltip(font, Component.literal(socket.name()+" · "+socket.type().name()),mouseX,mouseY);
-                }
             }
         }
-        String hoverWarning = topNode == null || portHovered || !canvasVisible(mouseX, mouseY)
-                ? null : SampleWarnings.of(topNode, SampleLibrary.catalog());
-        if (hoverWarning != null) graphics.renderTooltip(font, Component.literal(hoverWarning), mouseX, mouseY);
+        String hoverTip = canvasVisible(mouseX, mouseY) ? state.hitAt(state.toWorld(mouseX, mouseY)).map(this::hoverTooltip).orElse(null) : null;
+        if (hoverTip != null) graphics.renderTooltip(font, Component.literal(hoverTip), mouseX, mouseY);
         if (request != null && System.nanoTime() - submittedAt > 10_000_000_000L) {
             request = null; message = "No acknowledgement. Reload before retrying; your draft is still here.";
         }
@@ -561,7 +555,7 @@ public final class GrooveEditorScreen extends Screen {
             if (sampleDragging && (!drawer || mouseX >= DRAWER_WIDTH) && mouseY >= 24 && mouseY < height - 20
                     && (!rightPanelActive() || !insideInspector(mouseX, mouseY))) {
                 Vec2 world = state.toWorld(mouseX, mouseY);
-                String target = state.nodes().stream().filter(n -> state.layout().get(n.id()) != null && NodeGeometry.containsBody(state.layout().get(n.id()), world)).map(Graph.Node::id).findFirst().orElse(null);
+                String target = state.cardAt(world).orElse(null);
                 try { state.dropSample(draggedSample, world, target); message = "Draft changed. Connect new nodes, then Apply."; }
                 catch (IllegalArgumentException error) { message = error.getMessage(); }
             }

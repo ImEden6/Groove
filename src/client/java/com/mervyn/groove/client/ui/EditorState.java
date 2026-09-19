@@ -90,6 +90,44 @@ public final class EditorState {
     public Set<Graph.Edge> edges() { return Collections.unmodifiableSet(edges); }
     public Graph.Node node(String id) { return nodes.get(id); }
 
+    /** What the pointer is over: a port ({@code port != null}) or a card body. */
+    public record Hit(String nodeId, String port, boolean output) {
+        public boolean isPort() { return port != null; }
+    }
+
+    /** The topmost thing at {@code world}, matching draw order: later cards cover earlier
+     *  ones and their ports, and a node's own ports sit above its card. */
+    public java.util.Optional<Hit> hitAt(Vec2 world) { return hitAt(world, true); }
+
+    /** Plain clicks pass {@code inputPorts=false}, since an input port does nothing for them
+     *  and its magnet area would otherwise hide the card beneath. */
+    public java.util.Optional<Hit> hitAt(Vec2 world, boolean inputPorts) {
+        List<Graph.Node> drawOrder = List.copyOf(nodes.values());
+        for (int i = drawOrder.size() - 1; i >= 0; i--) {
+            Graph.Node node = drawOrder.get(i);
+            Vec2 origin = layout.get(node.id());
+            if (origin == null) continue;
+            for (var port : node.type().outputPorts())
+                if (NodeGeometry.port(origin, node.type(), port.name(), true).distanceTo(world) <= NodeGeometry.MAGNET_RADIUS)
+                    return java.util.Optional.of(new Hit(node.id(), port.name(), true));
+            if (inputPorts) for (var port : node.type().inputPorts())
+                if (NodeGeometry.port(origin, node.type(), port.name(), false).distanceTo(world) <= NodeGeometry.MAGNET_RADIUS)
+                    return java.util.Optional.of(new Hit(node.id(), port.name(), false));
+            if (NodeGeometry.containsBody(origin, world)) return java.util.Optional.of(new Hit(node.id(), null, false));
+        }
+        return java.util.Optional.empty();
+    }
+
+    /** The topmost card under {@code world}, ignoring every port. */
+    public java.util.Optional<String> cardAt(Vec2 world) {
+        List<Graph.Node> drawOrder = List.copyOf(nodes.values());
+        for (int i = drawOrder.size() - 1; i >= 0; i--) {
+            Vec2 origin = layout.get(drawOrder.get(i).id());
+            if (origin != null && NodeGeometry.containsBody(origin, world)) return java.util.Optional.of(drawOrder.get(i).id());
+        }
+        return java.util.Optional.empty();
+    }
+
     public void onGraphChanged(Runnable callback) { this.onGraphChanged = callback == null ? () -> {} : callback; }
     public void onTogglePlay(Runnable callback) { this.onTogglePlay = callback == null ? () -> {} : callback; }
     /** Space. Actual play and stop state is server authoritative session state, not editor state. */
