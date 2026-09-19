@@ -42,6 +42,9 @@ final class VoiceDsp {
         }
     }
 
+    /** The prepared sample this voice plays, or null for a tone. */
+    SamplePlayback sample() { return sample; }
+
     /** Continues {@code other}'s filter history; call right after start. */
     void continueFrom(VoiceDsp other) {
         leftFilter.copyStateFrom(other.leftFilter); rightFilter.copyStateFrom(other.rightFilter);

@@ -123,6 +123,16 @@ public final class LiveRenderer {
         VoiceProgram predecessor;
         /** Sound thread: a carried switch's outgoing source, whose matching voices keep their filter history. */
         VoiceProgram voiceDonor;
+        /** Carried without an output crossfade: only this program renders from its first frame. */
+        boolean seamless;
+        /** The program a seamless carry continued. */
+        VoiceProgram seamlessFrom;
+        /** Sound thread, a source of a seamless switch: the outgoing source it fades from where it enters the graph. */
+        VoiceProgram fadeFrom;
+        int fadeLeft;
+        /** Same tempo and exact position as fadeFrom, so the fade can be skipped if every voice continues identically. */
+        boolean fadeOptional;
+        final double[] fadeStereo = new double[2];
         /** Built on the control thread before publication: how to continue each candidate graph's effects. */
         final java.util.Map<SignalGraph, SignalRuntime.TransferPlan> transferPlans;
         final groove.engine.samples.PreparedSamples samples;
@@ -217,8 +227,8 @@ public final class LiveRenderer {
     private final ReplayBudget replayBudget;
     /** False keeps the original per-frame selection, for differential tests. */
     private final boolean cachedSelection;
-    /** Tests only: voices started, stolen and carried across a switch. */
-    long voiceStarts, voiceSteals, selections, voiceCarries;
+    /** Tests only: voices started, stolen and carried across a switch, and switches with no output crossfade. */
+    long voiceStarts, voiceSteals, selections, voiceCarries, seamlessSwitches, sourceFadesSkipped;
     /** Budget slot and its generation at registration; written by the budget on the sound thread. */
     int replaySlot = -1;
     long replayGeneration;
@@ -384,6 +394,8 @@ public final class LiveRenderer {
             long now = origin + Math.round(elapsed);
             fade = Math.min(1, fade + 1.0 / 240);
             sampleTimeline(currentTimeline, now, currentStereo);
+            // A seamless carry already continues the outgoing program, so it is not mixed in
+            if (continuesPrevious(currentTimeline, now)) programBlend = 1;
             double left = currentStereo[0] * programBlend;
             double right = currentStereo[1] * programBlend;
             if (previous != null && programBlend < 1) {
@@ -511,6 +523,11 @@ public final class LiveRenderer {
         if (timeline.pending.lastNow == Long.MIN_VALUE && timeline.current.lastNow != Long.MIN_VALUE)
             timeline.pending.predecessor = timeline.current;
         sample(timeline.pending, now, out);
+        if (timeline.pending.seamless) {
+            // Pending continues current's graph and sources, so current stops here
+            releaseReplay(timeline.current);
+            return;
+        }
         // sample() already applies recoveryGain, so the incoming weight is the product
         // of both fades. Use its complement for the outgoing program to preserve level
         // even when a short recovery finishes during the scheduled fade.
@@ -698,6 +715,7 @@ public final class LiveRenderer {
             program.tails[tail] = v; v.fadeFrame = 0;
             voiceSteals++;
         }
+        int started = 0, identical = 0;
         for (int i = 0; i < program.count; i++) {
             boolean exists = false;
             for (ActiveVoice v : program.voices)
@@ -711,11 +729,29 @@ public final class LiveRenderer {
                 v.start(event, program.events[i], program.hashes[i], program.onsets[i], duration,
                         event.sample() == null ? null : program.samples.get(event.sample()));
                 if (donor != null) for (ActiveVoice d : donor.voices)
-                    if (continues(d, program, i)) { v.dsp.continueFrom(d.dsp); voiceCarries++; break; }
-                voiceStarts++;
+                    if (continues(d, program, i)) {
+                        v.dsp.continueFrom(d.dsp); voiceCarries++;
+                        if (d.dsp.sample() == v.dsp.sample()) identical++;
+                        break;
+                    }
+                voiceStarts++; started++;
                 break;
             }
         }
+        // Every outgoing voice goes on identically and nothing new starts, so there is nothing to fade
+        if (donor != null && program.fadeFrom == donor && program.fadeOptional && donor.fadeFrom == null
+                && started == identical && sounding(donor) == identical) {
+            program.fadeFrom = null;
+            sourceFadesSkipped++;
+        }
+    }
+
+    /** Voices a program is playing, or -1 while a stolen one is still fading out. */
+    private static int sounding(VoiceProgram program) {
+        for (ActiveVoice v : program.tails) if (v.event >= 0) return -1;
+        int n = 0;
+        for (ActiveVoice v : program.voices) if (v.event >= 0) n++;
+        return n;
     }
 
     /** A cycle safely before (cycles - onset) * secondsPerCycle reaches duration, with room for rounding. */
@@ -732,6 +768,8 @@ public final class LiveRenderer {
     }
 
     private void reset(VoiceProgram program) {
+        // A fresh source keeps the fade its carry just set; one that had played loses it
+        if (program.lastNow != Long.MIN_VALUE) program.fadeFrom = null;
         for (ActiveVoice v : program.voices) v.event = -1;
         for (ActiveVoice v : program.tails) v.event = -1;
         if (program.signals != null) program.signals.reset();
@@ -759,17 +797,36 @@ public final class LiveRenderer {
         long boundary = Math.max(program.state.effectiveNanos(), from.state.effectiveNanos());
         double apartSeconds = Math.abs(program.state.cycleAt(boundary) - from.state.cycleAt(boundary)) * 240 / program.state.bpm();
         if (apartSeconds > 2 / (double) SAMPLE_RATE) return false;
-        program.signals.continueFrom(from.signals, plan);
-        for (int i = 0; i < program.sources.length; i++)
-            if (plan.sources[i] >= 0) program.sources[i].voiceDonor = from.sources[plan.sources[i]];
+        boolean continuous = program.signals.continueFrom(from.signals, plan);
+        program.seamless = plan.seamless && continuous;
+        if (program.seamless) { seamlessSwitches++; program.seamlessFrom = from; }
+        boolean exact = apartSeconds == 0 && program.state.bpm() == from.state.bpm();
+        for (int i = 0; i < program.sources.length; i++) {
+            if (plan.sources[i] < 0) continue;
+            VoiceProgram source = program.sources[i], outgoing = from.sources[plan.sources[i]];
+            source.voiceDonor = outgoing;
+            // The outgoing graph stops here, so its sources keep playing into this one instead
+            if (program.seamless) { source.fadeFrom = outgoing; source.fadeLeft = carriedFadeFrames; source.fadeOptional = exact; }
+        }
         program.carried = true;
         effectTransfers++;
         return true;
     }
 
-    private static boolean audibleCarried(Playback playback, long now) {
-        VoiceProgram active = playback.pending != null && now >= playback.pending.state.effectiveNanos() ? playback.pending : playback.current;
-        return active.carried;
+    private static boolean audibleCarried(Playback playback, long now) { return active(playback, now).carried; }
+
+    /** The audible program just seamlessly continued the playback being faded out, so that fade can stop. */
+    private boolean continuesPrevious(Playback playback, long now) {
+        if (playback == null) return false;
+        VoiceProgram active = active(playback, now), from = active.seamlessFrom;
+        if (from == null) return false;
+        // Needed only on the carry's frame; holding it longer would chain every old program's buffers
+        active.seamlessFrom = null;
+        return previous != null && (from == previous.current || from == previous.pending);
+    }
+
+    private static VoiceProgram active(Playback playback, long now) {
+        return playback.pending != null && now >= playback.pending.state.effectiveNanos() ? playback.pending : playback.current;
     }
 
     /** The program of a playback that rendered most recently. */
@@ -815,9 +872,22 @@ public final class LiveRenderer {
     }
 
     private void sampleSources(VoiceProgram program, long now, double[] out) {
-        for (int i = 0; i < program.sources.length; i++) sample(program.sources[i], now, program.sourceStereo[i]);
+        for (int i = 0; i < program.sources.length; i++) sampleSource(program.sources[i], now, program.sourceStereo[i]);
         for (int i = 0; i < program.triggers.length; i++) program.triggerWindows[i] = program.triggers[i].window;
         program.signals.process(program.sourceStereo, program.triggerWindows, out, now);
+    }
+
+    /** A source, faded in from the outgoing source it replaced; that one may still be fading from its own. */
+    private void sampleSource(VoiceProgram source, long now, double[] out) {
+        sample(source, now, out);
+        VoiceProgram old = source.fadeFrom;
+        if (old == null) return;
+        sampleSource(old, now, source.fadeStereo);
+        double w = SignalRuntime.smoothstep((carriedFadeFrames - source.fadeLeft + 1) / (double) carriedFadeFrames);
+        // Written as a step from the old value, so identical sources pass through exactly
+        out[0] = source.fadeStereo[0] + (out[0] - source.fadeStereo[0]) * w;
+        out[1] = source.fadeStereo[1] + (out[1] - source.fadeStereo[1]) * w;
+        if (--source.fadeLeft <= 0) source.fadeFrom = null;
     }
 
     private static double eventDuration(VoiceProgram program, Event event, double secondsPerCycle) {

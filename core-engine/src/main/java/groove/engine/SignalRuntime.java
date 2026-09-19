@@ -144,9 +144,11 @@ public final class SignalRuntime {
         final int[] ramp;
         /** Per incoming audio source: the outgoing source with the same node id, or -1. */
         final int[] sources;
+        /** Only audio patterns and ramped settings differ, so the switch needs no output crossfade. */
+        final boolean seamless;
         final int carried;
-        private TransferPlan(SignalGraph from, int[] source, int[] ramp, int[] sources) {
-            this.from = from; this.source = source; this.ramp = ramp; this.sources = sources;
+        private TransferPlan(SignalGraph from, int[] source, int[] ramp, int[] sources, boolean seamless) {
+            this.from = from; this.source = source; this.ramp = ramp; this.sources = sources; this.seamless = seamless;
             int n = 0;
             for (int s : source) if (s >= 0) n++;
             carried = n;
@@ -203,7 +205,64 @@ public final class SignalRuntime {
         for (int s = 0; s < sources.length; s++)
             for (int t = 0; t < from.sourceCount(); t++)
                 if (to.sourceNodeId(s).equals(from.sourceNodeId(t))) { sources[s] = t; break; }
-        return new TransferPlan(from, source, ramp, sources);
+        boolean seamless = sameStructure(from, to);
+        for (int i = 0; i < source.length && seamless; i++) if (stateful(to.nodes[i]) && source[i] < 0) seamless = false;
+        return new TransferPlan(from, source, ramp, sources, seamless);
+    }
+
+    /**
+     * True when the graphs differ only in audio patterns and in settings a carry ramps. Pattern nodes
+     * that feed only audio sources may change freely, since the sources crossfade where they enter.
+     */
+    private static boolean sameStructure(SignalGraph from, SignalGraph to) {
+        Set<String> freeFrom = audioPatterns(from), freeTo = audioPatterns(to);
+        Map<String, Graph.Node> fixed = new HashMap<>();
+        for (Graph.Node n : from.nodes) if (!freeFrom.contains(n.id())) fixed.put(n.id(), n);
+        int count = 0;
+        for (Graph.Node n : to.nodes) {
+            if (freeTo.contains(n.id())) continue;
+            Graph.Node was = fixed.get(n.id());
+            if (was == null || !sameSettings(was, n)) return false;
+            count++;
+        }
+        if (count != fixed.size()) return false;
+        return fixedEdges(from.edges, freeFrom).equals(fixedEdges(to.edges, freeTo));
+    }
+
+    /** Pattern nodes upstream of no trigger render: they only shape what an audio source plays. */
+    private static Set<String> audioPatterns(SignalGraph graph) {
+        Map<String, List<String>> inputs = new HashMap<>();
+        for (Graph.Edge e : graph.edges) inputs.computeIfAbsent(e.toNode(), k -> new ArrayList<>()).add(e.fromNode());
+        Set<String> triggerSide = new HashSet<>();
+        Deque<String> open = new ArrayDeque<>();
+        for (Graph.Node n : graph.nodes) if (n.type() == NodeType.TRIGGER_RENDER) open.add(n.id());
+        while (!open.isEmpty())
+            for (String up : inputs.getOrDefault(open.pop(), List.of())) if (triggerSide.add(up)) open.add(up);
+        Set<String> free = new HashSet<>();
+        for (Graph.Node n : graph.nodes)
+            if (!n.type().isSignalNode() && n.type() != NodeType.OUTPUT && !triggerSide.contains(n.id())) free.add(n.id());
+        return free;
+    }
+
+    private static Set<Graph.Edge> fixedEdges(List<Graph.Edge> edges, Set<String> free) {
+        Set<Graph.Edge> kept = new HashSet<>();
+        for (Graph.Edge e : edges) if (!free.contains(e.fromNode())) kept.add(e);
+        return kept;
+    }
+
+    /** Same node apart from settings a carry ramps; a delay's length is checked when it carries. */
+    private static boolean sameSettings(Graph.Node a, Graph.Node b) {
+        if (a.type() != b.type() || !Objects.equals(a.sample(), b.sample()) || !Objects.equals(a.birthNanos(), b.birthNanos())) return false;
+        Set<String> ramped = switch (b.type()) {
+            case MIX_BUS -> Set.of(NodeParam.GAIN);
+            case FILTER -> Set.of(NodeParam.CUTOFF_HZ, NodeParam.RESONANCE_Q);
+            case REVERB -> Set.of(NodeParam.DECAY_SECONDS, NodeParam.DAMPING_HZ, NodeParam.BANDWIDTH_HZ);
+            case DELAY -> Set.of(NodeParam.FRAMES, NodeParam.SYNC, NodeParam.DIVISION, NodeParam.FREE_RUN);
+            default -> Set.of();
+        };
+        Map<String, Double> x = new HashMap<>(a.params()), y = new HashMap<>(b.params());
+        x.keySet().removeAll(ramped); y.keySet().removeAll(ramped);
+        return x.equals(y);
     }
 
     private static boolean stateful(Graph.Node n) {
@@ -263,9 +322,11 @@ public final class SignalRuntime {
     /**
      * Sound thread: continues {@code previous}'s effect tails in this freshly reset runtime. Delays
      * keep their input history, remapped when their length changed; filters keep their history
-     * under new coefficients; reverbs keep their tank. No allocation.
+     * under new coefficients; reverbs keep their tank. No allocation. Returns false when a delay
+     * made shorter has to jump, which a seamless switch cannot hide.
      */
-    void continueFrom(SignalRuntime previous, TransferPlan plan) {
+    boolean continueFrom(SignalRuntime previous, TransferPlan plan) {
+        boolean continuous = true;
         if (plan.from != previous.graph || plan.source.length != graph.nodes.length)
             throw new IllegalArgumentException("Transfer plan does not match these runtimes");
         for (int i = 0; i < plan.source.length; i++) {
@@ -285,7 +346,7 @@ public final class SignalRuntime {
         for (int i = 0; i < plan.ramp.length; i++) {
             int j = plan.ramp[i];
             if (j < 0) continue;
-            if (delayLeft[i] != null) continueTap(i, previous, j);
+            if (delayLeft[i] != null) continuous &= continueTap(i, previous, j);
             else if (applied[i] != null) {
                 int mod = graph.controlInput[i];
                 // A modulated gain or cutoff follows its control; a filter's Q can still ramp
@@ -297,10 +358,11 @@ public final class SignalRuntime {
                 }
             }
         }
+        return continuous;
     }
 
-    /** Keeps a delay reading what was being heard, including a fade in progress, then fades to its own length. */
-    private void continueTap(int i, SignalRuntime previous, int j) {
+    /** Keeps a delay reading what was being heard, including a fade in progress, then fades to its own length. False if it jumps. */
+    private boolean continueTap(int i, SignalRuntime previous, int j) {
         int length = delayLeft[i].length, was = previous.delayLeft[j].length;
         filled[i] = Math.min(previous.filled[j], length);
         boolean fading = previous.rampLeft[j] > 0;
@@ -308,11 +370,12 @@ public final class SignalRuntime {
         if (from > filled[i] || to > length) {
             // A shorter line has lost a tap of the fade; keep the one mostly heard if it still holds it
             int heard = fading && previous.rampWeight(j) >= 0.5 ? to : from;
-            if (heard > filled[i]) return;
-            from = to = heard; fading = false;
+            if (heard <= filled[i] && heard != length) fade(i, heard, length, rampTotal + Math.max(0, length - filled[i]));
+            return false;
         }
         if (fading) fade(i, from, to, previous.rampLeft[j]);
         else if (from != length) fade(i, from, length, rampTotal + Math.max(0, length - filled[i]));
+        return true;
     }
 
     /** Reads tap from, then fades to tap to once it holds real input: the frames beyond rampTotal wait for it. */
@@ -335,7 +398,10 @@ public final class SignalRuntime {
     private void startRamp(int node) { if (rampLeft[node] == 0) ramping++; rampLeft[node] = rampTotal; }
 
     /** This frame's weight of the new setting: 0 while a ramp waits, 1 on its last frame. */
-    private double rampWeight(int node) { return Math.max(0, rampTotal - rampLeft[node] + 1) / (double) rampTotal; }
+    private double rampWeight(int node) { return smoothstep(Math.max(0, rampTotal - rampLeft[node] + 1) / (double) rampTotal); }
+
+    /** 0 to 1 with zero slope at both ends, so a ramp adds no corner where it starts or stops. */
+    static double smoothstep(double w) { return w * w * (3 - 2 * w); }
 
     private static double lerp(double a, double b, double w) { return a + (b - a) * w; }
     private static double logLerp(double a, double b, double w) { return a * Math.pow(b / a, w); }

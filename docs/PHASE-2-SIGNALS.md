@@ -194,8 +194,9 @@ rate difference as a seek. Seeks, resyncs, underruns, stop and restart, and fres
 happens on the sound thread immediately before the incoming program renders its first frame, for a
 commit at its effective time, not when it was compiled or published. The control worker prepares a
 `TransferPlan` from the compiled graphs of every program that could still be playing then, and the
-incoming program's buffers already exist, so nothing is allocated. The outgoing program keeps its
-own state through the 240-frame crossfade and is then released.
+incoming program's buffers already exist, so nothing is allocated. Unless the switch is seamless
+(below), the outgoing program keeps its own state through the 240-frame crossfade and is then
+released.
 
 Effects match by node id and type, never by position in the compiled graph:
 
@@ -210,7 +211,7 @@ feedback loop carry as a group: every member keeps its id, type and inputs, the 
 members, and every effect in it passes its own rule, or the whole group resets. This includes
 breaking a loop entirely: its surviving effects reset even when their own inputs are unchanged.
 Reverb transfers preserve the full predelay history so later predelay increases can still read it. Removed or reset
-effects use the existing short crossfade. `effectTransfers()` counts programs that carried.
+effects use the existing short crossfade, since such a switch is never seamless. `effectTransfers()` counts programs that carried.
 
 A carrying program's voices also continue. Its sources match the outgoing program's by node id,
 and a voice whose note (onset, tone or sample) is unchanged copies the outgoing voice's filter
@@ -220,13 +221,15 @@ starts fresh, as before. An unchanged republish is therefore bit-exact with unin
 playback.
 
 Settings that change on a carried switch ramp over 10 ms (`SignalRuntime.rampFrames`, 480 frames)
-instead of stepping. A step reaches the output after the 240-frame crossfade has hidden the switch,
-and a delay records it and repeats it. Each ramp starts from the value the outgoing runtime used on
-its last frame, so a re-edit in the middle of a ramp carries on from where that ramp had got to.
+instead of stepping, because a delay would record the step and repeat it. Each ramp starts from the
+value the outgoing runtime used on its last frame, so a re-edit in the middle of a ramp carries on
+from where that ramp had got to. Ramps follow a smoothstep, $3w^2 - 2w^3$, which starts and ends
+with zero slope, so a ramp adds no corner at either end. It stays between the old and new values,
+so every frame of a ramp is a setting between two valid ones.
 
 | Setting | Ramp |
 | --- | --- |
-| `mix_bus` gain | linear; any bus whose id and type survive, whatever its inputs, since a bus holds no state |
+| `mix_bus` gain | linear in value; any bus whose id and type survive, whatever its inputs, since a bus holds no state |
 | `filter` cutoff, Q | cutoff on a log scale, Q linear, coefficients recomputed every frame |
 | `reverb` decay, damping, bandwidth | decay linear, damping and bandwidth on a log scale, recomputed every frame; predelay still switches at once |
 | `delay` made longer | keeps reading the old length until the new read position reaches carried history, then fades across over the ramp; a switch during that fade continues it exactly, then fades on to the new length |
@@ -235,9 +238,32 @@ its last frame, so a re-edit in the middle of a ramp carries on from where that 
 Known limitation: shortening a carried delay steps from the old length to the new one. Keeping the
 old read position would need a line longer than its own length.
 
-A modulated mix gain or filter cutoff follows its control input as before; a filter's Q still ramps. 10 ms is the shortest of 5, 10 and 20 ms
-for which `CarrySwitchTrial` scores every carried scenario at or below the uncarried one. At 5 ms a
-large cutoff jump scores above the uncarried path.
+A modulated mix gain or filter cutoff follows its control input as before; a filter's Q still ramps.
+10 ms was the shortest of 5, 10 and 20 ms for which `CarrySwitchTrial` scored every carried
+scenario at or below the uncarried one with linear ramps and the output crossfade. With smoothstep
+ramps and seamless switches 5 ms also passes, but 10 ms scores lower on large cutoff and Q jumps
+(+11.3 and +2.4 dB against +25.0 and +5.3), so it stays.
+
+### Seamless switches
+
+When a carried switch changes only audio patterns (pattern nodes that feed audio sources and no
+trigger render) and settings that ramp, and no delay is shortened, it drops the output crossfade:
+the outgoing program stops rendering its graph at the switch. Its sources keep playing for 240
+frames instead, fading into the incoming graph where each source enters it, with the same
+smoothstep weight. Only the sources render twice, not every effect. A source fades from the old
+value by adding the weighted difference, so identical sources pass through exactly. A switch during
+that fade fades from the source that was itself still fading.
+
+The fade is skipped too when nothing would change: the same tempo, an exact position match, and
+every outgoing voice continued by an identical incoming voice (same note and same sample playback),
+with nothing else starting and no stolen voice still fading out. An unchanged republish therefore
+renders only the incoming program from its first frame.
+
+Anything else keeps the output crossfade, including added, removed or renamed nodes, rewiring,
+predelay or filter mode changes, control and trigger pattern changes, and a shortened delay. When a
+seamless commit lands inside an ordinary crossfade, the earlier playback keeps fading out.
+`TransferPlan.seamless` holds the structural rule; `LiveRenderer` adds the delay check at the
+carry.
 `EffectCarryTests` checks tails far older than the replay window across knob edits, same-graph
 republishes, scheduled commits, 20 rapid edits and three speakers on one replay budget, and that
 every fallback path still resets; `perfBench` B11 measures the copy and the switch round, and

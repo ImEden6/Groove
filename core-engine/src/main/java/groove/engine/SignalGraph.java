@@ -12,6 +12,8 @@ public final class SignalGraph {
      *  scheduler must look back at least this far so a still-releasing voice's onset stays visible. */
     public static final int MAX_ENVELOPE_TAIL_CYCLES = 24;
     final Graph.Node[] nodes;
+    /** Every edge, pattern ones included, so a transfer plan can compare structure. */
+    final List<Graph.Edge> edges;
     final int[][] audioInputs;
     final int[] controlInput, order;
     final int output;
@@ -31,6 +33,7 @@ public final class SignalGraph {
     private SignalGraph(Graph graph, List<Integer> sorted, Map<String, Integer> ids, int output,
                         List<Integer> renders, List<LoopPlan> plans, List<Integer> triggers, List<LoopPlan> triggerLoopPlans) {
         nodes = graph.nodes().toArray(Graph.Node[]::new);
+        edges = graph.edges();
         this.output = output;
         sourceNodes = renders.stream().mapToInt(Integer::intValue).toArray();
         sourcePlans = plans.toArray(LoopPlan[]::new);

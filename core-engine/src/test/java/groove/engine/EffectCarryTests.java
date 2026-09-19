@@ -14,6 +14,8 @@ final class EffectCarryTests {
 
     static void run() {
         transferRules();
+        seamlessRules();
+        seamlessSwitches();
         delayHistoryIsExact();
         settingsRamp();
         delayFadeHandsOver();
@@ -179,6 +181,171 @@ final class EffectCarryTests {
         check(carries(signals(a), signals(new Graph(3, bNodes, b.edges())), "rev"), "Reverb setting changes carry");
     }
 
+    /** A switch skips the output crossfade only when audio patterns and ramped settings are all that changed. */
+    private static void seamlessRules() {
+        Graph base = ruleGraph(Map.of(NodeParam.CUTOFF_HZ, 3000.0), false, "pre");
+        SignalGraph from = signals(base);
+        check(seamless(from, base), "An unchanged graph is seamless");
+        check(seamless(from, replace(base, new Graph.Node("tone", NodeType.TONE, Map.of(NodeParam.GAIN, 0.2)))), "An audio pattern change is seamless");
+        check(seamless(from, ruleGraph(Map.of(NodeParam.CUTOFF_HZ, 900.0, NodeParam.RESONANCE_Q, 2.0), false, "pre")), "Cutoff and Q changes are seamless");
+        check(seamless(from, replace(base, new Graph.Node("bus", NodeType.MIX_BUS, Map.of(NodeParam.GAIN, 0.7)))), "A bus gain change is seamless");
+        check(seamless(from, replace(base, new Graph.Node("rev", NodeType.REVERB, Map.of(NodeParam.DECAY_SECONDS, 6.0)))), "A reverb decay change is seamless");
+        check(seamless(from, replace(base, new Graph.Node("echo", NodeType.DELAY, Map.of(NodeParam.FRAMES, 960.0)))), "A delay length change is left to the carry");
+        check(!seamless(from, replace(base, new Graph.Node("rev", NodeType.REVERB, Map.of(NodeParam.PRE_DELAY_MS, 30.0)))), "A predelay change is not seamless");
+        check(!seamless(from, ruleGraph(Map.of(NodeParam.CUTOFF_HZ, 3000.0, NodeParam.MODE, 1.0), false, "pre")), "A filter mode change is not seamless");
+        check(!seamless(from, ruleGraph(Map.of(NodeParam.CUTOFF_HZ, 3000.0), false, "render")), "Rewiring is not seamless");
+        check(!seamless(from, ruleGraph(Map.of(NodeParam.CUTOFF_HZ, 3000.0), true, "pre")), "An added edge is not seamless");
+        List<Graph.Node> extra = new ArrayList<>(base.nodes());
+        extra.add(new Graph.Node("spare", NodeType.LFO, Map.of()));
+        List<Graph.Edge> extraEdges = new ArrayList<>(base.edges());
+        extraEdges.add(new Graph.Edge("spare", "out", "sum", "gain"));
+        check(!seamless(from, new Graph(3, extra, extraEdges)), "An added node is not seamless");
+        Graph triggered = triggered(1.0);
+        check(seamless(signals(triggered), triggered), "An unchanged triggered graph is seamless");
+        check(!seamless(signals(triggered), triggered(0.5)), "A trigger pattern change is not seamless");
+    }
+
+    private static boolean seamless(SignalGraph from, Graph to) { return SignalRuntime.transferPlan(from, signals(to)).seamless; }
+
+    private static Graph replace(Graph graph, Graph.Node node) {
+        List<Graph.Node> nodes = new ArrayList<>();
+        for (Graph.Node n : graph.nodes()) nodes.add(n.id().equals(node.id()) ? node : n);
+        return new Graph(3, nodes, graph.edges());
+    }
+
+    /** An audio tone into a delay loop whose bus gain follows an envelope on a separate trigger pattern. */
+    private static Graph triggered(double beatGain) {
+        return new Graph(3, List.of(new Graph.Node("tone", NodeType.TONE, Map.of()), new Graph.Node("beat", NodeType.TONE, Map.of(NodeParam.GAIN, beatGain)),
+                new Graph.Node("render", NodeType.AUDIO_RENDER, Map.of()), new Graph.Node("trig", NodeType.TRIGGER_RENDER, Map.of()),
+                new Graph.Node("env", NodeType.ENVELOPE, Map.of()), new Graph.Node("bus", NodeType.MIX_BUS, Map.of()),
+                new Graph.Node("echo", NodeType.DELAY, Map.of(NodeParam.FRAMES, 480.0, NodeParam.FREE_RUN, 1.0)), new Graph.Node("out", NodeType.OUTPUT, Map.of())),
+                List.of(Graph.edge("tone", "render"), Graph.edge("beat", "trig"), new Graph.Edge("trig", "out", "env", "trigger"),
+                        Graph.edge("render", "bus"), new Graph.Edge("env", "out", "bus", "gain"), Graph.edge("bus", "echo"),
+                        Graph.edge("echo", "bus"), new Graph.Edge("bus", "out", "out", "audio")));
+    }
+
+    /**
+     * Knob edits that only change what a source plays skip the output crossfade, even several inside
+     * one crossfade's length with small blocks; a shortened delay falls back to it.
+     */
+    private static void seamlessSwitches() {
+        LiveRenderer renderer = new LiveRenderer();
+        SessionState state = start(dryAndEcho(0.3));
+        var timeline = timeline(state);
+        renderer.publish(timeline, SESSION);
+        float[] lead = renderer64(renderer, timeline, 0, SWITCH);
+        double steady = maxStep(lead, lead.length / 2 - RATE, lead.length / 2);
+        long at = SWITCH;
+        float[] edits = new float[0];
+        for (double gain : new double[] {0.2, 0.25, 0.3}) {
+            state = editAt(state, dryAndEcho(gain), at);
+            timeline = timeline(state);
+            timeline.prepare(at);
+            renderer.publish(timeline, SESSION);
+            // 64-frame blocks: each switch lands inside the previous one's 240-frame source fade
+            edits = concat(edits, renderer64(renderer, timeline, at, at + frameNanos(64)));
+            at += frameNanos(64);
+        }
+        edits = concat(edits, renderer64(renderer, timeline, at, at + seconds(1)));
+        check(renderer.seamlessSwitches == 3 && renderer.effectTransfers() == 3 && renderer.sourceFadesSkipped == 0,
+                "Three source-only edits were seamless and each faded its source: " + renderer.seamlessSwitches + " / " + renderer.sourceFadesSkipped);
+        double worst = maxStep(edits, 0, edits.length / 2);
+        check(worst < 2 * steady, String.format(Locale.ROOT, "Nested source fades stay smooth: largest step %.4f, steady %.4f", worst, steady));
+        for (float v : edits) check(Float.isFinite(v), "Nested fades stay finite");
+
+        // A seamless commit landing inside an ordinary crossfade must not cut the playback still fading out
+        LiveRenderer layered = new LiveRenderer();
+        SessionState old = start(dryAndEcho(0.3));
+        var oldTimeline = timeline(old);
+        layered.publish(oldTimeline, SESSION);
+        float[] quiet = renderer64(layered, oldTimeline, 0, SWITCH);
+        double calm = maxStep(quiet, quiet.length / 2 - RATE, quiet.length / 2);
+        // A renamed delay cannot carry, so the switch to it crossfades as before
+        Graph renamed = renameDelay(dryAndEcho(0.3));
+        SessionState current = editAt(old, renamed, SWITCH);
+        long commit = SWITCH + frameNanos(64);
+        SessionState pending = new SessionState(current.revision() + 1, commit, current.cycleAt(commit), BPM, true, renamed);
+        var both = new LiveRenderer.Timeline(new LiveRenderer.Program(current, GraphCompiler.compile(renamed)),
+                new LiveRenderer.Program(pending, GraphCompiler.compile(renamed)));
+        both.prepare(SWITCH);
+        layered.publish(both, SESSION);
+        float[] crossing = renderer64(layered, both, SWITCH, SWITCH + seconds(0.05));
+        check(layered.seamlessSwitches == 1, "The commit carried seamlessly from the program it replaced");
+        check(maxStep(crossing, 0, crossing.length / 2) < 2 * calm, String.format(Locale.ROOT,
+                "The earlier playback keeps fading out: largest step %.4f, steady %.4f", maxStep(crossing, 0, crossing.length / 2), calm));
+
+        // Shortening a delay jumps, so it keeps the output crossfade
+        LiveRenderer shorter = new LiveRenderer();
+        SessionState before = start(tail(false, 0.3));
+        var first = timeline(before);
+        shorter.publish(first, SESSION);
+        render(shorter, first, 0, SWITCH);
+        Graph cut = replace(tail(false, 0.3), new Graph.Node("echo", NodeType.DELAY, Map.of(NodeParam.FRAMES, 6000.0)));
+        var second = timeline(editAt(before, cut, SWITCH));
+        second.prepare(SWITCH);
+        shorter.publish(second, SESSION);
+        render(shorter, second, SWITCH, SWITCH + seconds(0.1));
+        check(shorter.effectTransfers() == 1 && shorter.seamlessSwitches == 0, "A shortened delay carries but keeps the output crossfade");
+
+        // A resync in the middle of a source fade drops the fade and plays on
+        LiveRenderer resynced = new LiveRenderer();
+        SessionState r = start(tail(false, 0.3));
+        var r1 = timeline(r);
+        resynced.publish(r1, SESSION);
+        renderer64(resynced, r1, 0, SWITCH);
+        var r2 = timeline(editAt(r, tail(false, 0.2), SWITCH));
+        r2.prepare(SWITCH);
+        resynced.publish(r2, SESSION);
+        renderer64(resynced, r2, SWITCH, SWITCH + frameNanos(64));
+        resynced.resynchronize();
+        float[] after = renderer64(resynced, r2, SWITCH + frameNanos(64), SWITCH + seconds(2));
+        check(rms(after, 0, 1.5, 1.9, 0) > 0.01, "Playback continues after a resync during a source fade");
+    }
+
+    /** A tone heard dry beside a delayed copy, so a step where the source enters reaches the output unfiltered. */
+    private static Graph dryAndEcho(double toneGain) {
+        return new Graph(3, List.of(new Graph.Node("tone", NodeType.TONE, Map.of(NodeParam.GAIN, toneGain, NodeParam.FREQUENCY, 220.0)),
+                new Graph.Node("render", NodeType.AUDIO_RENDER, Map.of()), new Graph.Node("echo", NodeType.DELAY, Map.of(NodeParam.FRAMES, 12000.0)),
+                new Graph.Node("sum", NodeType.MIX_BUS, Map.of(NodeParam.GAIN, 0.5)), new Graph.Node("out", NodeType.OUTPUT, Map.of())),
+                List.of(Graph.edge("tone", "render"), Graph.edge("render", "echo"), Graph.edge("render", "sum"),
+                        Graph.edge("echo", "sum"), new Graph.Edge("sum", "out", "out", "audio")));
+    }
+
+    private static Graph renameDelay(Graph graph) {
+        List<Graph.Node> nodes = new ArrayList<>();
+        for (Graph.Node n : graph.nodes()) nodes.add(n.id().equals("echo") ? new Graph.Node("echo2", n.type(), n.params()) : n);
+        List<Graph.Edge> edges = new ArrayList<>();
+        for (Graph.Edge e : graph.edges()) edges.add(new Graph.Edge(e.fromNode().equals("echo") ? "echo2" : e.fromNode(), e.fromPort(),
+                e.toNode().equals("echo") ? "echo2" : e.toNode(), e.toPort()));
+        return new Graph(3, nodes, edges);
+    }
+
+    private static float[] renderer64(LiveRenderer renderer, LiveRenderer.Timeline timeline, long from, long to) {
+        int frames = (int) Math.round((to - from) * RATE / 1e9);
+        float[] out = new float[frames * 2], block = new float[128];
+        for (int at = 0; at < frames; at += 64) {
+            int n = Math.min(64, frames - at);
+            long now = from + Math.round(at * 1e9 / RATE);
+            timeline.prepare(now);
+            renderer.render(block, n, now);
+            System.arraycopy(block, 0, out, at * 2, n * 2);
+        }
+        return out;
+    }
+
+    /** Largest change between consecutive left samples in frames [from, to). */
+    private static double maxStep(float[] audio, int from, int to) {
+        double worst = 0;
+        for (int f = Math.max(1, from); f < to; f++) worst = Math.max(worst, Math.abs(audio[f * 2] - audio[f * 2 - 2]));
+        return worst;
+    }
+
+    private static float[] concat(float[] a, float[] b) {
+        float[] all = java.util.Arrays.copyOf(a, a.length + b.length);
+        System.arraycopy(b, 0, all, a.length, b.length);
+        return all;
+    }
+
     /** A delay line holds its last L inputs, so a length change keeps exactly the most recent ones. */
     private static void delayHistoryIsExact() {
         for (int newLength : new int[] {600, 1000, 1500}) {
@@ -198,7 +365,7 @@ final class EffectCarryTests {
                 double expected = fed + k - newLength >= fed - 1000 ? ramp(fed + k - newLength) : 0;
                 // A longer line keeps the old tap until the new one reaches history, then fades over the ramp.
                 if (longer > 0 && k < longer + n) {
-                    double old = fed + k - 1000 < fed ? ramp(fed + k - 1000) : 0, w = Math.max(0, k - longer + 1) / (double) n;
+                    double old = fed + k - 1000 < fed ? ramp(fed + k - 1000) : 0, w = SignalRuntime.smoothstep(Math.max(0, k - longer + 1) / (double) n);
                     expected = old + (expected - old) * w;
                 }
                 check(io[0] == expected && io[1] == expected, String.format(Locale.ROOT,
@@ -209,7 +376,7 @@ final class EffectCarryTests {
 
     private static double ramp(int frame) { return (frame + 1) * 1e-3; }
 
-    /** A changed bus gain moves linearly over the ramp; a re-edit mid-ramp starts where the last one got to. */
+    /** A changed bus gain follows the smoothstep ramp; a re-edit mid-ramp starts where the last one got to. */
     private static void settingsRamp() {
         int n = SignalRuntime.rampFrames;
         SignalRuntime a = runtime(busOnly(0.2)), b = runtime(busOnly(0.9)), c = runtime(busOnly(0.5));
@@ -221,7 +388,7 @@ final class EffectCarryTests {
         for (int k = 0; k < half; k++) {
             io[0] = io[1] = 1;
             b.process(io, frameNanos(1000 + k));
-            check(io[0] == 0.2 + (0.9 - 0.2) * ((k + 1) / (double) n), "Bus gain ramps linearly at frame " + k + ": " + io[0]);
+            check(io[0] == 0.2 + (0.9 - 0.2) * SignalRuntime.smoothstep((k + 1) / (double) n), "Bus gain follows the ramp at frame " + k + ": " + io[0]);
         }
         double reached = io[0];
         c.reset();
@@ -492,6 +659,7 @@ final class EffectCarryTests {
         check(java.util.Arrays.equals(ref, got) && oldWorst > 1e-3, String.format(Locale.ROOT,
                 "%s same-graph republish matches the uninterrupted reference: worst %.2e, old path %.2e", kind, worst, oldWorst));
         check(republished.effectTransfers() == 1 && republished.voiceCarries == 1, kind + " same-graph republish carried its effects and voice");
+        check(republished.seamlessSwitches == 1 && republished.sourceFadesSkipped == 1, kind + " same-graph republish needed no crossfade at all");
     }
 
     /** Twenty edits 20 ms apart, some published twice between renders, then silence: the tail survives. */

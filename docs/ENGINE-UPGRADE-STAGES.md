@@ -709,6 +709,14 @@ the median. B11 splits the switch block into three `render` calls, so nothing is
 The outgoing program rendering through the crossfade is the largest part, then the copy and reset.
 Once the crossfade ends the incoming program costs the same as in steady state.
 
+Seamless switches (see [signals](PHASE-2-SIGNALS.md#seamless-switches)) have since removed the
+crossfade's cost for B11's knob edits. The outgoing graph stops at the switch, and a source whose
+voices all go on unchanged skips its fade. Over 4 runs on 2026-09-19 the crossfade segment costs
+the same as a steady one (1.60–1.65 ms against 1.59–1.65), and the switch round median fell to
+4.77–5.09 ms (steady 3.38–3.50). The p99 is 7.6–11.4 ms, still over the deadline in 2 of 4 runs,
+while the steady round's own p99 reached 6.3 ms in the same runs. Frame 0 (+1.2 ms: reset, copy and
+first voice selection) is now the main extra cost.
+
 A shorter crossfade for carried switches was trialled (`CarryFadeTrial`, report only) and not
 adopted: at 64 frames a tone-gain or loop-gain jump scores about 6 times the click measure of the
 normal 240-frame fade. The trial also showed that a carried reverb whose decay changes steps in
@@ -723,7 +731,10 @@ history, so an unchanged republish scores 0 dB against +40 uncarried. Changed se
 change went from +30.4 to −0.3 dB against +1.2 uncarried. Shortening a delay still jumps (+37.7
 against +40.0 uncarried). B11 rerun afterwards stays in the ranges above: switch round median
 5.96–6.45 ms, p99 9.2–13.2 ms over 4 runs, one over the deadline; the incoming program alone costs
-the same as a steady block, so the ramps add nothing measurable. In game the sound thread renders 2048-frame chunks with about 171 ms of
+the same as a steady block, so the ramps add nothing measurable. Seamless switches and smoothstep
+ramps then brought most scenarios near 0 dB: a tone gain change 36.1 → 0.0, filter Q 22.6 → 2.4, a
+lengthened delay 7.5 → 0.2, a delay-time drag 24.8 → 0.7. A large cutoff jump is at +11.3, against
++29.4 uncarried. In game the sound thread renders 2048-frame chunks with about 171 ms of
 buffering, so a single long block at a commit is unlikely to be audible, but it breaks this
 benchmark's convention.
 
