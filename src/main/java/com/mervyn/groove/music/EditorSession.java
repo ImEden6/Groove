@@ -26,7 +26,8 @@ public final class EditorSession {
         this.bpm = bpm;
         committed = new SessionTimeline(published, publishedBpm, publishedPlaying, now);
     }
-    public EditorSession(long now) { this(Graph.demo(), 128, Graph.demo(), 128, now); }
+    // public EditorSession(long now) { this(Graph.demo(), 128, Graph.demo(), 128, now); }
+    public EditorSession(long now) { this(groove.engine.SignalDemo.reverbSources(), 128, groove.engine.SignalDemo.reverbSources(), 128, now); }
     public Graph draft() { return draft; }
     public double bpm() { return bpm; }
     public boolean playing() { return playing; }
