@@ -448,8 +448,11 @@ public final class GrooveEditorScreen extends Screen {
         int statusColor = draftConflict != null ? 0xffaa4444 : textColor;
         if (blockSession != null && !blockSession.viewers().isEmpty())
             status = status + "  [Also editing: " + String.join(", ", blockSession.viewers()) + "]";
-        graphics.drawString(font, font.plainSubstrByWidth(status, width - 8), 8, height - 14, statusColor, false);
-        graphics.drawString(font, String.format(java.util.Locale.ROOT, "Cycle %.2f  %s", cycle, live != null && live.playing() ? "Playing" : "Stopped"), 249, 8, textColor, false);
+        // In the transport bar, not the toolbar, where the Access and Speakers buttons now sit
+        String transport = String.format(java.util.Locale.ROOT, "Cycle %.2f  %s", cycle, live != null && live.playing() ? "Playing" : "Stopped");
+        int transportWidth = font.width(transport);
+        graphics.drawString(font, font.plainSubstrByWidth(status, Math.max(0, width - 24 - transportWidth)), 8, height - 14, statusColor, false);
+        graphics.drawString(font, transport, width - 8 - transportWidth, height - 14, textColor, false);
         super.render(graphics, mouseX, mouseY, partialTick);
         if (draggedSample != null && sampleDragging) graphics.drawString(font, draggedSample.assetId(), mouseX + 8, mouseY, 0xffcc66, false);
         if (state.isQuickSpawnOpen()) {
