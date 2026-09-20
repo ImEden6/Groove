@@ -10,6 +10,7 @@ import com.mervyn.groove.music.HeadphonePackets;
 import com.mervyn.groove.music.MusicPackets;
 import com.mervyn.groove.music.SpeakerPackets;
 import dev.emi.trinkets.api.TrinketsApi;
+import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientBlockEntityEvents;
 import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientChunkEvents;
 import groove.engine.ClockSync;
 import groove.engine.LiveRenderer;
@@ -158,6 +159,15 @@ public final class MusicClient {
         ClientPlayConnectionEvents.DISCONNECT.register((handler, client) -> reset(client));
         ClientChunkEvents.CHUNK_LOAD.register((level, chunk) -> addSpeakers(chunk));
         ClientChunkEvents.CHUNK_UNLOAD.register((level, chunk) -> removeSpeakers(level, chunk));
+        // A speaker placed or broken in a chunk that is already loaded never reaches the chunk events
+        ClientBlockEntityEvents.BLOCK_ENTITY_LOAD.register((entity, level) -> {
+            if (level != speakerLevel || !(entity instanceof SpeakerBlockEntity)) return;
+            if (speakerSegments.add(entity.getBlockPos().immutable())) emitterScanCooldown = 0;
+        });
+        ClientBlockEntityEvents.BLOCK_ENTITY_UNLOAD.register((entity, level) -> {
+            if (level != speakerLevel || !(entity instanceof SpeakerBlockEntity)) return;
+            dropSpeaker(entity.getBlockPos().immutable());
+        });
         ClientLifecycleEvents.CLIENT_STOPPING.register(client -> { reset(client); COMPILER.shutdownNow(); PREVIEW_COMPILER.shutdownNow(); SPEAKER_COMPILER.shutdownNow(); SCHEDULER.shutdownNow(); });
         ClientTickEvents.END_CLIENT_TICK.register(client -> {
             reapFadingEmitters(client);
@@ -325,6 +335,14 @@ public final class MusicClient {
             }
         }
         if (added) emitterScanCooldown = 0;
+    }
+
+    /** Forgets one speaker: its segment, link, emitter and pending samples. */
+    private static void dropSpeaker(BlockPos pos) {
+        speakerSegments.remove(pos);
+        SpeakerLink link = speakerLinks.remove(pos);
+        if (link != null) invalidateSpeaker(pos, link);
+        emitterScanCooldown = 0;
     }
 
     private static void removeSpeakers(net.minecraft.client.multiplayer.ClientLevel level, LevelChunk chunk) {
