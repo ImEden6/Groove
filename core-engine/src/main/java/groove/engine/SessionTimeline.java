@@ -33,6 +33,15 @@ public final class SessionTimeline {
                 SignalGraph.assignBirths(graph, null, now)), null);
         return snapshot;
     }
+    /** Drops a queued change that only starts or stops the current patch, so a commit can take its place. */
+    public boolean cancelPendingPlayChange(long now) {
+        Snapshot before = snapshot(now);
+        if (before.pending == null || before.pending.bpm() != before.current.bpm()
+                || !before.pending.graph().equals(before.current.graph())) return false;
+        snapshot = new Snapshot(before.current, null);
+        return true;
+    }
+
     public Snapshot schedule(Graph graph, double bpm, boolean playing, long expectedRevision, long now) {
         Snapshot before = snapshot(now);
         if (expectedRevision != before.revision()) throw new IllegalArgumentException("Stale revision; refresh before editing");

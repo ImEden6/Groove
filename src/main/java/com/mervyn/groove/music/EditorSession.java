@@ -37,6 +37,8 @@ public final class EditorSession {
     public void edit(Graph graph, double tempo, boolean play) { edit(graph, tempo, play, System.nanoTime()); }
     public void edit(Graph graph, double tempo, boolean play, long now) {
         validateTempo(tempo);
+        // Play and stop reach the committed patch too, which is what linked speakers hear
+        if (play != playing) startOrStopCommitted(play, now);
         draftCycle = preview().cycleAt(now);
         draftAt = now;
         previewGraph = SignalGraph.assignBirths(graph, previewGraph, now);
@@ -45,8 +47,19 @@ public final class EditorSession {
         playing = play;
         revision++;
     }
+
+    /** Keeps the committed patch as it is and only changes whether it plays, at the next safe downbeat.
+     *  A queued commit carries its own play state, so it is left to land rather than refusing the draft. */
+    private void startOrStopCommitted(boolean play, long now) {
+        var before = committed.snapshot(now);
+        SessionState state = before.current();
+        if (before.pending() != null || state.playing() == play) return;
+        committed.schedule(state.graph(), state.bpm(), play, before.revision(), now);
+    }
     public void commit(long expected, long now) {
         if (expected != revision) throw new IllegalArgumentException("Draft changed; review it before committing");
+        // This commit carries the play state itself, so a queued play change can make way for it
+        committed.cancelPendingPlayChange(now);
         var before = committed.snapshot(now);
         committed.schedule(draft, bpm, playing, before.revision(), now);
     }

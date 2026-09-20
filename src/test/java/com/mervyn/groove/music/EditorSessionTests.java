@@ -25,7 +25,11 @@ final class EditorSessionTests {
         var changed = new Graph(3, Graph.demo().nodes(), Graph.demo().edges());
         a.edit(changed, 150, true);
         check(a.draft().equals(changed) && b.bpm() == 128, "Blocks have independent drafts");
-        check(a.committed(0).current().bpm() == 128 && a.committed(0).pending() == null, "Draft does not publish");
+        check(a.committed(0).current().bpm() == 128 && a.committed(0).pending().bpm() == 128
+                && a.committed(0).pending().graph().equals(a.committed(0).current().graph()),
+                "A draft edit publishes no graph or tempo");
+        check(!a.committed(0).current().playing() && a.committed(0).pending().playing()
+                && b.committed(0).pending() == null, "Starting the draft starts the committed patch too");
         a.edit(changed, 160, true);
         check(a.bpm() == 160 && a.revision() == 2, "Draft writes use last write wins");
         reject(() -> a.commit(1, 0), "Unseen draft cannot be committed");
@@ -35,6 +39,19 @@ final class EditorSessionTests {
         check(a.committed(0).pending().bpm() == 160, "Later draft preserves queued commit");
         reject(() -> a.commit(3, 0), "Pending commit rejects another commit");
         check(a.committed(2_000_000_000L).current().bpm() == 160, "Commit takes effect on timeline");
+        // Play, then Commit straight after: both want the one queued slot, and the commit wins
+        var transport = new EditorSession(0);
+        transport.edit(transport.draft(), 128, true, 0);
+        check(transport.committed(0).pending().playing(), "Play queues a start for the committed patch");
+        transport.commit(transport.revision(), 0);
+        check(transport.committed(0).pending().playing() && transport.committed(0).pending().revision() == 1,
+                "Commit supersedes the queued play change");
+        check(transport.committed(2_000_000_000L).current().playing(), "The committed patch ends up playing");
+        transport.edit(transport.draft(), 128, false, 2_000_000_000L);
+        var stopping = transport.committed(2_000_000_000L);
+        check(stopping.pending() != null && !stopping.pending().playing()
+                && stopping.pending().graph().equals(stopping.current().graph()), "Stop queues a stop for the committed patch");
+
         var incomplete = new Graph(3, List.of(), List.of());
         a.edit(GraphJson.decodeDraft(GraphJson.encode(incomplete)), 120, false);
         reject(() -> a.commit(a.revision(), 2_000_000_000L), "Incomplete draft cannot publish");

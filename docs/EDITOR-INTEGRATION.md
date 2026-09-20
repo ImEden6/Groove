@@ -9,8 +9,12 @@ unsent local edits remain local until their next last-write-wins submission.
 Incomplete graphs may be saved as drafts. Commit first saves local edits, then
 validates the acknowledged shared revision and exact server sample assets before
 queuing the published patch for the safe downbeat. A stale or invalid commit
-preserves both draft and published state. Play/Stop changes draft transport;
-Commit also publishes that transport state.
+preserves both draft and published state. Play/Stop changes draft transport and
+queues the same start or stop for the published patch, keeping its graph and tempo,
+so linked speakers follow it without a commit; Commit also publishes that transport
+state, and supersedes a queued play change since it carries one itself. While a
+commit is queued, Play/Stop changes the draft alone and that commit lands with its
+own transport state.
 
 Sessions, owner/allowlist, draft revision, both graphs, tempos, and transport
 flags save with the editor's chunk; no `/groove save` is needed for block sessions.
