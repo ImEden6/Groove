@@ -19,6 +19,10 @@ public final class EditorBlockInteraction {
             if (!level.getBlockState(hitResult.getBlockPos()).is(GrooveBlocks.EDITOR)) {
                 return InteractionResult.PASS;
             }
+            // Sneaking with something in either hand places or uses it, as on any interactive block
+            if (player.isSecondaryUseActive() && !(player.getMainHandItem().isEmpty() && player.getOffhandItem().isEmpty())) {
+                return InteractionResult.PASS;
+            }
             if (player.getMainHandItem().is(GrooveItems.HEADPHONES)) {
                 HeadphoneBindClient.bind(hitResult.getBlockPos());
             } else {

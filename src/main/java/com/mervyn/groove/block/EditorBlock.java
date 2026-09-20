@@ -41,6 +41,15 @@ public final class EditorBlock extends HorizontalDirectionalBlock implements Ent
         }
         super.onRemove(state, level, pos, newState, movedByPiston);
     }
+
+    /** The client opens the session; consume the interaction here so a held block is not placed instead. */
+    @Override
+    protected net.minecraft.world.InteractionResult useWithoutItem(BlockState state, Level level, BlockPos pos,
+                                                                   net.minecraft.world.entity.player.Player player,
+                                                                   net.minecraft.world.phys.BlockHitResult hit) {
+        return net.minecraft.world.InteractionResult.SUCCESS;
+    }
+
     @Override protected MapCodec<EditorBlock> codec() { return CODEC; }
 
     @Override
