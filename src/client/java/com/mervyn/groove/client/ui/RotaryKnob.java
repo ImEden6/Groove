@@ -45,7 +45,7 @@ public record RotaryKnob(String param, int x, int y, int width) {
                 : param.equals(NodeParam.END_FRAME) && value == 0 ? "Asset end"
                 : node.type() == groove.engine.NodeType.FILTER && param.equals(NodeParam.MODE)
                 ? FILTER_NAMES[Math.max(0, Math.min(3, (int)value))]
-                : node.type() == groove.engine.NodeType.SCALE_SEQUENCE && param.equals(NodeParam.SCALE)
+                : (node.type() == groove.engine.NodeType.SCALE_SEQUENCE || node.type() == groove.engine.NodeType.QUANTIZE) && param.equals(NodeParam.SCALE)
                 ? SCALE_NAMES[Math.max(0, Math.min(8, (int)value))]
                 : node.type() == groove.engine.NodeType.CHORD && param.equals(NodeParam.CHORD)
                 ? CHORD_NAMES[Math.max(0, Math.min(7, (int)value))]

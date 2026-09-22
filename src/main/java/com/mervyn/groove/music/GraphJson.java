@@ -48,6 +48,7 @@ public final class GraphJson {
                         case "transpose" -> NodeType.TRANSPOSE;
                         case "scale_sequence" -> NodeType.SCALE_SEQUENCE;
                         case "chord" -> NodeType.CHORD;
+                        case "quantize" -> NodeType.QUANTIZE;
                         case "sample_slice" -> NodeType.SAMPLE_SLICE;
                         case "reverse" -> NodeType.REVERSE;
                         case "swing" -> NodeType.SWING;

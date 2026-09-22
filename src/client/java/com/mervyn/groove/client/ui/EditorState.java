@@ -463,7 +463,7 @@ public final class EditorState {
         double current = node.params().getOrDefault(param, defaultParams(node.type()).getOrDefault(param, 0.0));
         double step = (max - min) * (fine ? 0.002 : 0.02);
         // Quantized controls need at least one whole unit or rounding swallows the key.
-        if (integerParam(param) || node.type() == NodeType.SCALE_SEQUENCE) step = Math.max(1, step);
+        if (integerParam(param) || node.type() == NodeType.SCALE_SEQUENCE || node.type() == NodeType.QUANTIZE) step = Math.max(1, step);
         setKnobValue(nodeId, param, current + Math.signum(direction) * step);
     }
 
@@ -486,7 +486,7 @@ public final class EditorState {
             if (node.type() == NodeType.TONE && param.equals(NodeParam.FREQUENCY)) {
                 setKnobValue(nodeId, param, groove.engine.Pitch.hz(value)); return;
             }
-            if (node.type() == NodeType.SCALE_SEQUENCE && param.equals(NodeParam.ROOT)) {
+            if ((node.type() == NodeType.SCALE_SEQUENCE || node.type() == NodeType.QUANTIZE) && param.equals(NodeParam.ROOT)) {
                 setKnobValue(nodeId, param, groove.engine.Pitch.midi(value)); return;
             }
         }
@@ -499,7 +499,7 @@ public final class EditorState {
                     NodeParam.FRAMES, NodeParam.SEED, NodeParam.STEPS_PER_CYCLE,
                     NodeParam.PULSES, NodeParam.ROTATION, NodeParam.ROOT, NodeParam.CHORD, NodeParam.INVERSION,
                     NodeParam.START_FRAME, NodeParam.END_FRAME, NodeParam.SLICES, NodeParam.INDEX, NodeParam.REVERSE, NodeParam.SUBDIVISION, NodeParam.DIVISION,
-                    NodeParam.PRE_DELAY_MS, NodeParam.SOURCE -> true;
+                    NodeParam.PRE_DELAY_MS, NodeParam.SOURCE, NodeParam.LOW, NodeParam.HIGH -> true;
             default -> false;
         };
     }
@@ -531,6 +531,7 @@ public final class EditorState {
             case NodeParam.FRAMES -> 120;
             case NodeParam.PRE_DELAY_MS -> 1.0;
             case NodeParam.SOURCE, NodeParam.SMOOTH -> .05;
+            case NodeParam.LOW, NodeParam.HIGH -> .3;
             default -> 1.0;
         };
     }
@@ -543,6 +544,16 @@ public final class EditorState {
             case NodeParam.STEPS_PER_CYCLE -> Math.max(1, Math.min(64, Math.rint(value)));
             default -> Math.max(-64, Math.min(64, Math.rint(value)));
         };
+        if (type == NodeType.QUANTIZE) {
+            double low = existingParams == null ? -64 : existingParams.getOrDefault(NodeParam.LOW, 0.0);
+            double high = existingParams == null ? 64 : existingParams.getOrDefault(NodeParam.HIGH, 7.0);
+            return switch (param) {
+                case NodeParam.ROOT -> Math.max(0, Math.min(127, Math.rint(value)));
+                case NodeParam.SCALE -> Math.max(0, Math.min(groove.engine.Pitch.Scale.values().length - 1, Math.rint(value)));
+                case NodeParam.LOW -> Math.max(-64, Math.min(high, Math.rint(value)));
+                default -> Math.max(low, Math.min(64, Math.rint(value)));
+            };
+        }
         if (type == NodeType.CHORD) {
             if (param.equals(NodeParam.CHORD)) return Math.max(0, Math.min(groove.engine.Pitch.Chord.values().length - 1, Math.rint(value)));
             int chord = existingParams == null ? 0 : (int)(double)existingParams.getOrDefault(NodeParam.CHORD, 0.0);
@@ -625,6 +636,7 @@ public final class EditorState {
             case ENVELOPE -> Map.of(NodeParam.ATTACK,.01,NodeParam.DECAY,.1,NodeParam.SUSTAIN,.5,NodeParam.RELEASE,.1,NodeParam.MODE,0.0);
             case ATTENUVERTER -> Map.of(NodeParam.SCALE,1.0,NodeParam.OFFSET,0.0);
             case WORLD -> Map.of(NodeParam.SOURCE,0.0,NodeParam.SMOOTH,2.0);
+            case QUANTIZE -> Map.of(NodeParam.ROOT,60.0,NodeParam.SCALE,0.0,NodeParam.LOW,0.0,NodeParam.HIGH,7.0);
             case STEP_SEQUENCE -> Map.ofEntries(Map.entry(NodeParam.STEPS,4.0),Map.entry(NodeParam.RATE,1.0),Map.entry(NodeParam.GATE,.5),
                     Map.entry("value0",1.0),Map.entry("value1",0.0),Map.entry("value2",.5),Map.entry("value3",0.0),
                     Map.entry("value4",0.0),Map.entry("value5",0.0),Map.entry("value6",0.0),Map.entry("value7",0.0));

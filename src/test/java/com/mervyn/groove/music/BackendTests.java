@@ -170,6 +170,7 @@ public final class BackendTests {
         signalChecks();
         reverbChecks();
         worldChecks();
+        quantizeChecks();
         protocolChecks();
         unreadableProjectChecks();
         fixtureChecks();
@@ -946,6 +947,27 @@ public final class BackendTests {
             GraphCompiler.compile(decoded);
             check(GraphJson.decode(GraphJson.encode(decoded)).equals(decoded), "Fixture " + name + " survives JSON round-trip");
         }
+    }
+
+    private static void quantizeChecks() {
+        var params = com.mervyn.groove.client.ui.EditorState.defaultParams(NodeType.QUANTIZE);
+        Graph graph = new Graph(3, java.util.List.of(new Graph.Node("tone", NodeType.TONE, java.util.Map.of()),
+                new Graph.Node("q", NodeType.QUANTIZE, params), new Graph.Node("lfo", NodeType.LFO, java.util.Map.of()),
+                new Graph.Node("range", NodeType.ATTENUVERTER, java.util.Map.of(NodeParam.SCALE, .5, NodeParam.OFFSET, .5)),
+                new Graph.Node("render", NodeType.AUDIO_RENDER, java.util.Map.of()), new Graph.Node("out", NodeType.OUTPUT, java.util.Map.of())),
+                java.util.List.of(Graph.edge("tone", "q"), Graph.edge("lfo", "range"), new Graph.Edge("range", "out", "q", "degree"),
+                        Graph.edge("q", "render"), new Graph.Edge("render", "out", "out", "audio")));
+        GraphCompiler.compile(graph);
+        check(GraphJson.decode(GraphJson.encode(graph)).equals(graph), "Quantize graph round trips through JSON");
+        check(GraphJson.encode(graph).contains("\"quantize\""), "Quantize node saves under its type name");
+        var editor = new com.mervyn.groove.client.ui.EditorState(graph);
+        editor.setKnobValue("q", NodeParam.LOW, 9);
+        check(editor.node("q").params().get(NodeParam.LOW) == 7, "Editor keeps low at or below high");
+        editor.setKnobValue("q", NodeParam.HIGH, 3);
+        check(editor.node("q").params().get(NodeParam.HIGH) == 7, "Editor keeps high at or above low");
+        editor.setKnobValue("q", NodeParam.SCALE, 40);
+        check(editor.node("q").params().get(NodeParam.SCALE) == Pitch.Scale.values().length - 1, "Editor clamps the scale");
+        GraphCompiler.compile(editor.toGraph());
     }
 
     private static void worldChecks() {
