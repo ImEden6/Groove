@@ -192,7 +192,7 @@ Because redstone was removed, the mod needs native world-interaction hooks to av
 
 You have clipboard Base64 JSON and world transactional files, but no physical survival gameplay loop:
 
-* **The Vinyl / Punch Card Item:**
+* **The Vinyl / Punch Card Item — implemented** as the Blank and Groove Disc, played through a vanilla jukebox under a speaker tower; see [discs and jukeboxes](EDITOR-INTEGRATION.md#discs-and-jukeboxes). Discs load into editors, not directly into speakers.
 * A craftable item (e.g., *Blank Audio Disc* or *Punched Paper Tape*).
 * Right-clicking the Sequencer workstation burns the current node graph onto the disc.
 * Inserting that disc into a Satellite Speaker or a Sequencer in another base instantly loads the patch.

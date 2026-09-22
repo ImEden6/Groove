@@ -42,6 +42,37 @@ chunk unload/reload. A linked speaker plays the editor's committed patch
 rules layered on top; an unlinked speaker is silent. Breaking the editor
 unlinks every speaker still pointing at it within that same 64-block radius.
 
+## Discs and jukeboxes
+
+Right-click an editor holding a **Blank Disc** to burn its committed patch and
+tempo onto a **Groove Disc** (never the draft); anyone can burn, as anyone can link a
+speaker. Right-click an editor holding a Groove Disc to replace its draft with the
+disc's patch, keeping the draft's play state; this needs edit access, and a Commit
+publishes it. The patch lives on the item, so it survives inventories, chests and
+trades. LFO birth stamps are not stored, and a disc whose data was edited into an
+invalid patch or tempo is refused. A burned disc's tooltip shows its tempo and node
+count; rename it on an anvil to label it.
+
+Put a Groove Disc in a vanilla jukebox, and any speaker tower standing directly on
+the jukebox plays it, positionally, under the usual tower and distance rules,
+instead of the editor it may be linked to. Playback starts at cycle 0 when the
+server first sees the disc playing, loops, and stops when the disc comes out.
+Every listener hears the same position on the server clock. A different disc, or
+the same one put back in, starts over; so does a jukebox whose chunk stopped
+ticking while nobody was near. The jukebox shows vanilla's "Now Playing: Groove
+patch" and gives a comparator signal of 15; the disc's own song is silent. Custom
+samples on a disc play only where the server has the same files.
+
+To copy a disc, craft a Groove Disc with a Blank Disc: the copy comes out and the
+original stays in the grid.
+
+| Item | Recipe |
+| --- | --- |
+| Blank Disc ×2 | Black concrete on four sides of a redstone dust |
+| Speaker | Planks all round a note block, with an iron ingot below it |
+| Editor | Iron ingots in the corners, redstone on the sides, a note block in the middle, a comparator below it |
+| Headphones | Leather, iron ingot, leather over two note blocks |
+
 ## Legacy command editor
 
 The following Apply workflow still describes `/groove-editor` and `/groove`.
