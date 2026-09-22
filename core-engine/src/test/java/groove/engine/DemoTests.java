@@ -20,7 +20,7 @@ final class DemoTests {
         System.out.printf("Demo audio checks passed (%d checks) in %.0f ms.%n", checks, (System.nanoTime() - startNanos) / 1e6);
     }
 
-    /** The showcase stays in range, and its lead comes forward with the rain. */
+    /** The showcase stays in range, and its lead is heard in clear weather and comes forward with the rain. */
     private static void showcase() {
         // The weather scales with length, so a short render tells the same story
         float[] audio = ShowcaseDemo.render(24);
@@ -34,7 +34,7 @@ final class DemoTests {
         for (int i = 0; i < audio.length; i++) lead[i] = audio[i] - silent[i];
         double dry = 20 * Math.log10(rms(lead, RATE * 2, RATE * 4) / rms(audio, RATE * 2, RATE * 4));
         double wet = 20 * Math.log10(rms(lead, RATE * 14, RATE * 18) / rms(audio, RATE * 14, RATE * 18));
-        check(dry < -12 && wet > -6, "Showcase lead sits back when dry and comes forward in rain: " + dry + " / " + wet + " dB");
+        check(dry > -12 && dry < -5 && wet > dry + 3, "Showcase lead is heard when dry and comes forward in rain: " + dry + " / " + wet + " dB");
     }
 
     /** Saved patches reference factory samples by hash, so the original kit must never change. */

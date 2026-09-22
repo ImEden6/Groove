@@ -2,7 +2,9 @@
 
 ## Block sessions
 
-Right-click a placed editor to open its independent server-owned draft. Edits,
+Right-click a placed editor to open its independent server-owned draft. A new editor starts
+on the showcase patch at 96 BPM, stopped: a chopped factory break that darkens at night, and
+a quantized bass and lead, the lead coming forward in the rain ([renderShowcase](ENGINE-UPGRADE-STAGES.md)). Edits,
 undo/redo, and BPM changes autosave (at most once every 400 ms); the screen polls
 for shared changes once a second when idle. Clean screens adopt the latest draft;
 unsent local edits remain local until their next last-write-wins submission.

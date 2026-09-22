@@ -56,7 +56,7 @@ public final class ShowcaseDemo {
         edges.addAll(List.of(Graph.edge("bassTone", "bassRhythm"), Graph.edge("bassRhythm", "bassNotes"), Graph.edge("bassNotes", "bass"),
                 Graph.edge("bassWalk", "bassRange"), new Graph.Edge("bassRange", "out", "bassNotes", "degree")));
 
-        // Lead: a free-running sine picks notes two octaves up; it only comes forward in the rain
+        // Lead: a free-running sine picks notes two octaves up; present in clear weather, forward in the rain
         nodes.add(node("leadTone", NodeType.TONE, Map.of(NodeParam.WAVE, 2.0, NodeParam.PULSE_WIDTH, .3, NodeParam.GAIN, .16, NodeParam.CUTOFF_HZ, 3500.0, NodeParam.PAN, .3)));
         nodes.add(node("leadRhythm", NodeType.EUCLID, Map.of(NodeParam.STEPS, 16.0, NodeParam.PULSES, 5.0, NodeParam.ROTATION, 3.0)));
         nodes.add(node("leadNotes", NodeType.QUANTIZE, scale(62, 0, 7)));
@@ -64,7 +64,7 @@ public final class ShowcaseDemo {
         nodes.add(node("leadRange", NodeType.ATTENUVERTER, Map.of(NodeParam.SCALE, .5, NodeParam.OFFSET, .5)));
         nodes.add(node("lead", NodeType.AUDIO_RENDER, Map.of()));
         nodes.add(node("rain", NodeType.WORLD, Map.of(NodeParam.SOURCE, (double) WorldInputs.RAIN, NodeParam.SMOOTH, 4.0)));
-        nodes.add(node("rainLevel", NodeType.ATTENUVERTER, Map.of(NodeParam.SCALE, .85, NodeParam.OFFSET, .15)));
+        nodes.add(node("rainLevel", NodeType.ATTENUVERTER, Map.of(NodeParam.SCALE, .55, NodeParam.OFFSET, .45)));
         nodes.add(node("leadLevel", NodeType.MIX_BUS, Map.of()));
         edges.addAll(List.of(Graph.edge("leadTone", "leadRhythm"), Graph.edge("leadRhythm", "leadNotes"), Graph.edge("leadNotes", "lead"),
                 Graph.edge("leadMotion", "leadRange"), new Graph.Edge("leadRange", "out", "leadNotes", "degree"),

@@ -24,8 +24,8 @@ final class EditorSessionTests {
         var b = new EditorSession(0);
         var changed = new Graph(3, Graph.demo().nodes(), Graph.demo().edges());
         a.edit(changed, 150, true);
-        check(a.draft().equals(changed) && b.bpm() == 128, "Blocks have independent drafts");
-        check(a.committed(0).current().bpm() == 128 && a.committed(0).pending().bpm() == 128
+        check(a.draft().equals(changed) && b.bpm() == ShowcaseDemo.BPM, "Blocks have independent drafts");
+        check(a.committed(0).current().bpm() == ShowcaseDemo.BPM && a.committed(0).pending().bpm() == ShowcaseDemo.BPM
                 && a.committed(0).pending().graph().equals(a.committed(0).current().graph()),
                 "A draft edit publishes no graph or tempo");
         check(!a.committed(0).current().playing() && a.committed(0).pending().playing()
