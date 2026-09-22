@@ -36,6 +36,7 @@ public final class SignalRuntime {
     /** Per world node: its smoothed value at the start and end of worldBlock. */
     private final double[] worldFrom, worldTo;
     private final long[] worldBlock;
+    private final double[] probe;
     private static final double BLOCK_SECONDS = SignalGraph.CONTROL_FRAMES / (double) LiveRenderer.SAMPLE_RATE;
 
     private static final int MIX_GAIN = 0;
@@ -51,7 +52,7 @@ public final class SignalRuntime {
     SignalRuntime(SignalGraph graph, SessionState state, WorldInputs world) {
         this.graph = graph; this.state = state; this.world = world;
         int size = graph.nodes.length;
-        worldFrom = new double[size]; worldTo = new double[size]; worldBlock = new long[size];
+        worldFrom = new double[size]; worldTo = new double[size]; worldBlock = new long[size]; probe = new double[size];
         Arrays.fill(worldBlock, Long.MIN_VALUE);
         left = new double[size]; right = new double[size]; start = new double[size]; end = new double[size];
         controls = new double[size][SignalGraph.CONTROL_FRAMES];
@@ -577,6 +578,16 @@ public final class SignalRuntime {
         throw new IllegalArgumentException("Unknown control node");
     }
 
+    /** A control's value at one moment, without the per-block ramp or its cache. World nodes give their current value. */
+    double valueAt(String nodeId, double nanos) {
+        for (int i = 0; i < graph.nodes.length; i++) if (graph.nodes[i].id().equals(nodeId)) {
+            evaluateTriggerDrivenEnvelopes(nanos, nanos, probe, probe);
+            evaluate(nanos, probe, true);
+            return probe[i];
+        }
+        throw new IllegalArgumentException("Unknown control node");
+    }
+
     private int prepareControls(long nanos) {
         long absoluteFrame = Math.round(nanos * (LiveRenderer.SAMPLE_RATE / 1e9));
         long block = Math.floorDiv(absoluteFrame, SignalGraph.CONTROL_FRAMES);
@@ -587,7 +598,7 @@ public final class SignalRuntime {
             // the two below (LFO/STEP_SEQUENCE/ATTENUVERTER/regular ENVELOPE) each scanning once;
             // written directly into start[]/end[] before evaluate() runs, so any node evaluated
             // later in graph.order that reads this envelope's value sees the real result either way.
-            evaluateTriggerDrivenEnvelopes(startNanos, endNanos);
+            evaluateTriggerDrivenEnvelopes(startNanos, endNanos, start, end);
             settleWorld(block);
             evaluate(startNanos, start, false);
             evaluate(endNanos, end, true);
@@ -657,7 +668,8 @@ public final class SignalRuntime {
                     values[i] = periodicEnvelopeValue(cycle, p[ENV_WIDTH], p[ENV_RELEASE_AT],
                             p[ENV_ATTACK], p[ENV_DECAY], p[ENV_SUSTAIN], p[ENV_RELEASE]);
                 }
-                case WORLD -> values[i] = blockEnd ? worldTo[i] : worldFrom[i];
+                case WORLD -> values[i] = worldBlock[i] == Long.MIN_VALUE ? world.get((int) nodeParams[i][WORLD_SOURCE])
+                        : blockEnd ? worldTo[i] : worldFrom[i];
                 default -> values[i] = 0;
             }
         }
@@ -668,7 +680,7 @@ public final class SignalRuntime {
      *  per-entry work at two nearby cycle positions. Order-independent: unlike other node types,
      *  ENVELOPE never reads another node's values[], only its trigger's params/window, so this
      *  doesn't need to respect graph.order. */
-    private void evaluateTriggerDrivenEnvelopes(double startNanos, double endNanos) {
+    private void evaluateTriggerDrivenEnvelopes(double startNanos, double endNanos, double[] atStart, double[] atEnd) {
         double startCycle = cycleAt(startNanos), endCycle = cycleAt(endNanos);
         for (int i = 0; i < graph.nodes.length; i++) {
             Graph.Node n = graph.nodes[i];
@@ -687,7 +699,7 @@ public final class SignalRuntime {
                 bestStart = Math.max(bestStart, envelopeValueAt(startCycle, onset, releaseAt, attack, decay, sustain, release));
                 bestEnd = Math.max(bestEnd, envelopeValueAt(endCycle, onset, releaseAt, attack, decay, sustain, release));
             }
-            start[i] = bestStart; end[i] = bestEnd;
+            atStart[i] = bestStart; atEnd[i] = bestEnd;
         }
     }
 

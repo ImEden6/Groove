@@ -54,6 +54,8 @@ public final class NodeParam {
     public static final String PRE_DELAY_MS = "preDelayMs";
     public static final String SOURCE = "source";
     public static final String SMOOTH = "smooth";
+    public static final String LOW = "low";
+    public static final String HIGH = "high";
 
     private NodeParam() {}
 }

@@ -149,14 +149,27 @@ public final class SignalGraph {
 
     private static LoopPlan compileSource(Graph graph, String renderId) {
         Set<String> patternIds = new HashSet<>();
-        collect(renderId, graph, patternIds);
+        collectPatterns(renderId, graph, patternIds);
         List<Graph.Node> patterns = new ArrayList<>();
         for (Graph.Node n : graph.nodes()) if (patternIds.contains(n.id())) {
             require(n.id().equals(renderId) || !n.type().isSignalNode(), "Invalid pattern source");
             patterns.add(n.id().equals(renderId) ? new Graph.Node(n.id(), NodeType.OUTPUT, Map.of()) : n);
         }
-        List<Graph.Edge> edges = graph.edges().stream().filter(e -> patternIds.contains(e.toNode())).toList();
-        return GraphCompiler.compile(new Graph(3, patterns, edges));
+        List<Graph.Edge> edges = graph.edges().stream().filter(e -> patternIds.contains(e.toNode()) && !control(graph, e)).toList();
+        Map<String, String> degrees = new HashMap<>();
+        for (Graph.Edge e : graph.edges()) if (patternIds.contains(e.toNode()) && control(graph, e)) degrees.put(e.toNode(), e.fromNode());
+        return GraphCompiler.compileSource(new Graph(3, patterns, edges), degrees);
+    }
+
+    /** A control wired into a pattern node is read when each note starts, so it stays in the signal graph. */
+    private static boolean control(Graph graph, Graph.Edge e) {
+        Graph.Node to = graph.nodes().stream().filter(n -> n.id().equals(e.toNode())).findFirst().orElseThrow();
+        return !to.type().isSignalNode() && to.type().inputPort(e.toPort()).type() == PortType.MOD_FLOAT;
+    }
+
+    private static void collectPatterns(String id, Graph graph, Set<String> seen) {
+        if (!seen.add(id)) return;
+        for (Graph.Edge e : graph.edges()) if (e.toNode().equals(id) && !control(graph, e)) collectPatterns(e.fromNode(), graph, seen);
     }
 
     private static void collect(String id, Graph graph, Set<String> seen) {

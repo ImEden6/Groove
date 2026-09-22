@@ -16,6 +16,11 @@ final class VoiceDsp {
     }
 
     void start(Tone tone, SamplePlayback sample, int sampleRate, double duration) {
+        start(tone, sample, sampleRate, duration, tone == null ? 0 : tone.frequency());
+    }
+
+    /** frequency overrides the tone's, for a pitch picked when the note starts. */
+    void start(Tone tone, SamplePlayback sample, int sampleRate, double duration, double frequency) {
         if ((tone == null) == (sample == null)) throw new IllegalArgumentException("Expected one voice source");
         this.tone = tone; this.sample = sample;
         double cutoff = tone != null ? tone.cutoffHz() : sample.voice().cutoffHz();
@@ -25,7 +30,7 @@ final class VoiceDsp {
         if (tone != null) {
             double angle = (tone.pan() + 1) * Math.PI / 4;
             leftPan = Math.cos(angle); rightPan = Math.sin(angle);
-            increment = tone.frequency() / sampleRate;
+            increment = frequency / sampleRate;
         } else {
             double pan = sample.voice().pan();
             if (sample.pcm().channels() == 1) {

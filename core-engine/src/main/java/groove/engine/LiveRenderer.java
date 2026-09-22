@@ -133,6 +133,8 @@ public final class LiveRenderer {
         /** Same tempo and exact position as fadeFrom, so the fade can be skipped if every voice continues identically. */
         boolean fadeOptional;
         final double[] fadeStereo = new double[2];
+        /** A source's parent signal graph, which quantized notes read their degree from. */
+        SignalRuntime controls;
         /** Built on the control thread before publication: how to continue each candidate graph's effects. */
         final java.util.Map<SignalGraph, SignalRuntime.TransferPlan> transferPlans;
         final groove.engine.samples.PreparedSamples samples;
@@ -171,7 +173,10 @@ public final class LiveRenderer {
             if (program.sources != null) {
                 sources = new VoiceProgram[program.sources.length];
                 sourceStereo = new double[sources.length][2];
-                for (int i = 0; i < sources.length; i++) sources[i] = new VoiceProgram(program.sources[i], owner);
+                for (int i = 0; i < sources.length; i++) {
+                    sources[i] = new VoiceProgram(program.sources[i], owner);
+                    sources[i].controls = signals;
+                }
             } else { sources = null; sourceStereo = null; }
             if (program.triggers != null) {
                 triggers = new VoiceProgram[program.triggers.length];
@@ -197,13 +202,13 @@ public final class LiveRenderer {
     private static final class ActiveVoice {
         int event = -1, fadeFrame, hash;
         Event data;
-        double onset, duration;
+        double onset, duration, frequency;
         boolean wanted;
         final VoiceDsp dsp = new VoiceDsp();
-        void start(Event e, int index, int hash, double cycle, double duration, groove.engine.samples.SamplePlayback sample) {
+        void start(Event e, int index, int hash, double cycle, double duration, groove.engine.samples.SamplePlayback sample, double frequency) {
             event = index; this.hash = hash; onset = cycle; fadeFrame = 0;
-            data = e; this.duration = duration;
-            dsp.start(e.tone(), sample, SAMPLE_RATE, duration);
+            data = e; this.duration = duration; this.frequency = frequency;
+            dsp.start(e.tone(), sample, SAMPLE_RATE, duration, frequency);
         }
     }
     private static final int STEAL_FRAMES = 120;
@@ -730,11 +735,12 @@ public final class LiveRenderer {
             if (duration < 0) continue;
             for (ActiveVoice v : program.voices) if (v.event < 0) {
                 v.start(event, program.events[i], program.hashes[i], program.onsets[i], duration,
-                        event.sample() == null ? null : program.samples.get(event.sample()));
+                        event.sample() == null ? null : program.samples.get(event.sample()),
+                        pitch(program, event, program.onsets[i], secondsPerCycle));
                 if (donor != null) for (ActiveVoice d : donor.voices)
                     if (continues(d, program, i)) {
                         v.dsp.continueFrom(d.dsp); voiceCarries++;
-                        if (d.dsp.sample() == v.dsp.sample()) identical++;
+                        if (d.dsp.sample() == v.dsp.sample() && d.frequency == v.frequency) identical++;
                         break;
                     }
                 voiceStarts++; started++;
@@ -893,6 +899,18 @@ public final class LiveRenderer {
         if (--source.fadeLeft <= 0) source.fadeFrom = null;
     }
 
+    /**
+     * A quantized note's pitch, from its control half a frame after the onset, so a control stepping
+     * on the same grid is read after its step. Any player starting the note, even late, gets the same one.
+     */
+    private static double pitch(VoiceProgram program, Event event, double onset, double secondsPerCycle) {
+        if (event.tone() == null) return 0;
+        Event.Degree degree = event.degree();
+        if (degree == null || program.controls == null) return event.tone().frequency();
+        double nanos = program.state.effectiveNanos() + (onset - program.state.anchorCycle()) * secondsPerCycle * 1e9 + 0.5e9 / SAMPLE_RATE;
+        return event.tone().frequency() * degree.ratio(program.controls.valueAt(degree.control(), nanos));
+    }
+
     private static double eventDuration(VoiceProgram program, Event event, double secondsPerCycle) {
         if (event.sample() == null) return (event.whole().end() - event.whole().start()) * secondsPerCycle;
         return program.samples.lifetimeSeconds(event.sample(), event.whole().end() - event.whole().start(), secondsPerCycle);
@@ -918,7 +936,7 @@ public final class LiveRenderer {
                           double fade, double[] out) {
         Event event = v.data;
         double age = (cycles - v.onset) * secondsPerCycle;
-        double oscillator = event.tone() == null ? 0 : age * event.tone().frequency();
+        double oscillator = event.tone() == null ? 0 : age * v.frequency;
         oscillator -= Math.floor(oscillator);
         v.dsp.add(age, v.duration, oscillator, fade, out);
     }

@@ -15,7 +15,7 @@ public final class LookaheadScheduler {
             return durationSeconds;
         }
     }
-    private record Key(Arc whole, Tone tone, groove.engine.samples.SampleVoice sample, int ordinal) {}
+    private record Key(Arc whole, Tone tone, groove.engine.samples.SampleVoice sample, Event.Degree degree, int ordinal) {}
     private record Bucket(long cycle, Entry[] entries) {}
     public static final class Window {
         private final double start, end;
@@ -93,7 +93,7 @@ public final class LookaheadScheduler {
                 Map<Key, Integer> occurrences = new HashMap<>();
                 for (int i = 0; i < entries.length; i++) {
                     Event e = events.get(i);
-                    Key key = new Key(e.whole(), e.tone(), e.sample(), 0);
+                    Key key = new Key(e.whole(), e.tone(), e.sample(), e.degree(), 0);
                     int ordinal = occurrences.getOrDefault(key, 0);
                     occurrences.put(key, ordinal + 1);
                     double duration = durationFunction.applyAsDouble(e);
@@ -120,7 +120,7 @@ public final class LookaheadScheduler {
                         }
                     }
                 }
-                unique.putIfAbsent(new Key(e.whole(), e.tone(), e.sample(), entry.ordinal), entry);
+                unique.putIfAbsent(new Key(e.whole(), e.tone(), e.sample(), e.degree(), entry.ordinal), entry);
             }
         }
         Entry[] entries = unique.values().toArray(Entry[]::new);

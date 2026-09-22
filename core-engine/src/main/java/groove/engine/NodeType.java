@@ -10,7 +10,7 @@ public enum NodeType {
     LFO, ENVELOPE, ATTENUVERTER, STEP_SEQUENCE,
     AUDIO_RENDER, FILTER, DELAY, MIX_BUS, TRIGGER_RENDER, ALTERNATE, PROBABILITY, POLYMETER,
     TRANSPOSE, SCALE_SEQUENCE, CHORD, SAMPLE_SLICE,
-    REVERSE, SWING, REVERB, WORLD;
+    REVERSE, SWING, REVERB, WORLD, QUANTIZE;
 
     private static final java.util.List<Port> PATTERN_OUTPUT = java.util.List.of(new Port("out", PortType.PATTERN, 0, 128));
     private static final java.util.List<Port> PATTERN_INPUT = java.util.List.of(new Port("in", PortType.PATTERN, 1, 1));
@@ -28,6 +28,8 @@ public enum NodeType {
     private static final java.util.List<Port> FILTER_INPUT = java.util.List.of(
             new Port("in", PortType.AUDIO, 1, 1), new Port("cutoff", PortType.MOD_FLOAT, 0, 1));
     private static final java.util.List<Port> DELAY_INPUT = java.util.List.of(new Port("in", PortType.AUDIO, 1, 1));
+    private static final java.util.List<Port> QUANTIZE_INPUT = java.util.List.of(
+            new Port("in", PortType.PATTERN, 1, 1), new Port("degree", PortType.MOD_FLOAT, 0, 1));
     private static final java.util.List<Port> MIX_BUS_INPUT = java.util.List.of(
             new Port("in", PortType.AUDIO, 1, 16), new Port("gain", PortType.MOD_FLOAT, 0, 1));
 
@@ -49,6 +51,7 @@ public enum NodeType {
             case STACK, ALTERNATE, POLYMETER -> STACK_INPUT;
             case FAST, EUCLID, PROBABILITY, TRANSPOSE, SCALE_SEQUENCE, CHORD, SAMPLE_SLICE, AUDIO_RENDER, TRIGGER_RENDER, REVERSE, SWING -> PATTERN_INPUT;
             case OUTPUT -> OUTPUT_INPUT;
+            case QUANTIZE -> QUANTIZE_INPUT;
             case LFO, STEP_SEQUENCE, WORLD -> NO_PORTS;
             case ENVELOPE -> ENVELOPE_INPUT;
             case ATTENUVERTER -> ATTENUVERTER_INPUT;

@@ -27,7 +27,26 @@ public interface Pattern {
         if (!Double.isFinite(semitones) || Math.abs(semitones) > 48)
             throw new IllegalArgumentException("Transpose must be -48..48 semitones");
         double ratio = Math.pow(2, semitones / 12);
-        return mapTones(t -> Pitch.withFrequency(t, t.frequency() * ratio));
+        return mapTones(t -> Pitch.withFrequency(t, t.frequency() * ratio), true);
+    }
+
+    /** Sets each note to a scale degree picked when it starts, from control; with no control, to degree low. */
+    default Pattern quantize(int root, Pitch.Scale scale, int low, int high, String control) {
+        if (control == null) {
+            double hz = Pitch.degreeHz(root, scale, low);
+            return mapTones(t -> Pitch.withFrequency(t, hz), false);
+        }
+        Event.Degree degree = new Event.Degree(control, scale, low, high);
+        double base = Pitch.degreeHz(root, scale, 0);
+        return arc -> {
+            checkQuery(arc);
+            List<Event> events = new ArrayList<>();
+            for (Event e : query(arc)) {
+                if (e.tone() == null) throw new IllegalArgumentException("Pitch transforms require tone events");
+                events.add(new Event(e.whole(), e.part(), Pitch.withFrequency(e.tone(), base), null, degree));
+            }
+            return events;
+        };
     }
 
     /** Absolute scale pitches applied to successive branches, at a shared step rate. */
@@ -37,7 +56,7 @@ public interface Pattern {
         for (int i = 0; i < degrees.length; i++) {
             double hz = Pitch.degreeHz(root, scale, degrees[i]);
             if (hz < 20 || hz > 16000) throw new IllegalArgumentException("Scale pitch must be 20..16000 Hz");
-            steps[i] = mapTones(t -> Pitch.withFrequency(t, hz));
+            steps[i] = mapTones(t -> Pitch.withFrequency(t, hz), false);
         }
         return polymeter(stepsPerCycle, steps);
     }
@@ -56,20 +75,21 @@ public interface Pattern {
                 for (double ratio : ratios) {
                     Tone t = Pitch.withFrequency(e.tone(), e.tone().frequency() * ratio);
                     events.add(new Event(e.whole(), e.part(), new Tone(t.wave(), t.frequency(),
-                            t.gain() / ratios.length, t.pan(), t.cutoffHz(), t.resonanceQ(), t.pulseWidth())));
+                            t.gain() / ratios.length, t.pan(), t.cutoffHz(), t.resonanceQ(), t.pulseWidth()), null, e.degree()));
                 }
             }
             return events;
         };
     }
 
-    private Pattern mapTones(java.util.function.UnaryOperator<Tone> mapper) {
+    /** keepDegree false: the mapper sets an absolute pitch, replacing any degree picked later. */
+    private Pattern mapTones(java.util.function.UnaryOperator<Tone> mapper, boolean keepDegree) {
         return arc -> {
             checkQuery(arc);
             List<Event> events = new ArrayList<>();
             for (Event e : query(arc)) {
                 if (e.tone() == null) throw new IllegalArgumentException("Pitch transforms require tone events");
-                events.add(new Event(e.whole(), e.part(), mapper.apply(e.tone())));
+                events.add(new Event(e.whole(), e.part(), mapper.apply(e.tone()), null, keepDegree ? e.degree() : null));
             }
             return events;
         };
@@ -122,7 +142,7 @@ public interface Pattern {
                 Pattern child = children.get(Math.floorMod(c, children.size()));
                 for (Event e : child.query(new Arc(visible.start() - shift, visible.end() - shift))) {
                     events.add(new Event(new Arc(e.whole().start() + shift, e.whole().end() + shift),
-                            new Arc(e.part().start() + shift, e.part().end() + shift), e.tone(), e.sample()));
+                            new Arc(e.part().start() + shift, e.part().end() + shift), e.tone(), e.sample(), e.degree()));
                 }
             }
             return events;
@@ -165,7 +185,7 @@ public interface Pattern {
             for (Event e : query(arc.scale(factor))) {
                 Arc whole = e.whole().scale(1 / factor);
                 Arc part = e.part().scale(1 / factor).intersect(arc);
-                if (part != null) events.add(new Event(whole, part, e.tone(), e.sample()));
+                if (part != null) events.add(new Event(whole, part, e.tone(), e.sample(), e.degree()));
             }
             return events;
         };
@@ -194,7 +214,7 @@ public interface Pattern {
                     for (Event e : query(local)) {
                         Arc whole = new Arc(start + e.whole().start() / steps, start + e.whole().end() / steps);
                         Arc part = new Arc(start + e.part().start() / steps, start + e.part().end() / steps).intersect(visible);
-                        if (part != null) events.add(new Event(whole, part, e.tone(), e.sample()));
+                        if (part != null) events.add(new Event(whole, part, e.tone(), e.sample(), e.degree()));
                     }
                 }
             }
@@ -218,7 +238,7 @@ public interface Pattern {
                     Arc whole = new Arc(Math.max(c, revStart), Math.min(c + 1.0, revEnd));
                     Arc part = new Arc(Math.max(c, 2 * c + 1.0 - e.part().end()),
                             Math.min(c + 1.0, 2 * c + 1.0 - e.part().start())).intersect(visible);
-                    if (part != null) events.add(new Event(whole, part, e.tone(), e.sample()));
+                    if (part != null) events.add(new Event(whole, part, e.tone(), e.sample(), e.degree()));
                 }
             }
             return events;
@@ -241,7 +261,7 @@ public interface Pattern {
             for (Event e : query(childArc)) {
                 Arc whole = new Arc(warp(e.whole().start(), T, R), warp(e.whole().end(), T, R));
                 Arc part = new Arc(warp(e.part().start(), T, R), warp(e.part().end(), T, R)).intersect(arc);
-                if (part != null) events.add(new Event(whole, part, e.tone(), e.sample()));
+                if (part != null) events.add(new Event(whole, part, e.tone(), e.sample(), e.degree()));
             }
             return events;
         };

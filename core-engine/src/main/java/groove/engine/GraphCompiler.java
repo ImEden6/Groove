@@ -11,6 +11,10 @@ public final class GraphCompiler {
     private final Map<String, List<String>> inputs = new HashMap<>();
     private final Map<String, Compiled> compiled = new HashMap<>();
     private final Set<String> visiting = new HashSet<>();
+    /** Per quantize node in a signal graph's source: the control node wired to its degree socket. */
+    private final Map<String, String> degreeControls;
+
+    private GraphCompiler(Map<String, String> degreeControls) { this.degreeControls = degreeControls; }
     // Bounds cover every branch, including branches absent from the cycle-zero preview.
     private record Compiled(Pattern pattern, int cost, double minHz, double maxHz, boolean samples, Set<SampleVoice> sampleVoices) {
         Compiled(Pattern pattern, int cost, double minHz, double maxHz, boolean samples) {
@@ -37,7 +41,11 @@ public final class GraphCompiler {
 
     public static LoopPlan compile(Graph graph) {
         if (graph.nodes().stream().anyMatch(n -> n.type() != null && n.type().isSignalNode())) return SignalGraph.compile(graph);
-        return new GraphCompiler().build(graph);
+        return new GraphCompiler(Map.of()).build(graph);
+    }
+
+    static LoopPlan compileSource(Graph patterns, Map<String, String> degreeControls) {
+        return new GraphCompiler(degreeControls).build(patterns);
     }
 
     private LoopPlan build(Graph graph) {
@@ -97,6 +105,7 @@ public final class GraphCompiler {
             case POLYMETER -> Set.of(NodeParam.STEPS_PER_CYCLE);
             case TRANSPOSE -> Set.of(NodeParam.SEMITONES);
             case CHORD -> Set.of(NodeParam.CHORD, NodeParam.INVERSION);
+            case QUANTIZE -> Set.of(NodeParam.ROOT, NodeParam.SCALE, NodeParam.LOW, NodeParam.HIGH);
             case SCALE_SEQUENCE -> Set.of(NodeParam.ROOT, NodeParam.SCALE, NodeParam.STEPS, NodeParam.STEPS_PER_CYCLE,
                     "value0", "value1", "value2", "value3", "value4", "value5", "value6", "value7");
             default -> throw new IllegalStateException("unreachable: signal nodes are rejected in build()");
@@ -173,6 +182,18 @@ public final class GraphCompiler {
             double max = child.maxHz * Math.pow(2, intervals[intervals.length - 1] / 12.0);
             pitchBounds(min, max);
             yield new Compiled(child.pattern.chord(chord, inversion), cost, min, max, false);
+        }
+        case QUANTIZE -> {
+            Compiled child = children.getFirst();
+            require(!child.samples, "Quantize requires tone events");
+            int root = integer(node, NodeParam.ROOT, 60, 0, 127);
+            Pitch.Scale scale = Pitch.Scale.values()[integer(node, NodeParam.SCALE, 0, 0, Pitch.Scale.values().length - 1)];
+            int low = integer(node, NodeParam.LOW, 0, -64, 64), high = integer(node, NodeParam.HIGH, 7, -64, 64);
+            require(low <= high, "Quantize low must not exceed high");
+            String control = degreeControls.get(id);
+            double min = Pitch.degreeHz(root, scale, low), max = control == null ? min : Pitch.degreeHz(root, scale, high);
+            pitchBounds(min, max);
+            yield new Compiled(child.pattern.quantize(root, scale, low, high, control), child.cost, min, max, false);
         }
         case SCALE_SEQUENCE -> {
             Compiled child = children.getFirst();
