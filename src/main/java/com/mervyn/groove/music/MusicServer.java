@@ -112,6 +112,7 @@ public final class MusicServer {
         MusicPackets.register();
         EditorServer.register();
         HeadphoneServer.register();
+        DiscServer.register();
         SpeakerServer.register();
         SampleServer.register();
         ServerConfigurationConnectionEvents.CONFIGURE.register((handler, server) -> {

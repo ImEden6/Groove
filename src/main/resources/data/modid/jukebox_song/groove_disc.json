@@ -1,0 +1,10 @@
+{
+  "comparator_output": 15,
+  "description": {
+    "translate": "jukebox_song.modid.groove_disc"
+  },
+  "length_in_seconds": 100000000.0,
+  "sound_event": {
+    "sound_id": "modid:disc_silence"
+  }
+}

@@ -1,5 +1,10 @@
 {
     "block.modid.speaker": "Speaker",
     "block.modid.editor": "Editor",
-    "item.modid.headphones": "Headphones"
+    "item.modid.headphones": "Headphones",
+    "item.modid.blank_disc": "Blank Disc",
+    "item.modid.groove_disc": "Groove Disc",
+    "item.modid.groove_disc.patch": "%s BPM, %s nodes",
+    "item.modid.groove_disc.empty": "Empty",
+    "jukebox_song.modid.groove_disc": "Groove patch"
 }

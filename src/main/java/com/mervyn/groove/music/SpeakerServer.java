@@ -100,9 +100,18 @@ public final class SpeakerServer {
             }
             if (!allowPoll(player.getUUID(), packet.pos(), now)) return;
             EditorBlockEntity editor = null;
-            if (player.serverLevel().getBlockEntity(packet.pos()) instanceof SpeakerBlockEntity speaker
-                    && !player.serverLevel().getBlockState(packet.pos().below()).is(GrooveBlocks.SPEAKER))
-                editor = linkedEditor(player.serverLevel(), speaker);
+            var level = player.serverLevel();
+            if (level.getBlockEntity(packet.pos()) instanceof SpeakerBlockEntity speaker
+                    && !level.getBlockState(packet.pos().below()).is(GrooveBlocks.SPEAKER)) {
+                // A tower standing on a jukebox plays its disc instead of any linked editor
+                var disc = level.getBlockState(packet.pos().below()).is(net.minecraft.world.level.block.Blocks.JUKEBOX)
+                        ? JukeboxSessions.snapshot(level, packet.pos().below(), now) : null;
+                if (disc != null) {
+                    ServerPlayNetworking.send(player, new SpeakerPackets.CommittedState(packet.pos(), packet.request(), true, disc));
+                    return;
+                }
+                editor = linkedEditor(level, speaker);
+            }
             boolean available = isAvailable(editor != null ? editor.project() : null);
             ServerPlayNetworking.send(player, new SpeakerPackets.CommittedState(packet.pos(), packet.request(), available,
                     available ? new MusicPackets.Snapshot(editor.sessionId(), editor.session().committed(now)) : null));

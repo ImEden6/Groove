@@ -161,6 +161,7 @@ public final class BackendTests {
         SampleSliceEntryTests.run();
         sampleTreeChecks();
         HeadphoneLinkTests.run();
+        DiscTests.run();
         SpeakerLinkTests.run();
         catalogUpdateChecks();
         persistenceChecks();

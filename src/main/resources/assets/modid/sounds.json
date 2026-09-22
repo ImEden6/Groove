@@ -1,5 +1,17 @@
 {
   "session": {
-    "sounds": [{"name": "fabric-sound-api-v1:empty", "stream": true}]
+    "sounds": [
+      {
+        "name": "fabric-sound-api-v1:empty",
+        "stream": true
+      }
+    ]
+  },
+  "disc_silence": {
+    "sounds": [
+      {
+        "name": "fabric-sound-api-v1:empty"
+      }
+    ]
   }
 }
