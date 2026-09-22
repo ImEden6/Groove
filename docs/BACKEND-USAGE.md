@@ -164,6 +164,7 @@ privately and silence nearby speakers.
 ```powershell
 .\gradlew.bat -p core-engine check
 .\gradlew.bat build
+.\gradlew.bat runGametest
 .\gradlew.bat runClient -PaudioSmoke
 ```
 
@@ -172,6 +173,17 @@ clock estimation, and live rendering. The full build additionally checks graph J
 and Minecraft packet round trips. The opt-in client test launches a development
 client with OpenAL's silent output driver and exits after verifying streamed PCM
 and queue timing; normal runs do not enable it.
+
+`runGametest` starts a headless server with a flat test world and runs the game tests
+in `src/gametest` (a separate source set, not shipped in the mod jar). They cover what
+needs real blocks, block entities and registered items: burning and loading discs with
+mock players, edit access and creative mode, a speaker tower on a jukebox (playback,
+one session while the disc plays, a restart on reinsertion), sample downloads for a
+disc's patch, and the recipes. A JUnit report goes to `build/gametest/junit.xml`, and
+any failure fails the build; `check` and `build` run it. The mock players are
+disconnected by Cardinal Components' entity sync, which is harmless because the tests
+call the server logic directly. Client-side audio, right-click handling and world
+values are not covered.
 
 For a real multiplayer acceptance test, connect two clients, run play/tempo/stop,
 join a third client mid-cycle, reload resources, disconnect/reconnect, and introduce

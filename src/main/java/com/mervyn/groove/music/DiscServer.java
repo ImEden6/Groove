@@ -20,29 +20,31 @@ public final class DiscServer {
         DiscPackets.register();
         ServerLifecycleEvents.SERVER_STOPPED.register(server -> { requests.clear(); JukeboxSessions.clear(); });
         ServerPlayConnectionEvents.DISCONNECT.register((handler, server) -> requests.remove(handler.player.getUUID()));
-        ServerPlayNetworking.registerGlobalReceiver(DiscPackets.Use.TYPE, (packet, context) -> context.server().execute(() -> {
-            var player = context.player();
-            boolean accepted = false;
-            String message;
-            try {
-                long now = System.nanoTime();
-                Long last = requests.get(player.getUUID());
-                if (last != null && now - last < 250_000_000L) throw new IllegalArgumentException("Please wait before using a disc again");
-                requests.put(player.getUUID(), now);
-                if (player.isSpectator()) throw new IllegalArgumentException("Spectators can't use discs");
-                if (!player.serverLevel().hasChunk(packet.pos().getX() >> 4, packet.pos().getZ() >> 4) || player.distanceToSqr(packet.pos().getCenter()) > 64)
-                    throw new IllegalArgumentException("Editor is out of reach");
-                if (!(player.serverLevel().getBlockEntity(packet.pos()) instanceof EditorBlockEntity editor))
-                    throw new IllegalArgumentException("Not an editor block");
-                if (!HeadphoneServer.isAvailable(editor.project())) throw new IllegalArgumentException("This editor's session can't be read");
-                ItemStack held = player.getMainHandItem();
-                if (held.is(GrooveItems.BLANK_DISC)) message = burn(player, held, editor, now);
-                else if (held.is(GrooveItems.GROOVE_DISC)) message = load(player, held, editor, now);
-                else throw new IllegalArgumentException("Hold a disc in your main hand");
-                accepted = true;
-            } catch (IllegalArgumentException error) { message = error.getMessage(); }
-            ServerPlayNetworking.send(player, new DiscPackets.State(packet.request(), accepted, message));
-        }));
+        ServerPlayNetworking.registerGlobalReceiver(DiscPackets.Use.TYPE, (packet, context) -> context.server().execute(() ->
+                ServerPlayNetworking.send(context.player(), use(context.player(), packet, System.nanoTime()))));
+    }
+
+    /** Burns or loads the held disc at the requested editor, and says what happened. */
+    public static DiscPackets.State use(ServerPlayer player, DiscPackets.Use packet, long now) {
+        boolean accepted = false;
+        String message;
+        try {
+            Long last = requests.get(player.getUUID());
+            if (last != null && now - last < 250_000_000L) throw new IllegalArgumentException("Please wait before using a disc again");
+            requests.put(player.getUUID(), now);
+            if (player.isSpectator()) throw new IllegalArgumentException("Spectators can't use discs");
+            if (!player.serverLevel().hasChunk(packet.pos().getX() >> 4, packet.pos().getZ() >> 4) || player.distanceToSqr(packet.pos().getCenter()) > 64)
+                throw new IllegalArgumentException("Editor is out of reach");
+            if (!(player.serverLevel().getBlockEntity(packet.pos()) instanceof EditorBlockEntity editor))
+                throw new IllegalArgumentException("Not an editor block");
+            if (!HeadphoneServer.isAvailable(editor.project())) throw new IllegalArgumentException("This editor's session can't be read");
+            ItemStack held = player.getMainHandItem();
+            if (held.is(GrooveItems.BLANK_DISC)) message = burn(player, held, editor, now);
+            else if (held.is(GrooveItems.GROOVE_DISC)) message = load(player, held, editor, now);
+            else throw new IllegalArgumentException("Hold a disc in your main hand");
+            accepted = true;
+        } catch (IllegalArgumentException error) { message = error.getMessage(); }
+        return new DiscPackets.State(packet.request(), accepted, message);
     }
 
     private static String burn(ServerPlayer player, ItemStack blank, EditorBlockEntity editor, long now) {

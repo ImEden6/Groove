@@ -13,6 +13,14 @@ repositories {
 	maven { url = "https://maven.ladysnake.org/releases" }
 }
 
+// Headless server tests in a real world, kept out of the mod jar
+sourceSets {
+	gametest {
+		compileClasspath += sourceSets.main.compileClasspath + sourceSets.main.output
+		runtimeClasspath += sourceSets.main.runtimeClasspath + sourceSets.main.output
+	}
+}
+
 loom {
 	splitEnvironmentSourceSets()
 	accessWidenerPath = file("src/main/resources/groove.accesswidener")
@@ -23,12 +31,23 @@ loom {
 				environmentVariable 'ALSOFT_DRIVERS', 'null'
 			}
 		}
+		gametest {
+			server()
+			name "Game Test"
+			vmArg "-Dfabric-api.gametest"
+			vmArg "-Dfabric-api.gametest.report-file=${project.layout.buildDirectory.get()}/gametest/junit.xml"
+			runDir "build/gametest"
+			source sourceSets.gametest
+		}
 	}
 
 	mods {
 		"modid" {
 			sourceSet sourceSets.main
 			sourceSet sourceSets.client
+		}
+		"modid-gametest" {
+			sourceSet sourceSets.gametest
 		}
 	}
 }
@@ -75,6 +94,7 @@ tasks.named('test') {
 	enabled = false // Executable regression suite, no JUnit dependency.
 }
 check.dependsOn backendTest
+check.dependsOn 'runGametest'
 
 tasks.withType(JavaCompile).configureEach {
 	it.options.release = 21

@@ -90,32 +90,31 @@ public final class SpeakerServer {
             ServerPlayNetworking.send(player, new SpeakerPackets.BindState(packet.request(), accepted, message));
         }));
         ServerPlayNetworking.registerGlobalReceiver(SpeakerPackets.CommittedRequest.TYPE, (packet, context) -> context.server().execute(() -> {
-            var player = context.player();
-            long now = System.nanoTime();
-            // Bound both read access and bookkeeping before touching world state.
-            if (player.distanceToSqr(packet.pos().getCenter()) > (long) SEARCH_RADIUS * SEARCH_RADIUS
-                    || !player.serverLevel().hasChunk(packet.pos().getX() >> 4, packet.pos().getZ() >> 4)) {
-                ServerPlayNetworking.send(player, new SpeakerPackets.CommittedState(packet.pos(), packet.request(), false, null));
-                return;
-            }
-            if (!allowPoll(player.getUUID(), packet.pos(), now)) return;
-            EditorBlockEntity editor = null;
-            var level = player.serverLevel();
-            if (level.getBlockEntity(packet.pos()) instanceof SpeakerBlockEntity speaker
-                    && !level.getBlockState(packet.pos().below()).is(GrooveBlocks.SPEAKER)) {
-                // A tower standing on a jukebox plays its disc instead of any linked editor
-                var disc = level.getBlockState(packet.pos().below()).is(net.minecraft.world.level.block.Blocks.JUKEBOX)
-                        ? JukeboxSessions.snapshot(level, packet.pos().below(), now) : null;
-                if (disc != null) {
-                    ServerPlayNetworking.send(player, new SpeakerPackets.CommittedState(packet.pos(), packet.request(), true, disc));
-                    return;
-                }
-                editor = linkedEditor(level, speaker);
-            }
-            boolean available = isAvailable(editor != null ? editor.project() : null);
-            ServerPlayNetworking.send(player, new SpeakerPackets.CommittedState(packet.pos(), packet.request(), available,
-                    available ? new MusicPackets.Snapshot(editor.sessionId(), editor.session().committed(now)) : null));
+            var state = committed(context.player(), packet, System.nanoTime());
+            if (state != null) ServerPlayNetworking.send(context.player(), state);
         }));
+    }
+
+    /** What the speaker tower at the requested base plays, or null when the poll is rate-limited. */
+    public static SpeakerPackets.CommittedState committed(ServerPlayer player, SpeakerPackets.CommittedRequest packet, long now) {
+        // Bound both read access and bookkeeping before touching world state.
+        if (player.distanceToSqr(packet.pos().getCenter()) > (long) SEARCH_RADIUS * SEARCH_RADIUS
+                || !player.serverLevel().hasChunk(packet.pos().getX() >> 4, packet.pos().getZ() >> 4))
+            return new SpeakerPackets.CommittedState(packet.pos(), packet.request(), false, null);
+        if (!allowPoll(player.getUUID(), packet.pos(), now)) return null;
+        EditorBlockEntity editor = null;
+        var level = player.serverLevel();
+        if (level.getBlockEntity(packet.pos()) instanceof SpeakerBlockEntity speaker
+                && !level.getBlockState(packet.pos().below()).is(GrooveBlocks.SPEAKER)) {
+            // A tower standing on a jukebox plays its disc instead of any linked editor
+            var disc = level.getBlockState(packet.pos().below()).is(net.minecraft.world.level.block.Blocks.JUKEBOX)
+                    ? JukeboxSessions.snapshot(level, packet.pos().below(), now) : null;
+            if (disc != null) return new SpeakerPackets.CommittedState(packet.pos(), packet.request(), true, disc);
+            editor = linkedEditor(level, speaker);
+        }
+        boolean available = isAvailable(editor != null ? editor.project() : null);
+        return new SpeakerPackets.CommittedState(packet.pos(), packet.request(), available,
+                available ? new MusicPackets.Snapshot(editor.sessionId(), editor.session().committed(now)) : null);
     }
 
     public static boolean isAvailable(EditorProject project) {
@@ -189,7 +188,7 @@ public final class SpeakerServer {
     }
 
     /** Returns whether a nearby linked speaker is currently playing a committed patch referencing this asset. */
-    static boolean allowsAsset(ServerPlayer player, AssetRef ref) {
+    public static boolean allowsAsset(ServerPlayer player, AssetRef ref) {
         var level = player.serverLevel();
         long now = System.nanoTime();
         // Audio clients poll before downloading. Revalidate those bounded recent

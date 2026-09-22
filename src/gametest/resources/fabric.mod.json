@@ -1,0 +1,16 @@
+{
+	"schemaVersion": 1,
+	"id": "modid-gametest",
+	"version": "1.0.0",
+	"name": "Groove game tests",
+	"environment": "*",
+	"entrypoints": {
+		"fabric-gametest": [
+			"com.mervyn.groove.gametest.DiscGameTests"
+		]
+	},
+	"depends": {
+		"modid": "*",
+		"fabric-gametest-api-v1": "*"
+	}
+}
