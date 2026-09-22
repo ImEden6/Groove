@@ -195,6 +195,7 @@ public final class SignalGraph {
             case DELAY -> Set.of(NodeParam.FRAMES, NodeParam.SYNC, NodeParam.DIVISION, NodeParam.FREE_RUN);
             case MIX_BUS -> Set.of(NodeParam.GAIN);
             case REVERB -> Set.of(NodeParam.DECAY_SECONDS, NodeParam.DAMPING_HZ, NodeParam.BANDWIDTH_HZ, NodeParam.PRE_DELAY_MS);
+            case WORLD -> Set.of(NodeParam.SOURCE, NodeParam.SMOOTH);
             case AUDIO_RENDER, TRIGGER_RENDER -> Set.of();
             default -> throw new IllegalArgumentException("Invalid signal node");
         };
@@ -210,6 +211,7 @@ public final class SignalGraph {
                 range(n,NodeParam.RELEASE,.1,0,8,false); range(n,NodeParam.MODE,0,0,1,true);
             }
             case ATTENUVERTER -> { range(n,NodeParam.SCALE,1,-20000,20000,false); range(n,NodeParam.OFFSET,0,-20000,20000,false); }
+            case WORLD -> { range(n,NodeParam.SOURCE,0,0,WorldInputs.COUNT-1,true); range(n,NodeParam.SMOOTH,2,0,30,false); }
             case FILTER -> { range(n,NodeParam.CUTOFF_HZ,20000,20,20000,false); range(n,NodeParam.RESONANCE_Q,Biquad.DEFAULT_Q,.1,20,false); range(n,NodeParam.MODE,0,0,3,true); }
             case DELAY -> {
                 range(n, NodeParam.FRAMES, 64, CONTROL_FRAMES, MAX_DELAY_FRAMES, true);
@@ -454,6 +456,7 @@ public final class SignalGraph {
         return new Graph(submitted.version(), result, submitted.edges());
     }
 
-    public SignalRuntime runtime(SessionState state) { return new SignalRuntime(this, state); }
+    public SignalRuntime runtime(SessionState state) { return runtime(state, new WorldInputs()); }
+    public SignalRuntime runtime(SessionState state, WorldInputs world) { return new SignalRuntime(this, state, world); }
     static void require(boolean condition, String reason) { if (!condition) throw new IllegalArgumentException(reason); }
 }

@@ -471,6 +471,39 @@ final class EffectCarryTests {
         check(q.ramping() == 1, "A modulated filter's changed Q still ramps");
     }
 
+    private static Graph worldBus(double source, double smooth) {
+        return new Graph(3, List.of(new Graph.Node("tone", NodeType.TONE, Map.of()), new Graph.Node("render", NodeType.AUDIO_RENDER, Map.of()),
+                new Graph.Node("w", NodeType.WORLD, Map.of(NodeParam.SOURCE, source, NodeParam.SMOOTH, smooth)),
+                new Graph.Node("bus", NodeType.MIX_BUS, Map.of()), new Graph.Node("out", NodeType.OUTPUT, Map.of())),
+                List.of(Graph.edge("tone", "render"), Graph.edge("render", "bus"), new Graph.Edge("w", "out", "bus", "gain"),
+                        new Graph.Edge("bus", "out", "out", "audio")));
+    }
+
+    /** A republish continues a world node's settle instead of jumping to the current value. */
+    private static void worldCarry() {
+        SignalGraph rain = signals(worldBus(1, 2));
+        check(carries(rain, signals(worldBus(1, 5)), "w") && seamless(rain, worldBus(1, 5)), "A smoothing change carries seamlessly");
+        check(!carries(rain, signals(worldBus(2, 2)), "w") && !seamless(rain, worldBus(2, 2)), "A source change starts over");
+        var world = new WorldInputs();
+        double[] values = new double[WorldInputs.COUNT];
+        java.util.Arrays.fill(values, Double.NaN);
+        values[WorldInputs.RAIN] = 0;
+        world.update(values);
+        SignalRuntime a = rain.runtime(start(worldBus(1, 2)), world), b = signals(worldBus(1, 5)).runtime(start(worldBus(1, 5)), world);
+        a.control("w", 0);
+        values[WorldInputs.RAIN] = 1;
+        world.update(values);
+        long at = 0;
+        for (long frame = 0; frame < 24000; frame++) a.control("w", at = frameNanos(frame));
+        double before = a.control("w", at);
+        b.reset();
+        b.continueFrom(a, SignalRuntime.transferPlan(rain, signals(worldBus(1, 5))));
+        check(b.control("w", at) == before, "The carried node resumes on the same frame");
+        double next = b.control("w", frameNanos(24064));
+        check(next > before && next < before + 0.01, "It keeps settling from there: " + before + " to " + next);
+        check(b.control("w", frameNanos(48000 * 30)) > 0.99, "It still reaches the new value");
+    }
+
     private static Graph modulatedFilter(double q) {
         return new Graph(3, List.of(new Graph.Node("tone", NodeType.TONE, Map.of()), new Graph.Node("render", NodeType.AUDIO_RENDER, Map.of()),
                 new Graph.Node("lp", NodeType.FILTER, Map.of(NodeParam.CUTOFF_HZ, 1000.0, NodeParam.RESONANCE_Q, q)),

@@ -155,7 +155,7 @@ public final class LiveRenderer {
          *  passed as a second, separately-named flag, so the two can't drift out of sync. */
         VoiceProgram(Program program, LiveRenderer owner) {
             state = program.state(); plan = program.plan(); samples = program.preparedSamples; scheduler = program.scheduler;
-            signals = plan.signals() == null ? null : plan.signals().runtime(state);
+            signals = plan.signals() == null ? null : plan.signals().runtime(state, owner.world);
             // Only a program with a signal graph can carry effects, so only it pays for the map.
             transferPlans = plan.signals() == null ? java.util.Map.of() : new java.util.IdentityHashMap<>();
             boolean stateful = false;
@@ -225,6 +225,7 @@ public final class LiveRenderer {
     private volatile long historyFrames, historyRecoveries;
     private volatile long replayQueuedFrames, replayLeases, replayQueueDepth, replayMaxWaitFrames, replayReclaims, replayEvictions;
     private final ReplayBudget replayBudget;
+    private final WorldInputs world = new WorldInputs();
     /** False keeps the original per-frame selection, for differential tests. */
     private final boolean cachedSelection;
     /** Tests only: voices started, stolen and carried across a switch, and switches with no output crossfade. */
@@ -256,6 +257,8 @@ public final class LiveRenderer {
         this.replayBudget = java.util.Objects.requireNonNull(replayBudget);
         this.cachedSelection = cachedSelection;
     }
+
+    public WorldInputs world() { return world; }
 
     /** Control-thread only: prepare renderer-private filters before the volatile handoff.
      *  Programs remain shareable; only the audio owner mutates the prepared filters.

@@ -52,6 +52,8 @@ public final class NodeParam {
     public static final String DAMPING_HZ = "dampingHz";
     public static final String BANDWIDTH_HZ = "bandwidthHz";
     public static final String PRE_DELAY_MS = "preDelayMs";
+    public static final String SOURCE = "source";
+    public static final String SMOOTH = "smooth";
 
     private NodeParam() {}
 }

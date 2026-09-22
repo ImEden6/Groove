@@ -32,6 +32,11 @@ public final class SignalRuntime {
     private int rampTotal = 1, ramping;
     /** Delay and reverb buffers may hold something other than zeros; a new runtime's arrays start zeroed. */
     private boolean touched;
+    private final WorldInputs world;
+    /** Per world node: its smoothed value at the start and end of worldBlock. */
+    private final double[] worldFrom, worldTo;
+    private final long[] worldBlock;
+    private static final double BLOCK_SECONDS = SignalGraph.CONTROL_FRAMES / (double) LiveRenderer.SAMPLE_RATE;
 
     private static final int MIX_GAIN = 0;
     private static final int FILTER_CUTOFF = 0, FILTER_Q = 1;
@@ -41,10 +46,13 @@ public final class SignalRuntime {
     private static final int ATT_SCALE = 0, ATT_OFFSET = 1;
     private static final int ENV_ATTACK = 0, ENV_DECAY = 1, ENV_SUSTAIN = 2, ENV_RELEASE = 3, ENV_MODE = 4;
     private static final int ENV_WIDTH = 5, ENV_RELEASE_AT = 6;
+    private static final int WORLD_SOURCE = 0, WORLD_SMOOTH = 1;
 
-    SignalRuntime(SignalGraph graph, SessionState state) {
-        this.graph = graph; this.state = state;
+    SignalRuntime(SignalGraph graph, SessionState state, WorldInputs world) {
+        this.graph = graph; this.state = state; this.world = world;
         int size = graph.nodes.length;
+        worldFrom = new double[size]; worldTo = new double[size]; worldBlock = new long[size];
+        Arrays.fill(worldBlock, Long.MIN_VALUE);
         left = new double[size]; right = new double[size]; start = new double[size]; end = new double[size];
         controls = new double[size][SignalGraph.CONTROL_FRAMES];
         delayLeft = new double[size][]; delayRight = new double[size][]; cursors = new int[size];
@@ -111,6 +119,7 @@ public final class SignalRuntime {
                         p(n, NodeParam.SCALE, 1),
                         p(n, NodeParam.OFFSET, 0)
                 };
+                case WORLD -> nodeParams[i] = new double[]{p(n, NodeParam.SOURCE, 0), p(n, NodeParam.SMOOTH, 2)};
                 case ENVELOPE -> {
                     double attack = p(n, NodeParam.ATTACK, .01);
                     double decay = p(n, NodeParam.DECAY, .1);
@@ -260,6 +269,7 @@ public final class SignalRuntime {
             case FILTER -> Set.of(NodeParam.CUTOFF_HZ, NodeParam.RESONANCE_Q);
             case REVERB -> Set.of(NodeParam.DECAY_SECONDS, NodeParam.DAMPING_HZ, NodeParam.BANDWIDTH_HZ);
             case DELAY -> Set.of(NodeParam.FRAMES, NodeParam.SYNC, NodeParam.DIVISION, NodeParam.FREE_RUN);
+            case WORLD -> Set.of(NodeParam.SMOOTH);
             default -> Set.of();
         };
         Map<String, Double> x = new HashMap<>(a.params()), y = new HashMap<>(b.params());
@@ -268,7 +278,7 @@ public final class SignalRuntime {
     }
 
     private static boolean stateful(Graph.Node n) {
-        return n.type() == NodeType.DELAY || n.type() == NodeType.FILTER || n.type() == NodeType.REVERB;
+        return n.type() == NodeType.DELAY || n.type() == NodeType.FILTER || n.type() == NodeType.REVERB || n.type() == NodeType.WORLD;
     }
 
     /** Same id, type and inputs (match >= 0), plus a filter keeping its mode. */
@@ -276,6 +286,8 @@ public final class SignalRuntime {
         if (j < 0) return false;
         if (to.nodes[i].type() == NodeType.FILTER)
             return p(to.nodes[i], NodeParam.MODE, 0) == p(from.nodes[j], NodeParam.MODE, 0);
+        if (to.nodes[i].type() == NodeType.WORLD)
+            return p(to.nodes[i], NodeParam.SOURCE, 0) == p(from.nodes[j], NodeParam.SOURCE, 0);
         return true;
     }
 
@@ -342,6 +354,7 @@ public final class SignalRuntime {
                 }
                 case FILTER -> { filtersLeft[i].copyStateFrom(previous.filtersLeft[j]); filtersRight[i].copyStateFrom(previous.filtersRight[j]); }
                 case REVERB -> reverbs[i].copyStateFrom(previous.reverbs[j]);
+                case WORLD -> { worldFrom[i] = previous.worldFrom[j]; worldTo[i] = previous.worldTo[j]; worldBlock[i] = previous.worldBlock[j]; }
                 default -> { }
             }
         }
@@ -431,6 +444,7 @@ public final class SignalRuntime {
         boolean clear = touched;
         touched = false;
         controlBlock = Long.MIN_VALUE;
+        Arrays.fill(worldBlock, Long.MIN_VALUE);
         Arrays.fill(cursors,0);
         for (int i=0;i<graph.nodes.length;i++) {
             if (delayLeft[i] != null) {
@@ -574,8 +588,9 @@ public final class SignalRuntime {
             // written directly into start[]/end[] before evaluate() runs, so any node evaluated
             // later in graph.order that reads this envelope's value sees the real result either way.
             evaluateTriggerDrivenEnvelopes(startNanos, endNanos);
-            evaluate(startNanos, start);
-            evaluate(endNanos, end);
+            settleWorld(block);
+            evaluate(startNanos, start, false);
+            evaluate(endNanos, end, true);
             for (int i=0;i<graph.nodes.length;i++) for (int f=0;f<SignalGraph.CONTROL_FRAMES;f++)
                 controls[i][f] = start[i] + (end[i]-start[i]) * f / SignalGraph.CONTROL_FRAMES;
             controlBlock = block;
@@ -585,7 +600,29 @@ public final class SignalRuntime {
 
     private double cycleAt(double nanos) { return state.anchorCycle() + (nanos-state.effectiveNanos()) / 1e9 * state.bpm()/240; }
 
-    private void evaluate(double nanos, double[] values) {
+    /** Moves each world node's smoothed value on to this block; a carried node already there keeps it. */
+    private void settleWorld(long block) {
+        for (int i = 0; i < graph.nodes.length; i++) {
+            if (graph.nodes[i].type() != NodeType.WORLD || worldBlock[i] == block) continue;
+            double[] p = nodeParams[i];
+            double target = world.get((int) p[WORLD_SOURCE]);
+            if (worldBlock[i] == Long.MIN_VALUE) worldFrom[i] = worldTo[i] = target;
+            else {
+                // Time can step back on a resync; carry on from the last value
+                long gap = block > worldBlock[i] ? block - worldBlock[i] : 1;
+                worldFrom[i] = settle(worldTo[i], target, p[WORLD_SMOOTH], gap - 1);
+                worldTo[i] = settle(worldFrom[i], target, p[WORLD_SMOOTH], 1);
+            }
+            worldBlock[i] = block;
+        }
+    }
+
+    private static double settle(double value, double target, double seconds, long blocks) {
+        if (seconds <= 0) return target;
+        return target + (value - target) * Math.exp(-blocks * BLOCK_SECONDS / seconds);
+    }
+
+    private void evaluate(double nanos, double[] values, boolean blockEnd) {
         double cycle = cycleAt(nanos);
         for (int i : graph.order) {
             Graph.Node n = graph.nodes[i];
@@ -620,6 +657,7 @@ public final class SignalRuntime {
                     values[i] = periodicEnvelopeValue(cycle, p[ENV_WIDTH], p[ENV_RELEASE_AT],
                             p[ENV_ATTACK], p[ENV_DECAY], p[ENV_SUSTAIN], p[ENV_RELEASE]);
                 }
+                case WORLD -> values[i] = blockEnd ? worldTo[i] : worldFrom[i];
                 default -> values[i] = 0;
             }
         }

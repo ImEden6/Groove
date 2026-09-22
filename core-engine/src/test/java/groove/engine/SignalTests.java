@@ -4,7 +4,7 @@ import java.util.*;
 
 final class SignalTests {
     static void run() {
-        validation(); modulation(); feedback(); filter(); live(); historyRecovery(); constantSampleRecovery(); overlappingRecoveryFade(); multipleSources(); multipleSourceLifecycle(); triggerRenderPlumbing(); arbitraryTriggerEnvelope(); allocation(); delaySync();
+        validation(); modulation(); feedback(); filter(); live(); historyRecovery(); constantSampleRecovery(); overlappingRecoveryFade(); multipleSources(); multipleSourceLifecycle(); triggerRenderPlumbing(); arbitraryTriggerEnvelope(); allocation(); delaySync(); world();
         System.out.println("Signal graph modulation, feedback, live, delay sync and allocation checks passed.");
     }
     private static Graph.Node n(String id,NodeType type,Map<String,Double> params) { return new Graph.Node(id,type,params); }
@@ -780,6 +780,53 @@ final class SignalTests {
             long allocated = allocation.getThreadAllocatedBytes(tid) - before;
             check(allocated == 0, "Synced delay audio callback allocated " + allocated + " bytes");
         }
+    }
+    private static Graph worldGraph(Map<String,Double> params) {
+        return base(List.of(n("w",NodeType.WORLD,params),n("bus",NodeType.MIX_BUS,Map.of())),
+                List.of(Graph.edge("render","bus"),new Graph.Edge("w","out","bus","gain"),out("bus")));
+    }
+    private static double[] inputs(int source,double value) {
+        double[] values = new double[WorldInputs.COUNT];
+        Arrays.fill(values,Double.NaN);
+        values[source] = value;
+        return values;
+    }
+    private static void world() {
+        GraphCompiler.compile(worldGraph(Map.of()));
+        for (var bad : List.of(Map.of("source",7.0),Map.of("source",-1.0),Map.of("source",1.5),Map.of("smooth",-1.0),Map.of("smooth",31.0),Map.of("rate",1.0)))
+            invalid(() -> GraphCompiler.compile(worldGraph(bad)));
+        Graph daylight = worldGraph(Map.of());
+        close(runtime(daylight,state(daylight,0,0,120)).control("w",1_000_000_000L),1,0,"Default inputs read noon");
+        var world = new WorldInputs();
+        world.update(inputs(WorldInputs.RAIN,.3));
+        world.update(inputs(WorldInputs.THUNDER,.7));
+        check(world.get(WorldInputs.RAIN)==.3 && world.get(WorldInputs.DAYLIGHT)==1,"NaN keeps the previous value");
+        world.update(inputs(WorldInputs.RAIN,4));
+        check(world.get(WorldInputs.RAIN)==1,"Values clamp to 0..1");
+        Graph rain = worldGraph(Map.of("source",1.0,"smooth",0.0));
+        world.update(inputs(WorldInputs.RAIN,.3));
+        SignalRuntime instant = GraphCompiler.compile(rain).signals().runtime(state(rain,0,0,120),world);
+        close(instant.control("w",0),.3,0,"Unsmoothed node reads its source");
+        // Starts at its value, then follows a step with a one-pole settle
+        Graph smooth = worldGraph(Map.of("source",1.0,"smooth",1.0));
+        world.update(inputs(WorldInputs.RAIN,0));
+        SignalRuntime dsp = GraphCompiler.compile(smooth).signals().runtime(state(smooth,0,0,120),world);
+        long frame = 0;
+        for (; frame < 4800; frame++) close(dsp.control("w",Math.round(frame*1e9/48000)),0,0,"Held before the step");
+        world.update(inputs(WorldInputs.RAIN,1));
+        double last = 0, largest = 0;
+        for (; frame < 4800+48000; frame++) {
+            double value = dsp.control("w",Math.round(frame*1e9/48000));
+            check(value >= last,"Settles without overshoot");
+            largest = Math.max(largest,value-last); last = value;
+        }
+        close(last,1-Math.exp(-1),.002,"One smoothing time reaches 63%");
+        check(largest < 1.01/48000,"No step larger than the settle slope: "+largest);
+        close(WorldInputs.proximity(0),1,0,"At the source");
+        close(WorldInputs.proximity(32),.5,1e-12,"Half range");
+        close(WorldInputs.proximity(100),0,0,"Out of range");
+        close(WorldInputs.temperature(-.7),0,1e-12,"Coldest biome");
+        close(WorldInputs.temperature(2),1,1e-12,"Hottest biome");
     }
     private static void close(double actual,double expected,double tolerance,String message) { check(Math.abs(actual-expected)<=tolerance,message+": "+actual+" != "+expected); }
     private static void check(boolean condition,String message) { if (!condition) throw new AssertionError(message); }
