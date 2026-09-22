@@ -18,6 +18,7 @@
 			"com.mervyn.groove.client.GrooveModClient"
 		]
 	},
+	"accessWidener": "groove.accesswidener",
 	"mixins": [
 		"modid.mixins.json",
 		{

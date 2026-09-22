@@ -53,6 +53,8 @@ public record RotaryKnob(String param, int x, int y, int width) {
                 ? (value < .5 ? "Sine" : value < 1.5 ? "Saw" : "Pulse")
                 : node.type() == groove.engine.NodeType.LFO && param.equals(NodeParam.WAVE)
                 ? LFO_WAVE_NAMES[Math.max(0, Math.min(3, (int)value))]
+                : node.type() == groove.engine.NodeType.WORLD && param.equals(NodeParam.SOURCE)
+                ? groove.engine.WorldInputs.NAMES[Math.max(0, Math.min(groove.engine.WorldInputs.COUNT - 1, (int)value))]
                 : node.type() == groove.engine.NodeType.DELAY && param.equals(NodeParam.SYNC)
                 ? (value < .5 ? "Free" : "Sync")
                 : node.type() == groove.engine.NodeType.DELAY && param.equals(NodeParam.FREE_RUN)

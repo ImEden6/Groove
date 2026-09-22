@@ -17,6 +17,7 @@ import groove.engine.LiveRenderer;
 import groove.engine.ReplayBudget;
 import groove.engine.SessionState;
 import groove.engine.SessionTimeline;
+import groove.engine.WorldInputs;
 import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientLifecycleEvents;
 import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents;
 import com.mervyn.groove.music.GrooveProtocol;
@@ -208,6 +209,7 @@ public final class MusicClient {
                 stopHeadphonePreview(client);
                 updateEmitters(client);
             }
+            feedWorld(client);
         });
     }
     public static java.util.Map<groove.engine.samples.AssetRef, String> sampleStatus() { return sampleStatus; }
@@ -393,6 +395,7 @@ public final class MusicClient {
                             && client.getSoundManager().isActive(emitter.sound)) return;
                     if (emitter != null) stopEmitter(emitter);
                     LiveRenderer sourceRenderer = new LiveRenderer(SPEAKER_REPLAY);
+                    feedWorld(client, sourceRenderer, pos);
                     sourceRenderer.publish(speakerLinks.get(pos).program, speakerSession(speakerLinks.get(pos)));
                     GrooveAudioStream sourceStream = new GrooveAudioStream(sourceRenderer, clock, true);
                     GrooveSound sourceSound = new GrooveSound(sourceStream, pos, height);
@@ -422,6 +425,29 @@ public final class MusicClient {
             return;
         link.request = UUID.randomUUID(); link.sent = now;
         ClientPlayNetworking.send(new SpeakerPackets.CommittedRequest(pos, link.request));
+    }
+
+    private static final double[] worldValues = new double[WorldInputs.COUNT];
+
+    private static void feedWorld(Minecraft client) {
+        if (previewLink != null && previewSound != null) feedWorld(client, previewRenderer, previewLink.pos());
+        emitters.forEach((pos, emitter) -> feedWorld(client, emitter.renderer(), pos));
+    }
+
+    /** Headphones read at the linked editor, so they preview what its speakers play. */
+    private static void feedWorld(Minecraft client, LiveRenderer renderer, BlockPos at) {
+        var level = client.level;
+        var biome = level.getBiome(at).value();
+        // Sun angle 0 is noon
+        worldValues[WorldInputs.DAYLIGHT] = .5 + .5 * Math.cos(level.getSunAngle(1));
+        worldValues[WorldInputs.RAIN] = level.getRainLevel(1);
+        worldValues[WorldInputs.THUNDER] = level.getThunderLevel(1);
+        worldValues[WorldInputs.ALTITUDE] = (at.getY() - level.getMinBuildHeight()) / (double) level.getHeight();
+        worldValues[WorldInputs.TEMPERATURE] = WorldInputs.temperature(biome.getBaseTemperature());
+        worldValues[WorldInputs.HUMIDITY] = biome.climateSettings.downfall;
+        worldValues[WorldInputs.PROXIMITY] = WorldInputs.proximity(Math.sqrt(
+                client.gameRenderer.getMainCamera().getPosition().distanceToSqr(at.getCenter())));
+        renderer.world().update(worldValues);
     }
 
     private static int towerHeight(Minecraft client, BlockPos base) {
@@ -463,6 +489,7 @@ public final class MusicClient {
             if (previewStream != null) previewStream.close();
             previewReplay = new ReplayBudget(1);
             previewRenderer = new LiveRenderer(previewReplay);
+            feedWorld(client, previewRenderer, previewLink.pos());
             previewRenderer.publish(previewProgram, previewLink.session());
             previewStream = new GrooveAudioStream(previewRenderer, clock);
             previewStream.setUnderwater(underwater);

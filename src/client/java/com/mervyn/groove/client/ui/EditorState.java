@@ -499,7 +499,7 @@ public final class EditorState {
                     NodeParam.FRAMES, NodeParam.SEED, NodeParam.STEPS_PER_CYCLE,
                     NodeParam.PULSES, NodeParam.ROTATION, NodeParam.ROOT, NodeParam.CHORD, NodeParam.INVERSION,
                     NodeParam.START_FRAME, NodeParam.END_FRAME, NodeParam.SLICES, NodeParam.INDEX, NodeParam.REVERSE, NodeParam.SUBDIVISION, NodeParam.DIVISION,
-                    NodeParam.PRE_DELAY_MS -> true;
+                    NodeParam.PRE_DELAY_MS, NodeParam.SOURCE -> true;
             default -> false;
         };
     }
@@ -530,6 +530,7 @@ public final class EditorState {
             case NodeParam.OFFSET -> 40;
             case NodeParam.FRAMES -> 120;
             case NodeParam.PRE_DELAY_MS -> 1.0;
+            case NodeParam.SOURCE, NodeParam.SMOOTH -> .05;
             default -> 1.0;
         };
     }
@@ -565,6 +566,8 @@ public final class EditorState {
             case NodeParam.DECAY_SECONDS -> Math.max(0.1, Math.min(20.0, value));
             case NodeParam.DAMPING_HZ, NodeParam.BANDWIDTH_HZ -> Math.max(200.0, Math.min(20000.0, value));
             case NodeParam.PRE_DELAY_MS -> Math.max(0.0, Math.min(500.0, value));
+            case NodeParam.SOURCE -> Math.max(0, Math.min(groove.engine.WorldInputs.COUNT - 1, Math.rint(value)));
+            case NodeParam.SMOOTH -> Math.max(0, Math.min(30, value));
             default -> Math.max(-1,Math.min(1,value));
         };
         return switch (param) {
@@ -621,6 +624,7 @@ public final class EditorState {
             case LFO -> Map.of(NodeParam.RATE,1.0,NodeParam.SYNC,0.0,NodeParam.WAVE,0.0);
             case ENVELOPE -> Map.of(NodeParam.ATTACK,.01,NodeParam.DECAY,.1,NodeParam.SUSTAIN,.5,NodeParam.RELEASE,.1,NodeParam.MODE,0.0);
             case ATTENUVERTER -> Map.of(NodeParam.SCALE,1.0,NodeParam.OFFSET,0.0);
+            case WORLD -> Map.of(NodeParam.SOURCE,0.0,NodeParam.SMOOTH,2.0);
             case STEP_SEQUENCE -> Map.ofEntries(Map.entry(NodeParam.STEPS,4.0),Map.entry(NodeParam.RATE,1.0),Map.entry(NodeParam.GATE,.5),
                     Map.entry("value0",1.0),Map.entry("value1",0.0),Map.entry("value2",.5),Map.entry("value3",0.0),
                     Map.entry("value4",0.0),Map.entry("value5",0.0),Map.entry("value6",0.0),Map.entry("value7",0.0));

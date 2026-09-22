@@ -169,6 +169,7 @@ public final class BackendTests {
         typedCompatibilityChecks();
         signalChecks();
         reverbChecks();
+        worldChecks();
         protocolChecks();
         unreadableProjectChecks();
         fixtureChecks();
@@ -945,6 +946,25 @@ public final class BackendTests {
             GraphCompiler.compile(decoded);
             check(GraphJson.decode(GraphJson.encode(decoded)).equals(decoded), "Fixture " + name + " survives JSON round-trip");
         }
+    }
+
+    private static void worldChecks() {
+        var worldParams = com.mervyn.groove.client.ui.EditorState.defaultParams(NodeType.WORLD);
+        Graph graph = new Graph(3, java.util.List.of(new Graph.Node("tone", NodeType.TONE, java.util.Map.of()),
+                new Graph.Node("render", NodeType.AUDIO_RENDER, java.util.Map.of()),
+                new Graph.Node("rain", NodeType.WORLD, worldParams),
+                new Graph.Node("bus", NodeType.MIX_BUS, java.util.Map.of()),
+                new Graph.Node("out", NodeType.OUTPUT, java.util.Map.of())),
+                java.util.List.of(Graph.edge("tone", "render"), Graph.edge("render", "bus"),
+                        new Graph.Edge("rain", "out", "bus", "gain"), new Graph.Edge("bus", "out", "out", "audio")));
+        GraphCompiler.compile(graph);
+        check(GraphJson.decode(GraphJson.encode(graph)).equals(graph), "World graph round trips through JSON");
+        check(GraphJson.encode(graph).contains("\"world\""), "World node saves under its type name");
+        Graph partial = new Graph(3, java.util.List.of(new Graph.Node("w", NodeType.WORLD, java.util.Map.of(NodeParam.SOURCE, 6.0))), java.util.List.of());
+        check(GraphJson.decodeDraft(GraphJson.encode(partial)).equals(partial), "Unwired world node passes decodeDraft");
+        check(com.mervyn.groove.client.ui.EditorState.clampParam(NodeType.WORLD, NodeParam.SOURCE, 9.4, worldParams) == WorldInputs.COUNT - 1,
+                "Editor clamps the source to the last world value");
+        check(com.mervyn.groove.client.ui.EditorState.clampParam(NodeType.WORLD, NodeParam.SMOOTH, 45, worldParams) == 30, "Editor clamps smoothing");
     }
 
     private static void reverbChecks() {
