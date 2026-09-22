@@ -11,8 +11,8 @@
 
 ## Stage 1 usage
 
-The editor's Shift+A / Tab palette includes `scale_sequence`, `transpose`,
-and `chord`. Each accepts one `PATTERN` input and emits a `PATTERN` output.
+The editor's Shift+A / Tab palette includes `scale_sequence`, `quantize`,
+`transpose`, and `chord`. Each accepts one `PATTERN` input and emits a `PATTERN` output.
 Use a tone as the voice template, followed by a scale sequence and then a
 chord or transpose node. Connect the result to `output.in`, or to
 `audio_render` for effects routing.
@@ -49,6 +49,31 @@ as `polymeter`. The sequence continues across bar boundaries; child patterns
 advance a local cycle per sequence rotation. Start with a single tone for
 a melody. Put `chord` after this node: an absolute scale pitch replaces
 every incoming tone pitch and does not preserve an upstream chord's intervals.
+
+### Quantize
+
+`quantize` plays a scale degree picked by a control signal, so an LFO, step
+sequence, envelope or [world node](PHASE-2-SIGNALS.md#world-values) can play a
+melody that stays in key. It takes a tone pattern on `in` and an optional
+`MOD_FLOAT` on `degree`.
+
+- `root` and `scale`: as for `scale_sequence`; `root` accepts note names.
+- `low`, `high`: integer degrees -64..64, default 0 and 7, with `low` ≤ `high`.
+
+The control's 0..1 range is split into `high - low + 1` equal steps, from `low`
+at 0 to `high` at 1; values outside it clamp. A world node plugs straight in; an
+LFO or step sequence (-1..1) needs an attenuverter with scale .5 and offset .5.
+With nothing on `degree`, every note plays `low`. Every pitch from `low` to `high`,
+after any later transpose or chord, must fit the playable frequency range.
+
+Each note reads its control once, half a frame after its onset, and holds that
+pitch; a step sequence on the same grid is read after its step changes. The value
+is taken at the note's onset, not when a player starts hearing it, so a player
+who joins mid-note hears the same pitch, and every player hears the same melody
+from time-based controls. A world node gives its current value to a late joiner.
+Put `transpose` or `chord` after a quantizer to shift or voice the picked note.
+A control wired into a quantizer cannot depend on that quantizer's own notes,
+for example through a `trigger_render` envelope: that is a zero-delay cycle.
 
 ### Transpose and chords
 

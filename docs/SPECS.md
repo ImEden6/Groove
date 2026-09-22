@@ -2,9 +2,8 @@
 
 ## Still unimplemented (from this doc)
 
-Parts of the Strudel-comparison gap analysis ([FUTURE-WORK.md](FUTURE-WORK.md#inception-gap-analysis)) have landed: `alternate`, `probability` and `polymeter`; note names, `scale_sequence`, `transpose` and `chord`; `sample_slice`, reversed playback and sustained loops; and the environmental modulators, as one [`world` node](PHASE-2-SIGNALS.md#world-values). Still missing:
+Parts of the Strudel-comparison gap analysis ([FUTURE-WORK.md](FUTURE-WORK.md#inception-gap-analysis)) have landed: `alternate`, `probability` and `polymeter`; note names, `scale_sequence`, `transpose`, `chord` and a control-driven [`quantize`](ENGINE-UPGRADE-STAGES.md#quantize); `sample_slice`, reversed playback and sustained loops; and the environmental modulators, as one [`world` node](PHASE-2-SIGNALS.md#world-values). Still missing:
 
-- Pitch: a continuous `ScaleQuantizer` node.
 - Sampling: live slice-index modulation and time stretching.
 - Physical pattern-archiving item (Vinyl/Punch Card disc) for burning/loading patches in survival.
 

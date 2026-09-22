@@ -133,10 +133,10 @@ ordering, limits, and examples. A dedicated input-order editor is still deferred
 
 Stage 1 now provides note-name authoring, `scale_sequence`, `transpose`, and
 `chord` on the event side. See [engine upgrade stages](ENGINE-UPGRADE-STAGES.md)
-for parameters, bounds, and an example patch. Continuous signal-driven pitch
-quantization remains future work:
+for parameters, bounds, and an example patch.
 
-* **Scale Quantizer Node:**
+* **Scale Quantizer Node — implemented** as [`quantize`](ENGINE-UPGRADE-STAGES.md#quantize): a control picks each note's
+  scale degree when the note starts. Pitch moving within a held note is not implemented.
 * Takes continuous pitch ratios or integer scale degrees ($0, 1, 2, 3\dots$) and forces them into musical scales (Minor Pentatonic, Dorian, Phrygian, Major, Blues).
 * Inputs: Root Note (e.g., $C3$), Scale Selector.
 * Formula:

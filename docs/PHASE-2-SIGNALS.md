@@ -30,7 +30,9 @@ are allowed: two render nodes fed by the same pattern produce independent voices
 while one render node fanned out to several effects produces its audio once.
 A connected control replaces the corresponding static cutoff/gain value;
 values clamp to that parameter's range. Use an attenuverter to map bipolar LFO
-output to cutoff Hz or a unipolar gain. Audio processing happens before the existing
+output to cutoff Hz or a unipolar gain. A control can also feed a pattern node's
+`quantize.degree`, read once as each note starts; see [quantize](ENGINE-UPGRADE-STAGES.md#quantize).
+Audio processing happens before the existing
 final tanh limiter. Legacy offline `Score`/`Renderer` APIs remain pattern renderers;
 signal graphs execute through `LiveRenderer`.
 
