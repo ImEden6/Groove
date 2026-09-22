@@ -2,17 +2,16 @@
 
 ## Still unimplemented (from this doc)
 
-- Headphone item, Trinkets equip slot, and priority routing (personal monitor over speaker audio,
-  with sample audition taking priority over both) have landed. Still no underwater muffling filter,
-  and headphone audio reuses the existing non-positional monitor stream rather than a true
-  `AL_SOURCE_RELATIVE` head-locked sink; live draft-graph monitoring through headphones is also
-  unimplemented; see [FUTURE-WORK.md](FUTURE-WORK.md).
+- Headphones are complete: Trinkets equip slot, priority routing (sample audition over the personal
+  monitor over speaker audio), live draft monitoring of the linked editor, a head-locked
+  (`relative`) sink, and underwater muffling; see [FUTURE-WORK.md](FUTURE-WORK.md).
 - Phase 2 extensions are implemented: independent audio-render sources, arbitrary pattern triggers/polyphonic envelopes, and bounded local effect-history recovery. Exact older/cross-revision history remains future work; see [signals](PHASE-2-SIGNALS.md).
 - No tempo automation, timeline seeking, or non-integer-cycle start (runtime `/groove tempo` exists; score/pattern-side tempo curves do not).
 - No adaptive resync tuning beyond fixed slew/step thresholds under asymmetric/high-jitter conditions.
 - No server-side chunk-unload or distance culling for audio session state (session is server-wide/persistent).
 - Pattern queries and the Minecraft audio stream adapter still allocate per tick/block (the mixer itself does not).
-- No automated server-to-client resourcepack distribution for custom samples.
+- Custom samples are distributed on demand (catalog browsing on join, `/groove-samples install <id>`,
+  and bounded transfers for referenced assets), but there is no bulk push and no compressed bundle.
 
 See [FUTURE-WORK.md](FUTURE-WORK.md) for the full ranked list.
 
@@ -30,7 +29,7 @@ references, and 48-tap Kaiser-windowed sinc resampling; see [samples and packs](
 and [engine evolution](ENGINE-EVOLUTION.md). Tone and sample nodes feature biquad low-pass
 filtering (`cutoffHz` and `resonanceQ`), with voice-stealing crossfades. V3 adds deterministic
 modulation and delayed audio routing (see [signals](PHASE-2-SIGNALS.md)). A wearable headphone
-item (Trinkets equip slot) now routes personal monitor audio ahead of speaker positional audio;
+item (Trinkets equip slot) plays the linked editor's draft head-locked, ahead of speaker audio;
 score tempo automation remains future work; see [FUTURE-WORK.md](FUTURE-WORK.md) for the full
 current list.
 
