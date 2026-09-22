@@ -15,6 +15,7 @@ graphs and their v1/v2 serialization continue to work unchanged.
 | `lfo` | None | `out`: MOD_FLOAT | `rate=1` (.001–40); `sync=0` (0=Hz, 1=cycles); `wave=0` (sine, triangle, square, saw: 0–3) |
 | `step_sequence` | None | `out`: MOD_FLOAT; `trigger`: TRIGGER | `steps=4` (1–8); `rate=1` (.125–16 sequences/cycle); `gate=.5` (.001–1); `value0` through `value7` (-1–1, engine default 0) |
 | `envelope` | `trigger`: TRIGGER | `out`: MOD_FLOAT | `attack=.01`, `decay=.1`, `release=.1` (0–8 cycles); `sustain=.5` (0–1); `mode=0` (ONE_SHOT=0, GATED=1) |
+| `world` | None | `out`: MOD_FLOAT | `source=0` (daylight, rain, thunder, altitude, temperature, humidity, proximity: 0–6); `smooth=2` (0–30 seconds); output 0–1, see [world values](#world-values) |
 | `attenuverter` | `in`: MOD_FLOAT | `out`: MOD_FLOAT | `scale=1`, `offset=0` (each -20000–20000); result clamped to that range |
 | `filter` | `in`: AUDIO; optional `cutoff`: MOD_FLOAT | `out`: AUDIO | `cutoffHz=20000` (20–20000); `resonanceQ=.70710678` (.1–20) |
 | `delay` | `in`: AUDIO | `out`: AUDIO | `sync=0` (0=free frames, 1=tempo-synced); `frames=64` (integer 64–48000, at 48 kHz, used when `sync=0`); `division=2` (integer 0–7: 1/16, 1/8T, 1/8, 1/4T, 1/8D, 1/4, 1/4D, 1/2; used when `sync=1`) |
@@ -112,6 +113,40 @@ steps and square waves. This provides deterministic ramps rather than a
 history-dependent smoother: a fresh client at the same time receives the same
 control value. Discontinuities can begin ramping within the preceding control block.
 The control graph is evaluated in dependency order with bounded node/edge counts.
+
+## World values
+
+A `world` node outputs one value from the Minecraft world, from 0 to 1. The engine does
+not read the world: the client writes a `WorldInputs` snapshot into each renderer every
+tick, and the sound thread reads it once per control block. Tests, benchmarks and
+offline renders use fixed defaults (noon, dry, sea level, plains, at the source).
+
+| Source | Value | Read from |
+| --- | --- | --- |
+| 0 Daylight | ½ + ½·cos(sun angle): 1 at noon, 0 at midnight | the world clock |
+| 1 Rain | vanilla rain level, already faded by vanilla | the world |
+| 2 Thunder | vanilla thunder level | the world |
+| 3 Altitude | Y across the dimension's build height | the reading point |
+| 4 Temperature | biome base temperature, -0.7 → 0 and 2.0 → 1 | the reading point |
+| 5 Humidity | biome downfall | the reading point |
+| 6 Proximity | 1 at the reading point, falling linearly to 0 at 64 blocks | the camera's distance to it |
+
+The reading point is the speaker tower's base block. Headphones read at their linked
+editor, so they preview what its speakers will play; their proximity is the distance
+to the editor, which the 16-block link range keeps at 0.75 or above.
+
+Every source except proximity is the same for every player, to within a tick of
+vanilla's time and weather sync. **Proximity differs per player**: two players at
+different distances hear the same speaker differently.
+
+Unlike the other controls, a world node is history-dependent. A one-pole smoother
+moves it toward its source, reaching 63% of a change in `smooth` seconds; 0 follows
+the source directly and steps each tick. It is updated once per 64-frame block, and
+the block's two ends are its value before and after, so the per-frame ramp stays
+continuous. A fresh runtime starts at the current value. A switch carries the smoothed
+value when the node keeps its id and source, so an edit doesn't restart a settle, and
+a `smooth` change alone still allows a seamless switch. A late join or a replay of
+effect history uses the current world value, since past weather is not recorded.
 
 ## Feedback and state ownership
 

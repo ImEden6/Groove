@@ -178,7 +178,7 @@ One of Strudel’s most famous live-coding tricks is breakbeat slicing (jungle/d
 
 Because redstone was removed, the mod needs native world-interaction hooks to avoid feeling like an isolated app running inside a Minecraft window:
 
-* **Environmental Modulator Nodes:**
+* **Environmental Modulator Nodes — implemented** as one `world` node with a source selector; see [world values](PHASE-2-SIGNALS.md#world-values). Proximity is measured per listener, not to the nearest player.
 * **Day/Night Cycle Node:** Outputs a continuous float $[0.0\text{--}1.0]$ following the sun/moon, perfect for opening filter cutoffs at high noon and dropping to sub-bass pads at midnight.
 * **Weather / Rain Intensity Node:** Sweeps filter resonance or reverb wetness during thunderstorms.
 * **Proximity Node:** Measures distance to the nearest listening player, swelling audio volume or distortion as players approach the DJ booth.
