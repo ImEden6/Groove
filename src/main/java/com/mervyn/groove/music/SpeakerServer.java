@@ -200,6 +200,11 @@ public final class SpeakerServer {
                     || player.distanceToSqr(pos.getCenter()) > (long) SEARCH_RADIUS * SEARCH_RADIUS || !level.hasChunk(pos.getX() >> 4, pos.getZ() >> 4)) continue;
             if (!(level.getBlockEntity(pos) instanceof SpeakerBlockEntity speaker)
                     || level.getBlockState(pos.below()).is(GrooveBlocks.SPEAKER)) continue;
+            var disc = JukeboxSessions.playing(level, pos.below(), now);
+            if (disc != null) {
+                if (references(disc, ref)) return true;
+                continue;
+            }
             var editor = linkedEditor(level, speaker);
             if (editor == null) continue;
             if (editor.project().preservesAsset(ref)) return true;

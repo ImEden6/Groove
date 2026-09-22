@@ -45,7 +45,7 @@ unlinks every speaker still pointing at it within that same 64-block radius.
 ## Discs and jukeboxes
 
 Right-click an editor holding a **Blank Disc** to burn its committed patch and
-tempo onto a **Groove Disc** (never the draft); anyone can burn, as anyone can link a
+tempo onto a **Groove Disc** (never the draft), using up the blank outside creative; anyone can burn, as anyone can link a
 speaker. Right-click an editor holding a Groove Disc to replace its draft with the
 disc's patch, keeping the draft's play state; this needs edit access, and a Commit
 publishes it. The patch lives on the item, so it survives inventories, chests and
@@ -61,7 +61,8 @@ Every listener hears the same position on the server clock. A different disc, or
 the same one put back in, starts over; so does a jukebox whose chunk stopped
 ticking while nobody was near. The jukebox shows vanilla's "Now Playing: Groove
 patch" and gives a comparator signal of 15; the disc's own song is silent. Custom
-samples on a disc play only where the server has the same files.
+samples on a disc play only where the server has the same files, which it then sends to listeners
+as it does for an editor's patch.
 
 To copy a disc, craft a Groove Disc with a Blank Disc: the copy comes out and the
 original stays in the grid.

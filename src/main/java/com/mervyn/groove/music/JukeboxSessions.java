@@ -42,6 +42,14 @@ public final class JukeboxSessions {
         return new MusicPackets.Snapshot(entry.session, entry.timeline.snapshot(now));
     }
 
+    /** The session a poll already started for this jukebox, while it still holds that disc; never starts one. */
+    static SessionTimeline.Snapshot playing(ServerLevel level, BlockPos pos, long now) {
+        Entry entry = sessions.get(new Key(level.dimension(), pos.immutable()));
+        if (entry == null || !(level.getBlockEntity(pos) instanceof JukeboxBlockEntity jukebox) || !jukebox.getSongPlayer().isPlaying()
+                || !entry.patch.equals(DiscPatches.read(jukebox.getTheItem()).orElse(null))) return null;
+        return entry.timeline.snapshot(now);
+    }
+
     public static void clear() { sessions.clear(); }
 
     private JukeboxSessions() {}

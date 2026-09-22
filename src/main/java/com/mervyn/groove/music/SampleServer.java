@@ -48,17 +48,18 @@ public final class SampleServer {
             if (current == null || !ServerPlayNetworking.canSend(handler.player, MusicPackets.CatalogSnapshot.TYPE)) return;
             ServerPlayNetworking.send(handler.player, catalogSnapshot(current));
         });
-        ServerPlayNetworking.registerGlobalReceiver(MusicPackets.AssetRequest.TYPE, (packet, context) -> {
+        // The permission checks read block entities and session state, so they run on the server thread
+        ServerPlayNetworking.registerGlobalReceiver(MusicPackets.AssetRequest.TYPE, (packet, context) -> context.server().execute(() -> {
             if (!rateLimited(context.player().getUUID())) return;
             serveChunk(context.player(), packet.ref(), packet.offset(),
                     (MusicServer.allowsAsset(packet.ref())
                             || HeadphoneServer.allowsAsset(context.player(), packet.ref())
                             || SpeakerServer.allowsAsset(context.player(), packet.ref())));
-        });
-        ServerPlayNetworking.registerGlobalReceiver(MusicPackets.AssetInstallRequest.TYPE, (packet, context) -> {
+        }));
+        ServerPlayNetworking.registerGlobalReceiver(MusicPackets.AssetInstallRequest.TYPE, (packet, context) -> context.server().execute(() -> {
             if (!rateLimited(context.player().getUUID())) return;
             serveChunk(context.player(), packet.ref(), packet.offset(), context.player().hasPermissions(2));
-        });
+        }));
     }
     static MusicPackets.CatalogSnapshot catalogSnapshot(SampleCatalog current) {
         return new MusicPackets.CatalogSnapshot(current.entries().stream().map(SampleCatalog.Entry::ref)

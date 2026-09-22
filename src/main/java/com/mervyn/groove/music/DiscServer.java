@@ -49,7 +49,8 @@ public final class DiscServer {
         var committed = editor.session().committed(now).current();
         ItemStack disc = new ItemStack(GrooveItems.GROOVE_DISC);
         DiscPatches.write(disc, committed.graph(), committed.bpm());
-        blank.shrink(1);
+        // Creative players keep their blank, as with other items used up in survival
+        if (!player.hasInfiniteMaterials()) blank.shrink(1);
         if (blank.isEmpty()) player.setItemInHand(InteractionHand.MAIN_HAND, disc);
         else if (!player.getInventory().add(disc)) player.drop(disc, false);
         player.inventoryMenu.broadcastChanges();
