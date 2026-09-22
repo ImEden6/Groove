@@ -15,7 +15,34 @@ final class DemoTests {
         sampleDemo();
         signalDemo();
         inGameSampleDemo();
+        showcase();
+        factoryHashes();
         System.out.printf("Demo audio checks passed (%d checks) in %.0f ms.%n", checks, (System.nanoTime() - startNanos) / 1e6);
+    }
+
+    /** The showcase stays in range, and its lead comes forward with the rain. */
+    private static void showcase() {
+        // The weather scales with length, so a short render tells the same story
+        float[] audio = ShowcaseDemo.render(24);
+        inRange(audio, "Showcase");
+        var graph = ShowcaseDemo.graph();
+        var nodes = new java.util.ArrayList<Graph.Node>();
+        for (var n : graph.nodes()) nodes.add(n.id().equals("rainLevel")
+                ? new Graph.Node("rainLevel", NodeType.ATTENUVERTER, Map.of(NodeParam.SCALE, 0.0, NodeParam.OFFSET, 0.0)) : n);
+        float[] silent = ShowcaseDemo.render(new Graph(3, nodes, graph.edges()), 24);
+        float[] lead = new float[audio.length];
+        for (int i = 0; i < audio.length; i++) lead[i] = audio[i] - silent[i];
+        double dry = 20 * Math.log10(rms(lead, RATE * 2, RATE * 4) / rms(audio, RATE * 2, RATE * 4));
+        double wet = 20 * Math.log10(rms(lead, RATE * 14, RATE * 18) / rms(audio, RATE * 14, RATE * 18));
+        check(dry < -12 && wet > -6, "Showcase lead sits back when dry and comes forward in rain: " + dry + " / " + wet + " dB");
+    }
+
+    /** Saved patches reference factory samples by hash, so the original kit must never change. */
+    private static void factoryHashes() {
+        check(FactorySamples.ref("factory:basic/kick.wav").sha256().equals("d72a49df776970fb7f9bd380cddceb24577bbc0d8d477d8253ca72d354f8b625")
+                && FactorySamples.ref("factory:basic/snare.wav").sha256().equals("42845f52c1da4ed60bfdb0361a97b9ec484ad145e02c3f005326bdb90323838b")
+                && FactorySamples.ref("factory:basic/hat.wav").sha256().equals("865e5a1f0c4c96119701779ebdaebae1228bd240e6482f45552b4425241b6dcd"),
+                "Factory kit bytes are unchanged");
     }
 
     private static void sampleDemo() {

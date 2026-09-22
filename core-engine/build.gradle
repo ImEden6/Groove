@@ -65,6 +65,13 @@ tasks.register('renderDemo', JavaExec) {
     args layout.buildDirectory.file('demo.wav').get().asFile.absolutePath
 }
 
+tasks.register('renderShowcase', JavaExec) {
+    dependsOn classes
+    classpath = sourceSets.main.runtimeClasspath
+    mainClass = 'groove.engine.ShowcaseDemo'
+    args layout.buildDirectory.file('showcase.wav').get().asFile.absolutePath
+}
+
 tasks.register('renderSampleDemo', JavaExec) {
     dependsOn classes
     classpath = sourceSets.main.runtimeClasspath
