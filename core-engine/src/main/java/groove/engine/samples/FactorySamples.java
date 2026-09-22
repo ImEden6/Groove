@@ -10,17 +10,19 @@ import java.util.Map;
 
 /** Small original procedural kit, encoded deterministically; no third-party sample licensing. */
 public final class FactorySamples {
-    private static final Map<String, byte[]> FILES = Map.of("factory:basic/kick.wav", make(0),
-            "factory:basic/snare.wav", make(1), "factory:basic/hat.wav", make(2));
+    private static final int RATE = 24000;
+    public static final String BREAK = "factory:basic/break.wav";
+    /** Seconds per bar of the break: one cycle at 96 BPM, so eight slices fall on eighth notes. */
+    public static final double BREAK_SECONDS = 2.5;
+    private static final Map<String, byte[]> FILES = Map.of("factory:basic/kick.wav", encode(hit(0)),
+            "factory:basic/snare.wav", encode(hit(1)), "factory:basic/hat.wav", encode(hit(2)), BREAK, encode(drumBreak()));
     public static List<String> ids() { return FILES.keySet().stream().sorted().toList(); }
     public static byte[] bytes(String id) { byte[] value = FILES.get(id); return value == null ? null : value.clone(); }
     public static AssetRef ref(String id) { return new AssetRef(id, AssetRef.hash(FILES.get(id))); }
-    private static byte[] make(int instrument) {
-        int rate = 24000, frames = instrument == 0 ? 14400 : instrument == 1 ? 7200 : 2400;
-        ByteBuffer b = ByteBuffer.allocate(44 + frames * 2).order(ByteOrder.LITTLE_ENDIAN);
-        b.putInt(0x46464952).putInt(36 + frames * 2).putInt(0x45564157).putInt(0x20746d66).putInt(16);
-        b.putShort((short) 1).putShort((short) 1).putInt(rate).putInt(rate * 2).putShort((short) 2).putShort((short) 16);
-        b.putInt(0x61746164).putInt(frames * 2);
+    /** One kick (0), snare (1) or hat (2), before 16-bit scaling. */
+    private static double[] hit(int instrument) {
+        int rate = RATE, frames = instrument == 0 ? 14400 : instrument == 1 ? 7200 : 2400;
+        double[] out = new double[frames];
         long noise = 42; double phase = 0, previous = 0;
         for (int i = 0; i < frames; i++) {
             double t = (double) i / rate;
@@ -32,8 +34,38 @@ public final class FactorySamples {
                     : (n - previous) * .4 * StrictMath.exp(-t * 45);
             previous = n;
             value *= Math.min(1, i / 24.0) * Math.min(1, (frames - i) / 120.0);
-            b.putShort((short) Math.round(value * 26000));
+            out[i] = value;
         }
+        return out;
+    }
+
+    /** One bar of eighths: kick, snare on two and four, hats throughout, a ghost snare and a closing roll. */
+    private static double[] drumBreak() {
+        double[] kick = hit(0), snare = hit(1), hat = hit(2);
+        int slot = (int) Math.round(BREAK_SECONDS * RATE / 8);
+        double[] out = new double[slot * 8];
+        String[] slots = {"kh", "h", "sh", "gh", "kh", "kh", "sh", "hgs"};
+        for (int i = 0; i < 8; i++)
+            for (char c : slots[i].toCharArray()) {
+                double[] source = c == 'k' ? kick : c == 'h' ? hat : snare;
+                double gain = c == 'k' ? .9 : c == 's' ? .8 : c == 'g' ? .3 : .35;
+                // The closing roll's second snare lands half a slot later
+                int at = i * slot + (c == 's' && i == 7 ? slot / 2 : 0);
+                for (int f = 0; f < source.length && at + f < out.length; f++) out[at + f] += source[f] * gain;
+            }
+        double peak = 0;
+        for (double v : out) peak = Math.max(peak, Math.abs(v));
+        for (int i = 0; i < out.length; i++) out[i] *= .95 / peak;
+        return out;
+    }
+
+    private static byte[] encode(double[] values) {
+        int rate = RATE, frames = values.length;
+        ByteBuffer b = ByteBuffer.allocate(44 + frames * 2).order(ByteOrder.LITTLE_ENDIAN);
+        b.putInt(0x46464952).putInt(36 + frames * 2).putInt(0x45564157).putInt(0x20746d66).putInt(16);
+        b.putShort((short) 1).putShort((short) 1).putInt(rate).putInt(rate * 2).putShort((short) 2).putShort((short) 16);
+        b.putInt(0x61746164).putInt(frames * 2);
+        for (double value : values) b.putShort((short) Math.round(value * 26000));
         return b.array();
     }
     /** The kit from demo() as a v3 signal graph through a short room reverb, mixed under the dry beat. */
