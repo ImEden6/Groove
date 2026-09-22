@@ -104,7 +104,7 @@ public final class GraphJson {
                     var params = node.getAsJsonObject("params");
                     String type = node.has("type") ? node.get("type").getAsString() : "";
                     String key = type.equals("tone") ? groove.engine.NodeParam.FREQUENCY
-                            : type.equals("scale_sequence") ? groove.engine.NodeParam.ROOT : null;
+                            : type.equals("scale_sequence") || type.equals("quantize") ? groove.engine.NodeParam.ROOT : null;
                     if (key == null || !params.has(key) || !params.get(key).isJsonPrimitive()) continue;
                     var value = params.getAsJsonPrimitive(key);
                     if (value.isString() && value.getAsString().matches("[A-Ga-g].*")) {

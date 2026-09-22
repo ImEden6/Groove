@@ -961,6 +961,8 @@ public final class BackendTests {
         GraphCompiler.compile(graph);
         check(GraphJson.decode(GraphJson.encode(graph)).equals(graph), "Quantize graph round trips through JSON");
         check(GraphJson.encode(graph).contains("\"quantize\""), "Quantize node saves under its type name");
+        var named = GraphJson.decodeDraft("{\"version\":3,\"nodes\":[{\"id\":\"q\",\"type\":\"quantize\",\"params\":{\"root\":\"A3\"}}],\"edges\":[]}");
+        check(named.nodes().getFirst().params().get(NodeParam.ROOT) == 57, "Quantize root accepts a note name: " + named.nodes().getFirst().params());
         var editor = new com.mervyn.groove.client.ui.EditorState(graph);
         editor.setKnobValue("q", NodeParam.LOW, 9);
         check(editor.node("q").params().get(NodeParam.LOW) == 7, "Editor keeps low at or below high");
