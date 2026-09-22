@@ -117,7 +117,14 @@ public class DiscGameTests implements FabricGameTest {
             jukebox.setTheItem(disc.copy());
             var back = poll(helper, player, speaker, start + 1_200_000_000L);
             helper.assertTrue(back.available() && !back.timeline().epoch().equals(first.timeline().epoch()), "Putting it back starts over");
-            helper.succeed();
+            // Swapped out and back between polls, so only the song's start time shows it
+            jukebox.setTheItem(ItemStack.EMPTY);
+            helper.runAfterDelay(5, () -> {
+                jukebox.setTheItem(disc.copy());
+                var swapped = poll(helper, player, speaker, start + 1_500_000_000L);
+                helper.assertTrue(swapped.available() && !swapped.timeline().epoch().equals(back.timeline().epoch()), "A quick swap starts over too");
+                helper.succeed();
+            });
         });
     }
 
