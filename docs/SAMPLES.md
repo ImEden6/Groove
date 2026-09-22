@@ -24,7 +24,10 @@ After the queued sample-demo edit applies, `/groove play` starts it. Shared edit
 require cheats/operator permission level 2. `/groove stop` stops the shared track;
 `/groove-samples stop` stops only your preview. Preview uses its own non-positional
 sound source. The factory kick, snare, and hat are original deterministic
-procedural samples, requiring no third-party audio downloads.
+procedural samples, requiring no third-party audio downloads. `factory:basic/break.wav`
+is one bar of those three at 96 BPM (2.5 s): kick, snare on two and four, hats on
+every eighth, a ghost snare and a closing roll. Cut into eight slices, each lands on
+an eighth note, ready for a slice index control to rearrange.
 
 ## Custom packs
 

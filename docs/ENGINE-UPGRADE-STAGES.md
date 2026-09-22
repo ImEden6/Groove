@@ -367,6 +367,11 @@ Stage 3 adds automated build targets and offline demonstration scripts:
   (16.0s, 48 kHz stereo PCM), demonstrating sliced factory drums, reversed snare,
   continuous 16th swing, pulse bass, and a swung pulse lead echoing through a synced
   1/8-note delay loop.
+- `gradlew.bat -p core-engine renderShowcase`: renders `core-engine/build/showcase.wav`
+  (60 s at 96 BPM), the world node, quantize and slice index together. The factory break
+  is chopped into eighths by a step sequence and darkens as daylight fades; a triangle
+  walks a quantized bass; a free LFO picks a quantized lead that comes forward with the
+  rain. The render moves daylight and rain over time as the game would.
 - `gradlew.bat -p core-engine renderSignalDemo`: renders `core-engine/build/signal-demo.wav`
   (8.0s, 48 kHz stereo PCM), demonstrating dual live sources, LFO-modulated biquad filtering,
   and tempo-synced feedback delay via `LiveRenderer`.
