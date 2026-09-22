@@ -735,7 +735,7 @@ public final class LiveRenderer {
             if (duration < 0) continue;
             for (ActiveVoice v : program.voices) if (v.event < 0) {
                 v.start(event, program.events[i], program.hashes[i], program.onsets[i], duration,
-                        event.sample() == null ? null : program.samples.get(event.sample()),
+                        sample(program, event, program.onsets[i], secondsPerCycle),
                         pitch(program, event, program.onsets[i], secondsPerCycle));
                 if (donor != null) for (ActiveVoice d : donor.voices)
                     if (continues(d, program, i)) {
@@ -899,16 +899,25 @@ public final class LiveRenderer {
         if (--source.fadeLeft <= 0) source.fadeFrom = null;
     }
 
-    /**
-     * A quantized note's pitch, from its control half a frame after the onset, so a control stepping
-     * on the same grid is read after its step. Any player starting the note, even late, gets the same one.
-     */
     private static double pitch(VoiceProgram program, Event event, double onset, double secondsPerCycle) {
         if (event.tone() == null) return 0;
-        Event.Degree degree = event.degree();
-        if (degree == null || program.controls == null) return event.tone().frequency();
+        if (!(event.pick() instanceof Event.Degree degree) || program.controls == null) return event.tone().frequency();
+        return event.tone().frequency() * degree.ratio(picked(program, degree, onset, secondsPerCycle));
+    }
+
+    private static groove.engine.samples.SamplePlayback sample(VoiceProgram program, Event event, double onset, double secondsPerCycle) {
+        if (event.sample() == null) return null;
+        if (!(event.pick() instanceof Event.Slice slice) || program.controls == null) return program.samples.get(event.sample());
+        return program.samples.get(slice.voice(picked(program, slice, onset, secondsPerCycle)));
+    }
+
+    /**
+     * A pick's control, half a frame after the note's onset, so a control stepping on the same grid
+     * is read after its step. Any player starting the note, even late, reads the same value.
+     */
+    private static double picked(VoiceProgram program, Event.Pick pick, double onset, double secondsPerCycle) {
         double nanos = program.state.effectiveNanos() + (onset - program.state.anchorCycle()) * secondsPerCycle * 1e9 + 0.5e9 / SAMPLE_RATE;
-        return event.tone().frequency() * degree.ratio(program.controls.valueAt(degree.control(), nanos));
+        return program.controls.valueAt(pick.control(), nanos);
     }
 
     private static double eventDuration(VoiceProgram program, Event event, double secondsPerCycle) {

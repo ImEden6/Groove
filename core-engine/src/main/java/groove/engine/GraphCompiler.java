@@ -11,10 +11,10 @@ public final class GraphCompiler {
     private final Map<String, List<String>> inputs = new HashMap<>();
     private final Map<String, Compiled> compiled = new HashMap<>();
     private final Set<String> visiting = new HashSet<>();
-    /** Per quantize node in a signal graph's source: the control node wired to its degree socket. */
-    private final Map<String, String> degreeControls;
+    /** Per pattern node in a signal graph's source: the control node wired to it, read as each note starts. */
+    private final Map<String, String> controls;
 
-    private GraphCompiler(Map<String, String> degreeControls) { this.degreeControls = degreeControls; }
+    private GraphCompiler(Map<String, String> controls) { this.controls = controls; }
     // Bounds cover every branch, including branches absent from the cycle-zero preview.
     private record Compiled(Pattern pattern, int cost, double minHz, double maxHz, boolean samples, Set<SampleVoice> sampleVoices) {
         Compiled(Pattern pattern, int cost, double minHz, double maxHz, boolean samples) {
@@ -44,8 +44,8 @@ public final class GraphCompiler {
         return new GraphCompiler(Map.of()).build(graph);
     }
 
-    static LoopPlan compileSource(Graph patterns, Map<String, String> degreeControls) {
-        return new GraphCompiler(degreeControls).build(patterns);
+    static LoopPlan compileSource(Graph patterns, Map<String, String> controls) {
+        return new GraphCompiler(controls).build(patterns);
     }
 
     private LoopPlan build(Graph graph) {
@@ -157,9 +157,13 @@ public final class GraphCompiler {
             int slices = integer(node, NodeParam.SLICES, 8, 1, 64);
             int index = integer(node, NodeParam.INDEX, 0, 0, slices - 1);
             boolean reverse = integer(node, NodeParam.REVERSE, 0, 0, 1) == 1;
+            String control = controls.get(id);
+            // A controlled slice may pick any of them, so every one is prepared
             Set<SampleVoice> voices = new HashSet<>();
-            for (SampleVoice voice : child.sampleVoices) voices.add(voice.slice(slices, index, reverse));
-            yield new Compiled(child.pattern.slice(slices, index, reverse), child.cost, child.minHz, child.maxHz, true, Set.copyOf(voices));
+            for (SampleVoice voice : child.sampleVoices)
+                for (int i = 0; i < slices; i++) if (control != null || i == index) voices.add(voice.slice(slices, i, reverse));
+            require(voices.size() <= groove.engine.samples.PreparedSamples.MAX_VOICES, "Too many sample voice variants");
+            yield new Compiled(child.pattern.slice(slices, index, reverse, control), child.cost, child.minHz, child.maxHz, true, Set.copyOf(voices));
         }
         case TRANSPOSE -> {
             Compiled child = children.getFirst();
@@ -190,7 +194,7 @@ public final class GraphCompiler {
             Pitch.Scale scale = Pitch.Scale.values()[integer(node, NodeParam.SCALE, 0, 0, Pitch.Scale.values().length - 1)];
             int low = integer(node, NodeParam.LOW, 0, -64, 64), high = integer(node, NodeParam.HIGH, 7, -64, 64);
             require(low <= high, "Quantize low must not exceed high");
-            String control = degreeControls.get(id);
+            String control = controls.get(id);
             double min = Pitch.degreeHz(root, scale, low), max = control == null ? min : Pitch.degreeHz(root, scale, high);
             pitchBounds(min, max);
             yield new Compiled(child.pattern.quantize(root, scale, low, high, control), child.cost, min, max, false);

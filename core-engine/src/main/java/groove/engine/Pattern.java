@@ -9,14 +9,20 @@ public interface Pattern {
     List<Event> query(Arc arc);
 
     /** Select an equal-sized region of each sample, without changing event timing. */
-    default Pattern slice(int slices, int index, boolean reverse) {
+    default Pattern slice(int slices, int index, boolean reverse) { return slice(slices, index, reverse, null); }
+
+    /** Like slice, with the slice picked from control as each note starts; index is the one offline renders play. */
+    default Pattern slice(int slices, int index, boolean reverse, String control) {
         new groove.engine.samples.SampleRegion(0, 0, slices, index, reverse);
+        var choices = new java.util.concurrent.ConcurrentHashMap<groove.engine.samples.SampleVoice, Event.Slice>();
         return arc -> {
             checkQuery(arc);
             List<Event> events = new ArrayList<>();
             for (Event e : query(arc)) {
                 if (e.sample() == null) throw new IllegalArgumentException("Sample slicing requires sample events");
-                events.add(new Event(e.whole(), e.part(), null, e.sample().slice(slices, index, reverse)));
+                Event.Slice pick = control == null ? null : choices.computeIfAbsent(e.sample(), voice -> new Event.Slice(control,
+                        java.util.stream.IntStream.range(0, slices).mapToObj(i -> voice.slice(slices, i, reverse)).toList()));
+                events.add(new Event(e.whole(), e.part(), null, e.sample().slice(slices, index, reverse), pick));
             }
             return events;
         };
@@ -75,21 +81,21 @@ public interface Pattern {
                 for (double ratio : ratios) {
                     Tone t = Pitch.withFrequency(e.tone(), e.tone().frequency() * ratio);
                     events.add(new Event(e.whole(), e.part(), new Tone(t.wave(), t.frequency(),
-                            t.gain() / ratios.length, t.pan(), t.cutoffHz(), t.resonanceQ(), t.pulseWidth()), null, e.degree()));
+                            t.gain() / ratios.length, t.pan(), t.cutoffHz(), t.resonanceQ(), t.pulseWidth()), null, e.pick()));
                 }
             }
             return events;
         };
     }
 
-    /** keepDegree false: the mapper sets an absolute pitch, replacing any degree picked later. */
-    private Pattern mapTones(java.util.function.UnaryOperator<Tone> mapper, boolean keepDegree) {
+    /** keepPick false: the mapper sets an absolute pitch, replacing any degree picked later. */
+    private Pattern mapTones(java.util.function.UnaryOperator<Tone> mapper, boolean keepPick) {
         return arc -> {
             checkQuery(arc);
             List<Event> events = new ArrayList<>();
             for (Event e : query(arc)) {
                 if (e.tone() == null) throw new IllegalArgumentException("Pitch transforms require tone events");
-                events.add(new Event(e.whole(), e.part(), mapper.apply(e.tone()), null, keepDegree ? e.degree() : null));
+                events.add(new Event(e.whole(), e.part(), mapper.apply(e.tone()), null, keepPick ? e.pick() : null));
             }
             return events;
         };
@@ -142,7 +148,7 @@ public interface Pattern {
                 Pattern child = children.get(Math.floorMod(c, children.size()));
                 for (Event e : child.query(new Arc(visible.start() - shift, visible.end() - shift))) {
                     events.add(new Event(new Arc(e.whole().start() + shift, e.whole().end() + shift),
-                            new Arc(e.part().start() + shift, e.part().end() + shift), e.tone(), e.sample(), e.degree()));
+                            new Arc(e.part().start() + shift, e.part().end() + shift), e.tone(), e.sample(), e.pick()));
                 }
             }
             return events;
@@ -185,7 +191,7 @@ public interface Pattern {
             for (Event e : query(arc.scale(factor))) {
                 Arc whole = e.whole().scale(1 / factor);
                 Arc part = e.part().scale(1 / factor).intersect(arc);
-                if (part != null) events.add(new Event(whole, part, e.tone(), e.sample(), e.degree()));
+                if (part != null) events.add(new Event(whole, part, e.tone(), e.sample(), e.pick()));
             }
             return events;
         };
@@ -214,7 +220,7 @@ public interface Pattern {
                     for (Event e : query(local)) {
                         Arc whole = new Arc(start + e.whole().start() / steps, start + e.whole().end() / steps);
                         Arc part = new Arc(start + e.part().start() / steps, start + e.part().end() / steps).intersect(visible);
-                        if (part != null) events.add(new Event(whole, part, e.tone(), e.sample(), e.degree()));
+                        if (part != null) events.add(new Event(whole, part, e.tone(), e.sample(), e.pick()));
                     }
                 }
             }
@@ -238,7 +244,7 @@ public interface Pattern {
                     Arc whole = new Arc(Math.max(c, revStart), Math.min(c + 1.0, revEnd));
                     Arc part = new Arc(Math.max(c, 2 * c + 1.0 - e.part().end()),
                             Math.min(c + 1.0, 2 * c + 1.0 - e.part().start())).intersect(visible);
-                    if (part != null) events.add(new Event(whole, part, e.tone(), e.sample(), e.degree()));
+                    if (part != null) events.add(new Event(whole, part, e.tone(), e.sample(), e.pick()));
                 }
             }
             return events;
@@ -261,7 +267,7 @@ public interface Pattern {
             for (Event e : query(childArc)) {
                 Arc whole = new Arc(warp(e.whole().start(), T, R), warp(e.whole().end(), T, R));
                 Arc part = new Arc(warp(e.part().start(), T, R), warp(e.part().end(), T, R)).intersect(arc);
-                if (part != null) events.add(new Event(whole, part, e.tone(), e.sample(), e.degree()));
+                if (part != null) events.add(new Event(whole, part, e.tone(), e.sample(), e.pick()));
             }
             return events;
         };

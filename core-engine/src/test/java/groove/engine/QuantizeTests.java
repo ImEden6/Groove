@@ -55,7 +55,7 @@ final class QuantizeTests {
         Graph plain = new Graph(3, List.of(node("tone", NodeType.TONE, Map.of()), node("q", NodeType.QUANTIZE, quantize(2, 7)),
                 node("out", NodeType.OUTPUT, Map.of())), List.of(Graph.edge("tone", "q"), Graph.edge("q", "out")));
         close(GraphCompiler.compile(plain).event(0).tone().frequency(), MELODY[1], 1e-9, "An unwired quantizer plays degree low");
-        check(GraphCompiler.compile(plain).event(0).degree() == null, "An unwired quantizer leaves no tag");
+        check(GraphCompiler.compile(plain).event(0).pick() == null, "An unwired quantizer leaves no tag");
         invalid(() -> GraphCompiler.compile(replace(plain, "q", quantize(5, 4))));
         invalid(() -> GraphCompiler.compile(replace(plain, "q", Map.of(NodeParam.ROOT, 127.0, NodeParam.LOW, 7.0, NodeParam.HIGH, 7.0))));
         invalid(() -> GraphCompiler.compile(replace(plain, "q", Map.of(NodeParam.ROOT, 1.0))));

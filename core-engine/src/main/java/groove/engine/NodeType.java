@@ -28,6 +28,8 @@ public enum NodeType {
     private static final java.util.List<Port> FILTER_INPUT = java.util.List.of(
             new Port("in", PortType.AUDIO, 1, 1), new Port("cutoff", PortType.MOD_FLOAT, 0, 1));
     private static final java.util.List<Port> DELAY_INPUT = java.util.List.of(new Port("in", PortType.AUDIO, 1, 1));
+    private static final java.util.List<Port> SAMPLE_SLICE_INPUT = java.util.List.of(
+            new Port("in", PortType.PATTERN, 1, 1), new Port("index", PortType.MOD_FLOAT, 0, 1));
     private static final java.util.List<Port> QUANTIZE_INPUT = java.util.List.of(
             new Port("in", PortType.PATTERN, 1, 1), new Port("degree", PortType.MOD_FLOAT, 0, 1));
     private static final java.util.List<Port> MIX_BUS_INPUT = java.util.List.of(
@@ -49,7 +51,8 @@ public enum NodeType {
         return switch (this) {
             case TONE, GENERATOR_SAMPLE -> NO_PORTS;
             case STACK, ALTERNATE, POLYMETER -> STACK_INPUT;
-            case FAST, EUCLID, PROBABILITY, TRANSPOSE, SCALE_SEQUENCE, CHORD, SAMPLE_SLICE, AUDIO_RENDER, TRIGGER_RENDER, REVERSE, SWING -> PATTERN_INPUT;
+            case FAST, EUCLID, PROBABILITY, TRANSPOSE, SCALE_SEQUENCE, CHORD, AUDIO_RENDER, TRIGGER_RENDER, REVERSE, SWING -> PATTERN_INPUT;
+            case SAMPLE_SLICE -> SAMPLE_SLICE_INPUT;
             case OUTPUT -> OUTPUT_INPUT;
             case QUANTIZE -> QUANTIZE_INPUT;
             case LFO, STEP_SEQUENCE, WORLD -> NO_PORTS;

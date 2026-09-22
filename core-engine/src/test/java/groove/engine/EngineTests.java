@@ -16,6 +16,7 @@ public final class EngineTests {
         PortTests.run();
         SignalTests.run();
         QuantizeTests.run();
+        SliceIndexTests.run();
         DspTests.run();
         SampleRegionTests.run();
         ResamplerTests.run();
