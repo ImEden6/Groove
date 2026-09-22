@@ -159,14 +159,13 @@ $$\text{frequency} = 440 \times 2^{\frac{\text{scaleInterval} - 69}{12}}$$
 **Stage 2 update:** source-frame regions, the `sample_slice` node, reversed
 sample playback, and offline pattern sample rendering are implemented.
 See [engine upgrade stages](ENGINE-UPGRADE-STAGES.md#stage-2-usage). Sustained sample loops landed in
-[Stage 4](ENGINE-UPGRADE-STAGES.md#sustained-sample-loops). Live slice-index modulation and granular
-time stretching remain future work.
+[Stage 4](ENGINE-UPGRADE-STAGES.md#sustained-sample-loops). Live slice-index modulation has landed:
+a control wired into `sample_slice.index` picks each note's slice. Granular time stretching remains future work.
 
 One of Strudel’s most famous live-coding tricks is breakbeat slicing (jungle/drum & bass chops on the Amen break):
 
 * *Strudel Concept:* `s("amen").slice(8, "0 3 2 5 6 1 4 7")` chops an audio sample into 8 equal slices and rearranges their trigger order.
-* *Current state:* `sample_slice` takes fixed `slices` and `index` knobs. Rearranging a break means one slice node per index, fed into `polymeter` in playback order.
-* *Still missing:* driving `index` from a pattern, LFO or Euclid so one node can play a changing slice sequence.
+* *Current state:* `sample_slice` takes `slices` and `index` knobs, and a control on its `index` input (a step sequence, LFO or world node) picks each note's slice, so one node plays a changing slice sequence.
 
 
 
@@ -208,6 +207,6 @@ You have clipboard Base64 JSON and world transactional files, but no physical su
 | --- | --- | --- | --- |
 | **Rhythm** | Euclid, Fast/Slow, Alternate, Probability, Polymeter | Euclidean, alternation, degradation, polymeter | Implemented; dedicated input reordering UI deferred |
 | **Pitch** | Note names, `scale_sequence`, `transpose`, `chord` | Notes (`c3`, `eb4`), Scales, Chords, Microtuning | Continuous `ScaleQuantizer` node |
-| **Sampling** | One-shots, source regions, equal slicing, reverse, sustained loops, offline pattern rendering | Live slice modulation, time stretching, sustained looping | Live slice modulation and time stretching |
+| **Sampling** | One-shots, source regions, equal slicing, reverse, sustained loops, offline pattern rendering | Live slice modulation, time stretching, sustained looping | Time stretching |
 | **Environment** | Static in-game blocks | N/A (Browser-based) | `SunClock`, `WeatherMod`, and `Proximity` sensory nodes |
 | **Progression** | Operator commands (`/groove`) | Text files / URL sharing | Physical craftable Discs / Cartridges for survival trading |

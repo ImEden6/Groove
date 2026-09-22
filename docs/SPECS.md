@@ -2,9 +2,9 @@
 
 ## Still unimplemented (from this doc)
 
-Parts of the Strudel-comparison gap analysis ([FUTURE-WORK.md](FUTURE-WORK.md#inception-gap-analysis)) have landed: `alternate`, `probability` and `polymeter`; note names, `scale_sequence`, `transpose`, `chord` and a control-driven [`quantize`](ENGINE-UPGRADE-STAGES.md#quantize); `sample_slice`, reversed playback and sustained loops; the environmental modulators, as one [`world` node](PHASE-2-SIGNALS.md#world-values); and [discs](EDITOR-INTEGRATION.md#discs-and-jukeboxes) for burning, trading and playing patches in survival. Still missing:
+Parts of the Strudel-comparison gap analysis ([FUTURE-WORK.md](FUTURE-WORK.md#inception-gap-analysis)) have landed: `alternate`, `probability` and `polymeter`; note names, `scale_sequence`, `transpose`, `chord` and a control-driven [`quantize`](ENGINE-UPGRADE-STAGES.md#quantize); `sample_slice` with a control-driven slice index, reversed playback and sustained loops; the environmental modulators, as one [`world` node](PHASE-2-SIGNALS.md#world-values); and [discs](EDITOR-INTEGRATION.md#discs-and-jukeboxes) for burning, trading and playing patches in survival. Still missing:
 
-- Sampling: live slice-index modulation and time stretching.
+- Sampling: time stretching.
 
 This specification freezes all technical, algorithmic, architectural, and visual requirements for the mod.
 

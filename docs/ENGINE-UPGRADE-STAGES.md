@@ -171,11 +171,18 @@ bounds are retained. Slicing changes the audio content and its playback length,
 not event arcs or trigger timing. Pitch still changes both duration and pitch;
 there is no time stretching. A 1 ms attack and 5 ms release soften boundaries.
 
-To rearrange a break, connect one sample to several `sample_slice` nodes,
-choose their indices, and connect those to `polymeter.in` in playback order.
-For example, four slices at four steps per cycle can play in order 0, 2, 1, 3,
-with the last slice reversed. The existing event budget and 32-voice pool
-still apply, including overlapping one-shot tails.
+To rearrange a break, wire a control into the optional `index` input (`MOD_FLOAT`).
+Each note then plays the slice the control picks at its onset, read the same way
+as a [quantize](#quantize) degree: the control's 0..1 range covers slices 0 to
+`slices - 1` in equal steps, values outside it clamp, and a late joiner hears the
+slice the note picked. A step sequence with values (i + .5) / slices plays slice i
+on each step; an LFO or step sequence needs an attenuverter (scale .5, offset .5)
+to cover all of them. The `index` knob is then only what offline renders play.
+Every slice of every input voice is prepared up front, which costs about one copy
+of the sliced region, and counts toward the 128-variant and 32 MiB limits.
+Without a control, connect one sample to several `sample_slice` nodes with fixed
+indices and feed those to `polymeter.in` in playback order. The existing event
+budget and 32-voice pool still apply, including overlapping one-shot tails.
 
 Each selected region is copied (and optionally reversed) on the control
 thread, then gets its own prefiltered resampling levels. This prevents
